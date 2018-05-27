@@ -1,0 +1,158 @@
+-- "procgen.cabal" build configuration for this project.
+--
+-- Copyright (C) 2018  Ramin Honary.
+--
+-- "procgen" is free software: you can redistribute it and/or modify
+-- it under the terms of the GNU Affero General Public License (AGPL)
+-- as published by the Free Software Foundation.
+--
+-- "procgen" is distributed in the hope that it will be useful, but
+-- WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+-- See the GNU Affero General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with this program (see the file called "LICENSE"). If not, see
+-- <http://www.gnu.org/licenses/agpl.html>.
+
+NAME          : procgen
+VERSION       : 0.1.0.0
+AUTHOR        : Ramin Honary
+COPYRIGHT     : (C) 2018 Ramin Honary, all rights reserved.
+MAINTAINER    : RaminHAL9001@gmail.com
+HOMEPAGE      : https://github.com/RaminHAL9001/procgen
+LICENSE       : AGPL
+LICENSE-FILE  : LICENSE
+BUILD-TYPE    : Simple
+CABAL-VERSION : >= 1.18
+
+CATEGORY      : 
+SYNOPSIS      : A procedural generation library.
+
+DESCRIPTION   :
+    .
+    A library similar to QuickCheck but with a focus on procedural
+    generation. This library contains a collection of experimental
+    algorithms for procedurally generating 2D/3D images, sound, music,
+    and natural language. There are also experimental algorithms for
+    gathering corpora of data for training neural networks, algorithms
+    for basic signal processing, and algorithms for shaping the
+    probability distribution of random numbers.
+    .
+    This libary is intended to be used from a GHCI interactive
+    session. Graphics are displayed in a Gtk+ window via the Happlets
+    library.
+    .
+
+Library {
+
+  HS-SOURCE-DIRS:    src
+  DEFAULT-LANGUAGE:  Haskell2010
+
+  GHC-OPTIONS:  -threaded -Wall
+    -fno-warn-name-shadowing
+    -fno-warn-unused-do-bind
+
+  EXPOSED-MODULES:
+    ProcGen
+    ProcGen.Arbitrary
+    ProcGen.GHCI
+    ProcGen.Plot
+    ProcGen.Types
+    ProcGen.Music.KeyFreq88
+    ProcGen.Music.WaveFile
+    ProcGen.Music.Synth
+
+  BUILD-DEPENDS:
+    binary               >=0.7.0.0  && <0.8.0.0,
+    bytestring           >=0.10.0.0 && <1.0.0.0,
+    cairo                >=0.11.0.0 && <1.0.0.0,
+    colour               >=2.3.0    && <3.0.0,
+    containers           >=0.5.5.0  && <=0.5.7.0,
+    happlets             >=0.1.0.0  && <=1.0.0.0,
+    happlets-lib-gtk     >=0.1.0.0  && <=1.0.0.0,
+    lens                 >=4.0.0.0  && <5.0.0.0,
+    linear               >=1.20.0   && <2.0.0.0,
+    MonadRandom          >=0.5.0    && <1.0.0, 
+    mtl                  >=2.2.0    && <=2.2.1,
+    tf-random            >=0.5      && <=1.0,
+    semigroups           >=0.16.0   && <0.19.0,
+    time                 >=1.4.0.0  && <=1.6.0.0,
+    text                 >=1.1.1.4  && <=2.0.0.0,
+    vector               >=0.11.0.0 && <=1.0.0.0, 
+    base                 >=4.7      && <4.9
+
+  DEFAULT-EXTENSIONS:
+    DeriveDataTypeable
+    DeriveFunctor
+    ExistentialQuantification
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
+    GeneralizedNewtypeDeriving
+    ImplicitParams
+    LambdaCase
+    MultiParamTypeClasses
+    OverloadedStrings
+    RankNTypes
+    ScopedTypeVariables
+    StandaloneDeriving
+}
+
+Test-suite procgen-live {
+
+  TYPE:              exitcode-stdio-1.0
+  MAIN-IS:           ProcGen/Live.hs
+  HS-SOURCE-DIRS:    src
+  DEFAULT-LANGUAGE:  Haskell2010
+
+  GHC-OPTIONS:  -threaded -Wall
+    -fno-warn-name-shadowing
+    -fno-warn-unused-do-bind
+    -main-is ProcGen.Live
+
+  OTHER-MODULES:
+    ProcGen
+    ProcGen.Arbitrary
+    ProcGen.GHCI
+    ProcGen.Plot
+    ProcGen.Types
+    ProcGen.Music.KeyFreq88
+    ProcGen.Music.WaveFile
+    ProcGen.Music.Synth
+
+  BUILD-DEPENDS:
+    binary               >=0.7.0.0  && <0.8.0.0,
+    bytestring           >=0.10.0.0 && <1.0.0.0,
+    cairo                >=0.11.0.0 && <1.0.0.0,
+    colour               >=2.3.0    && <3.0.0,
+    containers           >=0.5.5.0  && <=0.5.7.0,
+    happlets             >=0.1.0.0  && <=1.0.0.0,
+    happlets-lib-gtk     >=0.1.0.0  && <=1.0.0.0,
+    lens                 >=4.0.0.0  && <5.0.0.0,
+    linear               >=1.20.0   && <2.0.0.0,
+    MonadRandom          >=0.5.0    && <1.0.0, 
+    mtl                  >=2.2.0    && <=2.2.1,
+    tf-random            >=0.5      && <=1.0,
+    semigroups           >=0.16.0   && <0.19.0,
+    time                 >=1.4.0.0  && <=1.6.0.0,
+    text                 >=1.1.1.4  && <=2.0.0.0,
+    vector               >=0.11.0.0 && <=1.0.0.0, 
+    base                 >=4.7      && <4.9
+
+  DEFAULT-EXTENSIONS:
+    DeriveDataTypeable
+    DeriveFunctor
+    ExistentialQuantification
+    FlexibleContexts
+    FlexibleInstances
+    FunctionalDependencies
+    GeneralizedNewtypeDeriving
+    ImplicitParams
+    LambdaCase
+    MultiParamTypeClasses
+    OverloadedStrings
+    RankNTypes
+    ScopedTypeVariables
+    StandaloneDeriving
+}
