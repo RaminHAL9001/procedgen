@@ -3,18 +3,12 @@ module ProcGen.Types where
 import           Control.Monad
 import           Control.Monad.ST
 
-import           Data.Bits
-import           Data.Char
 import           Data.Int
-import           Data.Ratio
 import           Data.STRef
 import qualified Data.Vector.Unboxed.Mutable as Mutable
-import           Data.Word
 
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
-
-import           Numeric
 
 --import Debug.Trace
 

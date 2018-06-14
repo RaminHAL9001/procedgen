@@ -290,8 +290,8 @@ drawPlotWindow plotwin (V2 w h) = do
   drawPlotAxis w (theXAxis plotwin) $ (+ 0.5) >>> \ x ->
     Cairo.moveTo    x  0.5  >> Cairo.lineTo  x  (realToFrac h) >> Cairo.stroke
 
-drawCart :: (Real num, Fractional num) => PlotCartesian num -> GtkRedraw ()
-drawCart plot = redrawAll $ \ size@(V2 (SampCoord w) (SampCoord h)) -> CairoRender $ do
+drawCart :: (Real num, Fractional num) => PlotCartesian num -> PixSize -> GtkRedraw ()
+drawCart plot size@(V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   let plotwin = plot ^. plotWindow
   let xaxis = plotwin ^. xAxis
   let yaxis = plotwin ^. yAxis

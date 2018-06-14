@@ -31,13 +31,13 @@ SYNOPSIS      : A procedural generation library.
 
 DESCRIPTION   :
     .
-    A library similar to QuickCheck but with a focus on procedural
-    generation. This library contains a collection of experimental
-    algorithms for procedurally generating 2D/3D images, sound, music,
-    and natural language. There are also experimental algorithms for
-    gathering corpora of data for training neural networks, algorithms
-    for basic signal processing, and algorithms for shaping the
-    probability distribution of random numbers.
+    A library similar in spirit to QuickCheck, but with a focus on
+    procedural generation. This library contains a collection of
+    experimental algorithms for procedurally generating 2D/3D images,
+    sound, music, and natural language. There are also experimental
+    algorithms for gathering corpora of data for training neural
+    networks, algorithms for basic signal processing, and algorithms
+    for shaping the probability distribution of random numbers.
     .
     This libary is intended to be used from a GHCI interactive
     session. Graphics are displayed in a Gtk+ window via the Happlets
@@ -49,7 +49,7 @@ Library {
   HS-SOURCE-DIRS:    src
   DEFAULT-LANGUAGE:  Haskell2010
 
-  GHC-OPTIONS:  -threaded -Wall
+  GHC-OPTIONS: -Wall
     -fno-warn-name-shadowing
     -fno-warn-unused-do-bind
 
@@ -64,23 +64,22 @@ Library {
     ProcGen.Music.Synth
 
   BUILD-DEPENDS:
-    binary               >=0.7.0.0  && <0.8.0.0,
+    binary               >=0.7.0.0  && <0.9.0.0,
     bytestring           >=0.10.0.0 && <1.0.0.0,
     cairo                >=0.11.0.0 && <1.0.0.0,
-    colour               >=2.3.0    && <3.0.0,
-    containers           >=0.5.5.0  && <=0.5.7.0,
+    containers           >=0.5.5.0  && <0.6.0.0,
     happlets             >=0.1.0.0  && <=1.0.0.0,
     happlets-lib-gtk     >=0.1.0.0  && <=1.0.0.0,
     lens                 >=4.0.0.0  && <5.0.0.0,
     linear               >=1.20.0   && <2.0.0.0,
     MonadRandom          >=0.5.0    && <1.0.0, 
-    mtl                  >=2.2.0    && <=2.2.1,
+    mtl                  >=2.2.0    && <=2.2.2,
     tf-random            >=0.5      && <=1.0,
     semigroups           >=0.16.0   && <0.19.0,
-    time                 >=1.4.0.0  && <=1.6.0.0,
+    time                 >=1.4.0.0  && <1.10.0.0,
     text                 >=1.1.1.4  && <=2.0.0.0,
     vector               >=0.11.0.0 && <=1.0.0.0, 
-    base                 >=4.7      && <4.9
+    base                 >=4.7      && <4.11
 
   DEFAULT-EXTENSIONS:
     DeriveDataTypeable
@@ -122,23 +121,22 @@ Test-suite procgen-live {
     ProcGen.Music.Synth
 
   BUILD-DEPENDS:
-    binary               >=0.7.0.0  && <0.8.0.0,
+    binary               >=0.7.0.0  && <0.9.0.0,
     bytestring           >=0.10.0.0 && <1.0.0.0,
     cairo                >=0.11.0.0 && <1.0.0.0,
-    colour               >=2.3.0    && <3.0.0,
-    containers           >=0.5.5.0  && <=0.5.7.0,
+    containers           >=0.5.5.0  && <0.6.0.0,
     happlets             >=0.1.0.0  && <=1.0.0.0,
     happlets-lib-gtk     >=0.1.0.0  && <=1.0.0.0,
     lens                 >=4.0.0.0  && <5.0.0.0,
     linear               >=1.20.0   && <2.0.0.0,
     MonadRandom          >=0.5.0    && <1.0.0, 
-    mtl                  >=2.2.0    && <=2.2.1,
+    mtl                  >=2.2.0    && <=2.2.2,
     tf-random            >=0.5      && <=1.0,
     semigroups           >=0.16.0   && <0.19.0,
-    time                 >=1.4.0.0  && <=1.6.0.0,
+    time                 >=1.4.0.0  && <=1.10.0.0,
     text                 >=1.1.1.4  && <=2.0.0.0,
     vector               >=0.11.0.0 && <=1.0.0.0, 
-    base                 >=4.7      && <4.9
+    base                 >=4.7      && <4.11
 
   DEFAULT-EXTENSIONS:
     DeriveDataTypeable

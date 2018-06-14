@@ -272,8 +272,8 @@ newtype FDView
 fdView :: FDSignal -> FDView
 fdView = FDView
 
-drawFDView :: FDView -> GtkRedraw ()
-drawFDView fdView = redrawAll $ \ (V2 w h) -> CairoRender $ do
+drawFDView :: FDView -> PixSize -> GtkRedraw ()
+drawFDView fdView (V2 w h) = cairoRender $ do
   let fd     = theFDViewSignal fdView
   let lo     = log (fdMinFreq fd)
   let xscale = realToFrac w / (log (fdMaxFreq fd) - lo)
@@ -365,8 +365,8 @@ tdViewAtTime t = do
      tdViewInitTime .=
        (realToFrac (ceiling (t * theTDViewBaseFreq v) :: Int) / theTDViewBaseFreq v)
 
-drawTDView :: TDView -> GtkRedraw ()
-drawTDView v = redrawAll $ \ (V2 (SampCoord w) (SampCoord h)) -> CairoRender $ do
+drawTDView :: TDView -> PixSize -> GtkRedraw ()
+drawTDView v (V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   let count  = max 1 $ theTDViewSampleCount v
   let origin = realToFrac h / 2
   let pixTime = realToFrac w / realToFrac count :: Double
