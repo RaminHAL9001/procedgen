@@ -1,7 +1,6 @@
 -- | Plotting functions.
 module ProcGen.Plot where
 
-import           ProcGen.GHCI
 import           ProcGen.Types
 
 import           Control.Arrow
@@ -20,20 +19,26 @@ class HasLineStyle a where { lineStyle :: Lens' (a num) (LineStyle num); }
 
 data LineStyle num
   = LineStyle
-    { theLineColour  :: !PackedRGBA32
+    { theLineColor   :: !PackedRGBA32
     , theLineWeight  :: !num
       -- ^ The weight specified in pixels
     }
   deriving (Eq, Show, Read)
 
+theLineColour :: LineStyle num -> PackedRGBA32
+theLineColour = theLineColour
+
 makeLineStyle :: Num num => LineStyle num
 makeLineStyle = LineStyle
-  { theLineColour = packRGBA32 0xA0 0xA0 0xA0 0xA0
+  { theLineColor  = packRGBA32 0xA0 0xA0 0xA0 0xA0
   , theLineWeight = 2
   }
 
+lineColor :: Lens' (LineStyle num) PackedRGBA32
+lineColor = lens theLineColour $ \ a b -> a{ theLineColor = b }
+
 lineColour :: Lens' (LineStyle num) PackedRGBA32
-lineColour = lens theLineColour $ \ a b -> a{ theLineColour = b }
+lineColour = lineColor
 
 lineWeight :: Lens' (LineStyle num) num
 lineWeight = lens theLineWeight $ \ a b -> a{ theLineWeight = b }
@@ -159,12 +164,9 @@ instance HasPlotWindow PlotCartesian where
 instance HasPlotFunction PlotCartesian Cartesian where
   plotFunctions = lens theCartFunctions $ \ a b -> a{ theCartFunctions = b }
 
-instance (Real num, Fractional num) => GHCIDisp (PlotCartesian num) where
-  initDisp = runCartesian
-
 makeCartesian :: Num num => Cartesian num
 makeCartesian = Cartesian
-  { theCartStyle    = makeLineStyle{ theLineColour = packRGBA32 0x00 0x00 0xFF 0xFF }
+  { theCartStyle    = makeLineStyle{ theLineColor = packRGBA32 0x00 0x00 0xFF 0xFF }
   , theCartFunction = const 0
   }
 
@@ -216,7 +218,7 @@ instance HasPlotFunction PlotParametric Parametric where
 -- using record syntax.
 parametric :: Num num => Parametric num
 parametric = Parametric
-  { theParamStyle  = makeLineStyle{ theLineColour = packRGBA32 0xFF 0x00 0x00 0xFF }
+  { theParamStyle  = makeLineStyle{ theLineColor = packRGBA32 0xFF 0x00 0x00 0xFF }
   , theParamTStart = 0
   , theParamTEnd   = 1
   , theParamTStep  = const 1
@@ -249,13 +251,13 @@ paramY = lens theParamY $ \ a b -> a{ theParamY = b }
 
 clearWithBGColor :: PackedRGBA32 -> Cairo.Render ()
 clearWithBGColor c = do
-  let (r,g,b,a) = unpackRGBA32Colour c
+  let (r,g,b,a) = unpackRGBA32Color c
   cairoClearCanvas r g b a
 
 setLineStyle :: (Real num, Fractional num) => LineStyle num -> Cairo.Render ()
 setLineStyle style = do
-  let c = theLineColour style
-  let (r,g,b,a) = unpackRGBA32Colour c
+  let c = theLineColor style
+  let (r,g,b,a) = unpackRGBA32Color c
   Cairo.setLineJoin Cairo.LineJoinRound
   Cairo.setLineWidth $ realToFrac $ theLineWeight style
   Cairo.setSourceRGBA r g b a
@@ -338,7 +340,7 @@ example = plotCartesian &~ do
         cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
         lineStyle    .=
           ( makeLineStyle &~ do
-              lineColour .= packRGBA32 0x00 0x00 0xFF 0xFF
+              lineColor  .= packRGBA32 0x00 0x00 0xFF 0xFF
               lineWeight .= 3.0
           )
     ]
@@ -351,7 +353,7 @@ example = plotCartesian &~ do
               gridLinesSpacing .= 0.5
               lineStyle        .=
                 ( makeLineStyle &~ do
-                    lineColour .= packRGBA32 0x40 0x40 0x40 0xA0
+                    lineColor  .= packRGBA32 0x40 0x40 0x40 0xA0
                     lineWeight .= 2.0
                 )
           )
@@ -360,7 +362,7 @@ example = plotCartesian &~ do
               gridLinesSpacing .= 0.1
               lineStyle        .=
                 ( makeLineStyle &~ do
-                    lineColour .= packRGBA32 0x80 0x80 0x80 0x80
+                    lineColor  .= packRGBA32 0x80 0x80 0x80 0x80
                     lineWeight .= 1.0
                 )
           )
