@@ -6,6 +6,8 @@ import           ProcGen.Types
 import           Control.Arrow
 import           Control.Lens
 
+import           Data.Typeable
+
 import qualified Graphics.Rendering.Cairo as Cairo
 
 import           Happlets.Lib.Gtk
@@ -25,6 +27,8 @@ data LineStyle num
     }
   deriving (Eq, Show, Read)
 
+instance HasLineStyle LineStyle where { lineStyle = lens id $ flip const; }
+
 theLineColour :: LineStyle num -> PackedRGBA32
 theLineColour = theLineColour
 
@@ -34,14 +38,23 @@ makeLineStyle = LineStyle
   , theLineWeight = 2
   }
 
-lineColor :: Lens' (LineStyle num) PackedRGBA32
-lineColor = lens theLineColour $ \ a b -> a{ theLineColor = b }
+lineStyleColor :: Lens' (LineStyle num) PackedRGBA32
+lineStyleColor = lens theLineColour $ \ a b -> a{ theLineColor = b }
 
-lineColour :: Lens' (LineStyle num) PackedRGBA32
+lineStyleColour :: Lens' (LineStyle num) PackedRGBA32
+lineStyleColour = lineColor
+
+lineStyleWeight :: Lens' (LineStyle num) num
+lineStyleWeight = lens theLineWeight $ \ a b -> a{ theLineWeight = b }
+
+lineColor :: HasLineStyle line => Lens' (line num) PackedRGBA32
+lineColor = lineStyle . lineStyleColor
+
+lineColour :: HasLineStyle line => Lens' (line num) PackedRGBA32
 lineColour = lineColor
 
-lineWeight :: Lens' (LineStyle num) num
-lineWeight = lens theLineWeight $ \ a b -> a{ theLineWeight = b }
+lineWeight :: HasLineStyle line => Lens' (line num) num
+lineWeight = lineStyle . lineStyleWeight
 
 ----------------------------------------------------------------------------------------------------
 
@@ -121,6 +134,8 @@ data PlotWindow num
     }
   deriving (Eq, Show, Read)
 
+instance HasPlotWindow PlotWindow where { plotWindow = lens id $ flip const; }
+
 makePlotWindow :: Num num => PlotWindow num
 makePlotWindow = PlotWindow
   { theBGColor = packRGBA32 0xFF 0xFF 0xFF 0xC0
@@ -131,11 +146,17 @@ makePlotWindow = PlotWindow
 bgColor :: Lens' (PlotWindow num) PackedRGBA32
 bgColor = lens theBGColor $ \ a b -> a{ theBGColor = b }
 
-xAxis :: Lens' (PlotWindow num) (PlotAxis num)
-xAxis = lens theXAxis $ \ a b -> a{ theXAxis = b }
+plotWindowXAxis :: Lens' (PlotWindow num) (PlotAxis num)
+plotWindowXAxis = lens theXAxis $ \ a b -> a{ theXAxis = b }
 
-yAxis :: Lens' (PlotWindow num) (PlotAxis num)
-yAxis = lens theYAxis $ \ a b -> a{ theYAxis = b }
+plotWindowYAxis :: Lens' (PlotWindow num) (PlotAxis num)
+plotWindowYAxis = lens theYAxis $ \ a b -> a{ theYAxis = b }
+
+xAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+xAxis = plotWindow . plotWindowXAxis
+
+yAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+yAxis = plotWindow . plotWindowYAxis
 
 ----------------------------------------------------------------------------------------------------
 
@@ -154,6 +175,7 @@ data PlotCartesian num
     { theCartWindow    :: !(PlotWindow num)
     , theCartFunctions :: [Cartesian num]
     }
+  deriving Typeable
 
 instance HasLineStyle Cartesian where
   lineStyle = lens theCartStyle $ \ a b -> a{ theCartStyle = b }
@@ -204,6 +226,7 @@ data PlotParametric num
     { theParamWindow   :: !(PlotWindow num)
     , theParamFunctions :: [Parametric num]
     }
+  deriving Typeable
 
 instance HasLineStyle Parametric where
   lineStyle = lens theParamStyle $ \ a b -> a{ theParamStyle = b }
@@ -323,7 +346,7 @@ drawCart plot size@(V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   drawAxis when
 
 resizeCart :: (Real num, Fractional num) => GtkGUI (PlotCartesian num) ()
-resizeCart = getModel >>= void . onView . drawCart
+resizeCart = getModel >>= void . onCanvas . drawCart
 
 runCartesian :: (Real num, Fractional num) => GtkGUI (PlotCartesian num) ()
 runCartesian = do
@@ -338,36 +361,25 @@ example = plotCartesian &~ do
   plotFunctions .=
     [ makeCartesian &~ do
         cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
-        lineStyle    .=
-          ( makeLineStyle &~ do
-              lineColor  .= packRGBA32 0x00 0x00 0xFF 0xFF
-              lineWeight .= 3.0
-          )
+        lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
+        lineWeight   .= 3.0
     ]
   let axis = makePlotAxis &~ do
         plotAxisOffset .= 0.0
         plotAxisMin    .= (-1.0)
         plotAxisMax    .= 1.0
-        plotAxisMajor  .=
-          ( makeGridLines &~ do
-              gridLinesSpacing .= 0.5
-              lineStyle        .=
-                ( makeLineStyle &~ do
-                    lineColor  .= packRGBA32 0x40 0x40 0x40 0xA0
-                    lineWeight .= 2.0
-                )
+        plotAxisMajor  %= flip (&~)
+          (do gridLinesSpacing .= 0.5
+              lineColor        .= packRGBA32 0x40 0x40 0x40 0xA0
+              lineWeight       .= 2.0
           )
         plotAxisMinor  .= Just
           ( makeGridLines &~ do
               gridLinesSpacing .= 0.1
-              lineStyle        .=
-                ( makeLineStyle &~ do
-                    lineColor  .= packRGBA32 0x80 0x80 0x80 0x80
-                    lineWeight .= 1.0
-                )
+              lineColor        .= packRGBA32 0x80 0x80 0x80 0x80
+              lineWeight       .= 1.0
           )
-  plotWindow .=
-    ( makePlotWindow &~ do
-        xAxis .= axis
-        yAxis .= (axis &~ plotAxisMin .= 0.0)
+  plotWindow %= flip (&~)
+    (do xAxis .= axis
+        yAxis .= (plotAxisMin .~ 0.0) axis
     )
