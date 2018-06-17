@@ -5,13 +5,21 @@
 -- construct a 'Happlets.Happlet.Happlet' value, and provide this value along with an initializing
 -- 'Happlets.GUI.GUI' function to the 'setDisp' function to set an arbitrary model-view-controller.
 module ProcGen.GHCI
-  ( GHCIDisp(..), setDisp, disp, chapp, live, currentHapplet,
+  ( GHCIDisp(..), setDisp, disp, chapp,
+    -- * Cartesian Plotting
+    newCartWin, cart, exampleCart,
+    -- * Parametric Plotting
+    newParamWin, param,
+    -- * Functions with polymorphic types.
+    liveUpdate, currentHapplet,
     -- * Working with persistent values in the GHCI process.
     module ProcGen.Plot,
+    module Happlets.Lib.Gtk,
   )
   where
 
 import           ProcGen.Plot
+import           ProcGen.Types
 import           ProcGen.Music.Synth
 
 import           Control.Arrow
@@ -117,6 +125,68 @@ _live ~witness f = do
           return (a, theGUIModel st)
 
 -- | Evaluate a 'Happlets.Lib.Gtk.GtkGUI' function on the 'Happlets.Happlet.Happlet' most recently
--- selected by the 'chapp' function.
-live :: Typeable model => GtkGUI model a -> IO a
-live = _live (error "'ProcGen.GHCI.live' function attempted to evaluate a witness value")
+-- selected by the 'chapp' function. This function alone isn't terribly useful when your 'GtkGUI'
+-- @model@ type is polymophic, you must explicitly specify the exact type of 'GtkGUI' function you
+-- want to evaluate. However this function can be used to delcare type-specific updates on the
+-- current Happlet. So you can use 'liveUpdate' to declare other "live" functions with more specific
+-- types, like 'cart' and 'param' are specifically-typed versions of this 'liveUpdate' function.
+liveUpdate :: Typeable model => GtkGUI model a -> IO a
+liveUpdate = _live (error "'ProcGen.GHCI.live' function attempted to evaluate a witness value")
+
+newPlotWin :: HasPlotWindow plot => plot ProcGenFloat -> IO (Happlet (plot ProcGenFloat))
+newPlotWin makeWin = makeHapplet $ makeWin &~ do
+  let axis = makePlotAxis &~ do
+        plotAxisOffset .= (0.0 :: ProcGenFloat)
+        plotAxisMin    .= (-1.0)
+        plotAxisMax    .= 1.0
+        plotAxisMajor  %= flip (&~)
+          (do gridLinesSpacing .= 0.5
+              lineColor        .= packRGBA32 0x40 0x40 0x40 0xA0
+              lineWeight       .= 2.0
+          )
+        plotAxisMinor  .= Just
+          ( makeGridLines &~ do
+              gridLinesSpacing .= 0.1
+              lineColor        .= packRGBA32 0x80 0x80 0x80 0x80
+              lineWeight       .= 1.0
+          )
+  plotWindow %= flip (&~)
+    (do xAxis .= axis
+        yAxis .= axis
+--        yAxis .= (plotAxisMin .~ 0.0) axis
+    )
+
+----------------------------------------------------------------------------------------------------
+
+-- | Create a Happlet for displaying cartesian plots, with a default major and minor grid lines. Use
+-- 'chapp' to change to the 'Happlets.Happlet.Happlet' returned by this function. Then use 'cart' to
+-- make modifications to it.
+newCartWin :: IO (Happlet (PlotCartesian ProcGenFloat))
+newCartWin = newPlotWin plotCartesian
+
+-- | If you have 'chapp'-ed to a 'PlotCartesian' view, you can use 'cart' to live-update the view.
+cart :: GtkGUI (PlotCartesian ProcGenFloat) a -> IO a
+cart = liveUpdate
+
+-- | This is an example cartesian plot. Use this command to view it:
+--
+-- @
+-- 'ProcGen.Plot.plotFunctions' 'Control.Lens..=' ['exampleCart']
+-- @
+exampleCart :: Cartesian ProcGenFloat
+exampleCart = makeCartesian &~ do
+  cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
+  lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
+  lineWeight   .= 3.0
+
+----------------------------------------------------------------------------------------------------
+
+-- | Create a Happlet for displaying cartesian plots, with a default major and minor grid lines. Use
+-- 'chapp' to change to the 'Happlets.Happlet.Happlet' returned by this function. Then use 'cart' to
+-- make modifications to it.
+newParamWin :: IO (Happlet (PlotParametric ProcGenFloat))
+newParamWin = newPlotWin plotParam
+
+-- | If you have 'chapp'-ed to a 'PlotParametric' view, you can use 'param' to live-update the view.
+param :: GtkGUI (PlotParametric ProcGenFloat) a -> IO a
+param = liveUpdate
