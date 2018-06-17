@@ -290,7 +290,7 @@ drawFDView fdView (V2 w h) = cairoRender $ do
     Cairo.fill
 
 resizeFDView :: GtkGUI FDView ()
-resizeFDView = getModel >>= void . onView . drawFDView
+resizeFDView = getModel >>= void . onCanvas . drawFDView
 
 runFDView :: GtkGUI FDView ()
 runFDView = do
@@ -387,20 +387,20 @@ drawTDView v (V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   Cairo.stroke
 
 resizeTDView :: GtkGUI TDView ()
-resizeTDView = getModel >>= void . onView . drawTDView
+resizeTDView = getModel >>= void . onCanvas . drawTDView
 
 animateTDView :: AnimationMoment -> GtkGUI TDView ()
 animateTDView = realToFrac >>> \ dt -> do
   beyond <- gets $ (>=) dt . tdDuration . theTDViewSignal
   if beyond then stepFrameEvents $ const disable else do
     tdViewAtTime dt
-    getModel >>= void . onView . drawTDView
+    getModel >>= void . onCanvas . drawTDView
 
 clickMouseTDView :: Mouse -> GtkGUI TDView ()
 clickMouseTDView (Mouse _ pressed _mod button _loc) = when pressed $ case button of
   RightClick -> do
     modifyModel $ (tdViewInitTime .~ 0) . (tdViewAnimate .~ False)
-    getModel >>= void . onView . drawTDView
+    getModel >>= void . onCanvas . drawTDView
   _          -> do
     tdViewAnimate %= not -- This couldn't possibly toggle the animate bit.... NOT!!!
     isNowAnimated <- use tdViewAnimate
