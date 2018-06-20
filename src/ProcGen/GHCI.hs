@@ -13,12 +13,12 @@ module ProcGen.GHCI
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
     -- * Working with persistent values in the GHCI process.
-    module ProcGen.Plot,
+    module ProcGen.PlotGUI,
     module Happlets.Lib.Gtk,
   )
   where
 
-import           ProcGen.Plot
+import           ProcGen.PlotGUI
 import           ProcGen.Types
 import           ProcGen.Music.Synth
 
@@ -63,13 +63,13 @@ setDisp = doWindowAttach gtkHapplet True theWindow
 
 ----------------------------------------------------------------------------------------------------
 
--- | This class defines the 'disp' function. For data ypes which have instantiated this class, you
+-- | This class defines the 'disp' function. For data types which have instantiated this class, you
 -- can evaluate 'disp' to create a window on screen displaying an interactive graphic representing
 -- the data type.
 class GHCIDisp model where { initDisp :: GtkGUI model (); }
 instance GHCIDisp TDView where { initDisp = runTDView; }
 instance GHCIDisp FDView where { initDisp = runFDView; }
-instance (Real num, Fractional num) => GHCIDisp (PlotCartesian num) where
+instance RealFrac num => GHCIDisp (PlotCartesian num) where
   initDisp = runCartesian
 
 -- | This function takes any value that instantiates the 'GHCIDisp' class and makes it visible in

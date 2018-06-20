@@ -272,7 +272,7 @@ newtype FDView
 fdView :: FDSignal -> FDView
 fdView = FDView
 
-drawFDView :: FDView -> PixSize -> GtkRedraw ()
+drawFDView :: FDView -> PixSize -> CairoRender ()
 drawFDView fdView (V2 w h) = cairoRender $ do
   let fd     = theFDViewSignal fdView
   let lo     = log (fdMinFreq fd)
@@ -290,7 +290,7 @@ drawFDView fdView (V2 w h) = cairoRender $ do
     Cairo.fill
 
 resizeFDView :: GtkGUI FDView ()
-resizeFDView = getModel >>= void . onCanvas . drawFDView
+resizeFDView = drawFDView <$> getModel <*> getWindowSize >>= onCanvas
 
 runFDView :: GtkGUI FDView ()
 runFDView = do
@@ -365,7 +365,7 @@ tdViewAtTime t = do
      tdViewInitTime .=
        (realToFrac (ceiling (t * theTDViewBaseFreq v) :: Int) / theTDViewBaseFreq v)
 
-drawTDView :: TDView -> PixSize -> GtkRedraw ()
+drawTDView :: TDView -> PixSize -> CairoRender ()
 drawTDView v (V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   let count  = max 1 $ theTDViewSampleCount v
   let origin = realToFrac h / 2
@@ -387,20 +387,20 @@ drawTDView v (V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
   Cairo.stroke
 
 resizeTDView :: GtkGUI TDView ()
-resizeTDView = getModel >>= void . onCanvas . drawTDView
+resizeTDView = drawTDView <$> getModel <*> getWindowSize >>= onCanvas
 
 animateTDView :: AnimationMoment -> GtkGUI TDView ()
 animateTDView = realToFrac >>> \ dt -> do
   beyond <- gets $ (>=) dt . tdDuration . theTDViewSignal
   if beyond then stepFrameEvents $ const disable else do
     tdViewAtTime dt
-    getModel >>= void . onCanvas . drawTDView
+    drawTDView <$> getModel <*> getWindowSize >>= onCanvas
 
 clickMouseTDView :: Mouse -> GtkGUI TDView ()
 clickMouseTDView (Mouse _ pressed _mod button _loc) = when pressed $ case button of
   RightClick -> do
     modifyModel $ (tdViewInitTime .~ 0) . (tdViewAnimate .~ False)
-    getModel >>= void . onCanvas . drawTDView
+    drawTDView <$> getModel <*> getWindowSize >>= onCanvas
   _          -> do
     tdViewAnimate %= not -- This couldn't possibly toggle the animate bit.... NOT!!!
     isNowAnimated <- use tdViewAnimate
