@@ -1,14 +1,14 @@
--- | Plotting functions.
+-- | Plotting functions. This module only contains the data types and lenses. More useful functions
+-- are provided in the "ProcGen.PlotGUI" module which also re-exports this module, so usually you
+-- want to import "ProcGen.PlotGUI" instead of this module alone, unless you do not intend to use
+-- the associated GUI functions.
 module ProcGen.Plot where
 
 import           ProcGen.Types
 
-import           Control.Arrow
 import           Control.Lens
 
 import           Data.Typeable
-
-import qualified Graphics.Rendering.Cairo as Cairo
 
 import           Happlets.Lib.Gtk
 
@@ -21,8 +21,8 @@ class HasLineStyle a where { lineStyle :: Lens' (a num) (LineStyle num); }
 
 data LineStyle num
   = LineStyle
-    { theLineColor   :: !PackedRGBA32
-    , theLineWeight  :: !num
+    { theLineColor  :: !PackedRGBA32
+    , theLineWeight :: !num
       -- ^ The weight specified in pixels
     }
   deriving (Eq, Show, Read)
@@ -30,7 +30,7 @@ data LineStyle num
 instance HasLineStyle LineStyle where { lineStyle = lens id $ flip const; }
 
 theLineColour :: LineStyle num -> PackedRGBA32
-theLineColour = theLineColour
+theLineColour = theLineColor
 
 makeLineStyle :: Num num => LineStyle num
 makeLineStyle = LineStyle
@@ -38,23 +38,14 @@ makeLineStyle = LineStyle
   , theLineWeight = 2
   }
 
-lineStyleColor :: Lens' (LineStyle num) PackedRGBA32
-lineStyleColor = lens theLineColour $ \ a b -> a{ theLineColor = b }
-
-lineStyleColour :: Lens' (LineStyle num) PackedRGBA32
-lineStyleColour = lineColor
-
-lineStyleWeight :: Lens' (LineStyle num) num
-lineStyleWeight = lens theLineWeight $ \ a b -> a{ theLineWeight = b }
-
 lineColor :: HasLineStyle line => Lens' (line num) PackedRGBA32
-lineColor = lineStyle . lineStyleColor
+lineColor = lineStyle . lens theLineColor (\ a b -> a{ theLineColor = b })
 
 lineColour :: HasLineStyle line => Lens' (line num) PackedRGBA32
 lineColour = lineColor
 
 lineWeight :: HasLineStyle line => Lens' (line num) num
-lineWeight = lineStyle . lineStyleWeight
+lineWeight = lineStyle . lens theLineWeight (\ a b -> a{ theLineWeight = b })
 
 ----------------------------------------------------------------------------------------------------
 
@@ -128,41 +119,63 @@ class HasPlotWindow a where { plotWindow :: Lens' (a num) (PlotWindow num); }
 
 data PlotWindow num
   = PlotWindow
-    { theBGColor :: !PackedRGBA32
-    , theXAxis   :: !(PlotAxis num)
-    , theYAxis   :: !(PlotAxis num)
+    { theBGColor           :: !PackedRGBA32
+    , theXAxis             :: !(PlotAxis num)
+    , theYAxis             :: !(PlotAxis num)
+    , theLastMouseLocation :: Maybe Mouse
     }
-  deriving (Eq, Show, Read)
+  deriving (Eq, Show)
 
 instance HasPlotWindow PlotWindow where { plotWindow = lens id $ flip const; }
 
 makePlotWindow :: Num num => PlotWindow num
 makePlotWindow = PlotWindow
-  { theBGColor = packRGBA32 0xFF 0xFF 0xFF 0xC0
-  , theXAxis = makePlotAxis
-  , theYAxis = makePlotAxis
+  { theBGColor           = packRGBA32 0xFF 0xFF 0xFF 0xC0
+  , theXAxis             = makePlotAxis
+  , theYAxis             = makePlotAxis
+  , theLastMouseLocation = Nothing
   }
 
 bgColor :: Lens' (PlotWindow num) PackedRGBA32
 bgColor = lens theBGColor $ \ a b -> a{ theBGColor = b }
 
-plotWindowXAxis :: Lens' (PlotWindow num) (PlotAxis num)
-plotWindowXAxis = lens theXAxis $ \ a b -> a{ theXAxis = b }
-
-plotWindowYAxis :: Lens' (PlotWindow num) (PlotAxis num)
-plotWindowYAxis = lens theYAxis $ \ a b -> a{ theYAxis = b }
+lastMouseLocation :: HasPlotWindow win => Lens' (win num) (Maybe Mouse)
+lastMouseLocation = plotWindow .
+  lens theLastMouseLocation (\ a b -> a{ theLastMouseLocation = b })
 
 xAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
-xAxis = plotWindow . plotWindowXAxis
+xAxis = plotWindow . lens theXAxis (\ a b -> a{ theXAxis = b })
 
 yAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
-yAxis = plotWindow . plotWindowYAxis
+yAxis = plotWindow . lens theYAxis (\ a b -> a{ theYAxis = b })
+
+plotOrigin :: HasPlotWindow win => Lens' (win num) (V2 num)
+plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . plotAxisOffset))
+  (\ win (V2 x y) -> win &~ do
+      xAxis . plotAxisOffset .= x
+      yAxis . plotAxisOffset .= y
+  )
+
+winPointToPlotPoint
+  :: RealFrac num
+  => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
+winPointToPlotPoint plotwin (V2 (SampCoord winW) (SampCoord winH)) =
+  let xaxis = plotwin ^. xAxis
+      yaxis = plotwin ^. yAxis
+      (xlo, xhi) = (xaxis ^. plotAxisMax, xaxis ^. plotAxisMin)
+      (ylo, yhi) = (yaxis ^. plotAxisMax, yaxis ^. plotAxisMin)
+      xwin = xhi - xlo
+      ywin = yhi - ylo
+      xscale = xwin / realToFrac winW
+      yscale = ywin / realToFrac winH
+  in  iso (\ (x, y) -> (realToFrac x * xscale - xlo, realToFrac y * yscale - ylo))
+          (\ (x, y) -> (round $ (x + xlo) / xscale, round $ (y + ylo) / yscale))
 
 ----------------------------------------------------------------------------------------------------
 
 -- | Provides a lens for modifying the functions that are plotted.
 class HasPlotFunction plot func | plot -> func where
-  plotFunctions :: Lens' (plot num) [func num]
+  plotFunctionList :: Lens' (plot num) [func num]
 
 data Cartesian num
   = Cartesian
@@ -172,8 +185,9 @@ data Cartesian num
 
 data PlotCartesian num
   = PlotCartesian
-    { theCartWindow    :: !(PlotWindow num)
-    , theCartFunctions :: [Cartesian num]
+    { theCartWindow       :: !(PlotWindow num)
+    , theCartFunctionList :: [Cartesian num]
+    , theCartCursor       :: Maybe Mouse
     }
   deriving Typeable
 
@@ -184,7 +198,7 @@ instance HasPlotWindow PlotCartesian where
   plotWindow = lens theCartWindow $ \ a b -> a{ theCartWindow = b }
 
 instance HasPlotFunction PlotCartesian Cartesian where
-  plotFunctions = lens theCartFunctions $ \ a b -> a{ theCartFunctions = b }
+  plotFunctionList = lens theCartFunctionList $ \ a b -> a{ theCartFunctionList = b }
 
 makeCartesian :: Num num => Cartesian num
 makeCartesian = Cartesian
@@ -192,14 +206,15 @@ makeCartesian = Cartesian
   , theCartFunction = const 0
   }
 
-plotCartesian :: Num num => PlotCartesian num
-plotCartesian = PlotCartesian
-  { theCartWindow = makePlotWindow
-  , theCartFunctions = []
-  }
-
 cartFunction :: Lens' (Cartesian num) (num -> num)
 cartFunction = lens theCartFunction $ \ a b -> a{ theCartFunction = b }
+
+plotCartesian :: Num num => PlotCartesian num
+plotCartesian = PlotCartesian
+  { theCartWindow       = makePlotWindow
+  , theCartFunctionList = []
+  , theCartCursor       = Nothing
+  }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -223,8 +238,8 @@ data Parametric num
 
 data PlotParametric num
   = PlotParametric
-    { theParamWindow   :: !(PlotWindow num)
-    , theParamFunctions :: [Parametric num]
+    { theParamWindow       :: !(PlotWindow num)
+    , theParamFunctionList :: [Parametric num]
     }
   deriving Typeable
 
@@ -235,7 +250,7 @@ instance HasPlotWindow PlotParametric where
   plotWindow = lens theParamWindow $ \ a b -> a{ theParamWindow = b }
 
 instance HasPlotFunction PlotParametric Parametric where
-  plotFunctions = lens theParamFunctions $ \ a b -> a{ theParamFunctions = b }
+  plotFunctionList = lens theParamFunctionList $ \ a b -> a{ theParamFunctionList = b }
 
 -- | A default 'Parametric' plotting function. You can set the parameters with various lenses, or
 -- using record syntax.
@@ -251,8 +266,8 @@ parametric = Parametric
 
 plotParam :: Num num => PlotParametric num
 plotParam = PlotParametric
-  { theParamWindow    = makePlotWindow
-  , theParamFunctions = [] 
+  { theParamWindow       = makePlotWindow
+  , theParamFunctionList = [] 
   }
 
 paramTStart :: Lens' (Parametric num) num
@@ -272,93 +287,10 @@ paramY = lens theParamY $ \ a b -> a{ theParamY = b }
 
 ----------------------------------------------------------------------------------------------------
 
-clearWithBGColor :: PackedRGBA32 -> Cairo.Render ()
-clearWithBGColor c = do
-  let (r,g,b,a) = unpackRGBA32Color c
-  cairoClearCanvas r g b a
-
-setLineStyle :: (Real num, Fractional num) => LineStyle num -> Cairo.Render ()
-setLineStyle style = do
-  let c = theLineColor style
-  let (r,g,b,a) = unpackRGBA32Color c
-  Cairo.setLineJoin Cairo.LineJoinRound
-  Cairo.setLineWidth $ realToFrac $ theLineWeight style
-  Cairo.setSourceRGBA r g b a
-
-drawPlotAxis
-  :: forall num . (Real num, Fractional num)
-  => SampCoord -> PlotAxis num -> (Double -> Cairo.Render ()) -> Cairo.Render ()
-drawPlotAxis win axis draw = do
-  win <- pure (realToFrac win :: Double)
-  let (lo, hi) = realToFrac . uncurry min &&& realToFrac . uncurry max $
-        (thePlotAxisMax axis, thePlotAxisMin axis)
-  let plotWin = hi - lo :: Double
-  let scale = win / plotWin -- Multiply to convert plot coords to window coords.
-  let off = realToFrac (thePlotAxisOffset axis) :: Double
-  let toWinCoords  x = scale * (x - off) :: Double
-  let stepLimit = 3.5 :: Double -- Any less and the grid basically becomes a solid color.
-  let drawAll lines = do
-        let step = realToFrac (theGridLinesSpacing lines :: num) :: Double
-        unless (plotWin == 0 || step * scale < stepLimit) $ do
-          let exactLinesBelowMin = lo / step :: Double
-          let linesBelowMin = floor exactLinesBelowMin :: Int
-          let initOff = exactLinesBelowMin - realToFrac linesBelowMin
-          setLineStyle $ theGridLinesStyle lines
-          mapM_ (draw . toWinCoords) $ takeWhile ((< win) . toWinCoords) $ iterate (+ step) initOff
-  drawAll $ thePlotAxisMajor axis
-  maybe (return ()) drawAll $ thePlotAxisMinor axis
-
-drawPlotWindow :: (Real num, Fractional num) => PlotWindow num -> PixSize -> Cairo.Render ()
-drawPlotWindow plotwin (V2 w h) = do
-  drawPlotAxis h (theYAxis plotwin) $ (+ 0.5) >>> \ y ->
-    Cairo.moveTo  0.5    y  >> Cairo.lineTo  (realToFrac w)  y >> Cairo.stroke
-  drawPlotAxis w (theXAxis plotwin) $ (+ 0.5) >>> \ x ->
-    Cairo.moveTo    x  0.5  >> Cairo.lineTo  x  (realToFrac h) >> Cairo.stroke
-
-drawCart :: (Real num, Fractional num) => PlotCartesian num -> PixSize -> GtkRedraw ()
-drawCart plot size@(V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
-  let plotwin = plot ^. plotWindow
-  let xaxis = plotwin ^. xAxis
-  let yaxis = plotwin ^. yAxis
-  let (xlo, xhi) = (xaxis ^. plotAxisMax, xaxis ^. plotAxisMin)
-  let (ylo, yhi) = (yaxis ^. plotAxisMax, yaxis ^. plotAxisMin)
-  let xwin = xhi - xlo
-  let ywin = yhi - ylo
-  let xscale = xwin / realToFrac w
-  let yscale = ywin / realToFrac h
-  let xtrans = (+ xlo) . (* xscale)
-  let ytrans = (/ yscale) . subtract ylo
-  let drawAxis isAbove = do
-        isAbove (xaxis ^. plotAxisAbove) $ drawPlotWindow plotwin size
-        isAbove (yaxis ^. plotAxisAbove) $ drawPlotWindow plotwin size
-  clearWithBGColor (plot ^. plotWindow ^. bgColor)
-  drawAxis unless
-  when (xwin /= 0 && ywin /= 0) $ forM_ (plot ^. plotFunctions) $ \ cart -> do
-    let f = ytrans . (cart ^. cartFunction) . xtrans
-    let xstep = realToFrac w / xwin
-    setLineStyle (cart ^. lineStyle)
-    let x0 = if xstep < 0 then realToFrac w else 0
-    let y0 = f $ realToFrac x0
-    Cairo.moveTo x0 (realToFrac y0)
-    forM_ (if xstep < 0 then [w, w-1 .. 0] else [0 .. w]) $ \ x -> do
-      Cairo.lineTo (realToFrac x) (realToFrac $ f $ realToFrac x)
-    Cairo.stroke
-  drawAxis when
-
-resizeCart :: (Real num, Fractional num) => GtkGUI (PlotCartesian num) ()
-resizeCart = getModel >>= void . onCanvas . drawCart
-
-runCartesian :: (Real num, Fractional num) => GtkGUI (PlotCartesian num) ()
-runCartesian = do
-  resizeEvents $ const resizeCart
-  resizeCart
-
-----------------------------------------------------------------------------------------------------
-
 -- | Example 'PlotCartesian' function which plots a Gaussian curve.
 example :: PlotCartesian ProcGenFloat
 example = plotCartesian &~ do
-  plotFunctions .=
+  plotFunctionList .=
     [ makeCartesian &~ do
         cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
         lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF

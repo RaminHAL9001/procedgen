@@ -90,7 +90,7 @@ unitQuanta = recip sampleRate
 -- the returned index and the next index that the moment point in time had progressed. This value
 -- can be used to antialias.
 timeIndex :: Moment -> (Int, ProcGenFloat)
-timeIndex t = let { d = t * sampleRate; r = floor d; } in (r, d - realToFrac r)
+timeIndex t = let { d = t * sampleRate; r = floor d :: Int; } in (r, d - realToFrac r)
 
 -- | When converting some index of a 'Data.Vector.Vector' of 'Sample's in a quantized time domain
 -- function, this function converts that index value into the point in time at which that sample

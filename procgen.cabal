@@ -58,6 +58,7 @@ Library {
     ProcGen.Arbitrary
     ProcGen.GHCI
     ProcGen.Plot
+    ProcGen.PlotGUI
     ProcGen.Types
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
@@ -92,6 +93,7 @@ Library {
     ImplicitParams
     LambdaCase
     MultiParamTypeClasses
+    NoMonomorphismRestriction
     OverloadedStrings
     RankNTypes
     ScopedTypeVariables
@@ -115,6 +117,7 @@ Test-suite procgen-live {
     ProcGen.Arbitrary
     ProcGen.GHCI
     ProcGen.Plot
+    ProcGen.PlotGUI
     ProcGen.Types
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
@@ -149,6 +152,7 @@ Test-suite procgen-live {
     ImplicitParams
     LambdaCase
     MultiParamTypeClasses
+    NoMonomorphismRestriction
     OverloadedStrings
     RankNTypes
     ScopedTypeVariables
