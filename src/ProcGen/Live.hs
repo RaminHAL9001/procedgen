@@ -3,20 +3,21 @@
 module ProcGen.Live where
 
 import           ProcGen
-import           Happlets.Lib.Gtk
 
 main :: IO ()
 main = do
-  fd <- randFDSignalIO 256
-  simpleHapplet gtkHapplet
-    (do registeredAppName      .= "Procgen-GHCI"
-        windowTitleBar         .= "Procgen GHCI"
-        decorateWindow         .= True
-        deleteWindowOnClose    .= True
-        quitOnWindowClose      .= True
-        recommendWindowSize    .= (735, 367)
-        animationFrameRate     .= 60
-        backgroundTransparency .= Just 0.9
-    )
-    (fdView fd)
-    (const runFDView)
+  --fd <- randFDSignalIO 256
+  happlet gtkHapplet $ do
+    win <- newWindow
+    cp1 <- newHapplet example
+    registeredAppName      .= "Procgen-GHCI"
+    windowTitleBar         .= "Procgen GHCI"
+    decorateWindow         .= True
+    deleteWindowOnClose    .= True
+    quitOnWindowClose      .= True
+    recommendWindowSize    .= (735, 367)
+    animationFrameRate     .= 60
+    backgroundTransparency .= Just 0.9
+    attachWindow True win cp1 $ const $ runCartesian
+  --msgs <- onHapplet cp1 $ \ cp1 -> return (cp1 ^. cartLog, cp1 & cartLog .~ "")
+  --Lazy.putStr (fst msgs)
