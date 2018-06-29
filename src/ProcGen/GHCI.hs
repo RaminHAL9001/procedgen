@@ -7,9 +7,9 @@
 module ProcGen.GHCI
   ( GHCIDisp(..), setDisp, disp, chapp,
     -- * Cartesian Plotting
-    newCartWin, cart, exampleCart,
+    newCartWin, cart, exampleCart, dumpLog,
     -- * Parametric Plotting
-    newParamWin, param,
+    newPlotWin, newParamWin, param,
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
     -- * Working with persistent values in the GHCI process.
@@ -34,6 +34,8 @@ import           Data.Dynamic
 import           Data.Typeable
 
 import           System.IO.Unsafe
+
+import qualified Data.Text.Lazy.IO as Lazy
 
 ----------------------------------------------------------------------------------------------------
 
@@ -153,7 +155,7 @@ newPlotWin makeWin = makeHapplet $ makeWin &~ do
   plotWindow %= flip (&~)
     (do xAxis .= axis
         yAxis .= axis
---        yAxis .= (plotAxisMin .~ 0.0) axis
+--        yAxis . plotAxisMin .= 0.0
     )
 
 ----------------------------------------------------------------------------------------------------
@@ -178,6 +180,11 @@ exampleCart = makeCartesian &~ do
   cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
   lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
   lineWeight   .= 3.0
+
+dumpLog :: IO ()
+dumpLog = cart $ do
+  use cartLog >>= liftIO . Lazy.putStr
+  cartLog .= ""
 
 ----------------------------------------------------------------------------------------------------
 
