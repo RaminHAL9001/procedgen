@@ -8,6 +8,7 @@ import           ProcGen.Types
 
 import           Control.Lens
 
+import qualified Data.Text.Lazy as Lazy
 import           Data.Typeable
 
 import           Happlets.Lib.Gtk
@@ -156,20 +157,30 @@ plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . p
       yAxis . plotAxisOffset .= y
   )
 
+-- | This function is used as an intermediate computational step, and so is designed to be a lazy as
+-- possible. This is the reason why tuples are used as inputs and outputs, rather than taking a
+-- 'Linear.V2.V2' type or 'Happlets.Types2D.Point2D' type. But you can be sure that if you only use
+-- the 'Prelude.fst' value of the result, the 'Prelude.snd' value will not be computed, so it ends
+-- up being more efficient.
+-- 
+-- This is a lossy isomorphism, meaning the @num@ type you choose (usually 'Prelude.Float' or
+-- 'Prelude.Double') performs some approximation such that when you evaluate an input to produce an
+-- output, evaluating this function in the inverse direction on the output may not produce the same
+-- input value you started, at least not for the most extreme values.
 winPointToPlotPoint
   :: RealFrac num
   => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
-winPointToPlotPoint plotwin (V2 (SampCoord winW) (SampCoord winH)) =
+winPointToPlotPoint plotwin (V2 winW winH) =
   let xaxis = plotwin ^. xAxis
       yaxis = plotwin ^. yAxis
-      (xlo, xhi) = (xaxis ^. plotAxisMax, xaxis ^. plotAxisMin)
-      (ylo, yhi) = (yaxis ^. plotAxisMax, yaxis ^. plotAxisMin)
+      (xlo, xhi) = (xaxis ^. plotAxisMin, xaxis ^. plotAxisMax)
+      (ylo, yhi) = (yaxis ^. plotAxisMin, yaxis ^. plotAxisMax)
       xwin = xhi - xlo
       ywin = yhi - ylo
       xscale = xwin / realToFrac winW
       yscale = ywin / realToFrac winH
-  in  iso (\ (x, y) -> (realToFrac x * xscale - xlo, realToFrac y * yscale - ylo))
-          (\ (x, y) -> (round $ (x + xlo) / xscale, round $ (y + ylo) / yscale))
+  in  iso (\ (x, y) -> (realToFrac x * xscale + xlo, realToFrac (winH - y) * yscale + ylo))
+          (\ (x, y) -> (round $ (x - xlo) / xscale, round ((y - ylo) / yscale)))
 
 ----------------------------------------------------------------------------------------------------
 
@@ -188,6 +199,7 @@ data PlotCartesian num
     { theCartWindow       :: !(PlotWindow num)
     , theCartFunctionList :: [Cartesian num]
     , theCartCursor       :: Maybe Mouse
+    , theCartLog          :: Lazy.Text
     }
   deriving Typeable
 
@@ -214,7 +226,11 @@ plotCartesian = PlotCartesian
   { theCartWindow       = makePlotWindow
   , theCartFunctionList = []
   , theCartCursor       = Nothing
+  , theCartLog          = ""
   }
+
+cartLog :: Lens' (PlotCartesian num) Lazy.Text
+cartLog = lens theCartLog $ \ a b -> a{ theCartLog = b }
 
 ----------------------------------------------------------------------------------------------------
 

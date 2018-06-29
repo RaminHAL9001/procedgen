@@ -16,6 +16,8 @@ import           Happlets.Lib.Gtk
 
 import           Linear.V2
 
+import           Text.Printf
+
 ----------------------------------------------------------------------------------------------------
 
 clearWithBGColor :: PackedRGBA32 -> Cairo.Render ()
@@ -105,8 +107,8 @@ runCartesian = do
     let maxLineWidth = round $ maximum $ view lineWeight <$> funcList :: SampCoord
     let clearRegion (V2 x0 _y0) = unless (null funcList) $ refreshRegion
           [ rect2D &~ do
-              rect2DHead .= V2 (x0 - maxLineWidth) 0
-              rect2DTail .= V2 (x0 + maxLineWidth) winH
+              rect2DHead .= V2 (x0 - maxLineWidth - 1) 0
+              rect2DTail .= V2 (x0 + maxLineWidth + 2) winH
           ]
     let negColor = const black -- TODO: negate color, set alpha channel to 1.0
     let drawGuideLine plotwin = unless (null funcList) $
@@ -114,20 +116,23 @@ runCartesian = do
             let x = realToFrac x1 + 0.5
             line2DHead .= V2 x 0
             line2DTail .= V2 x (realToFrac winH)
-    let drawPoints plotwin winsize = forM_ funcList $ \ func -> do
+    let drawPoints plotwin winsize = forM funcList $ \ func -> do
           let wp2pp = winPointToPlotPoint plotwin winsize :: Iso' (SampCoord, SampCoord) (num, num)
           let pp2wp = from wp2pp :: Iso' (num, num) (SampCoord, SampCoord)
-          let (x, _) = pt1 ^. pointXY . wp2pp :: (num, num)
+          let (x, _y) = pt1 ^. pointXY . wp2pp :: (num, num)
           let y = theCartFunction (func :: Cartesian num) x
               -- HERE ^ is where the plot function is evaluaed
           let cairoCoord = (+ 0.5) . realToFrac :: SampCoord -> Double
           let (xp, yp) = cairoCoord *** cairoCoord $ (x, y) ^. pp2wp
           cairoRender $ do
+            Cairo.setOperator Cairo.OperatorSource
             Cairo.arc xp yp (realToFrac maxLineWidth) 0 (2*pi)
             cairoSetColorRGBA32 $ plotwin ^. bgColor
-            Cairo.fill
+            Cairo.fillPreserve
             cairoSetColorRGBA32 $ func ^. lineColor
+            Cairo.setLineWidth $ realToFrac $ func ^. lineWeight
             Cairo.stroke
+          return (x, y)
     case cursor of
       Nothing -> return ()
       Just (Mouse _ press0 _mod0 _button0 pt0) ->
@@ -137,5 +142,13 @@ runCartesian = do
           resizeCart
          else clearRegion pt0
     plotwin <- use plotWindow
-    onOSBuffer $ drawGuideLine plotwin >> drawPoints plotwin winsize
+    onOSBuffer $ do
+      drawGuideLine plotwin
+      points <- drawPoints plotwin winsize
+      screenPrinter $ do
+        textCursor . gridRow    .= 0
+        textCursor . gridColumn .= 0
+        displayString $ do
+          (x, y) <- points
+          (printf "x = %+.3f\ny = %+.3f" (realToFrac x :: Float) (realToFrac y :: Float))
   resizeCart
