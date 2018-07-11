@@ -7,7 +7,7 @@
 module ProcGen.GHCI
   ( GHCIDisp(..), setDisp, disp, chapp,
     -- * Cartesian Plotting
-    newCartWin, cart, exampleCart, dumpLog,
+    newCartWin, cart, exampleCart,
     -- * Parametric Plotting
     newPlotWin, newParamWin, param,
     -- * Functions with polymorphic types.
@@ -34,8 +34,6 @@ import           Data.Dynamic
 import           Data.Typeable
 
 import           System.IO.Unsafe
-
-import qualified Data.Text.Lazy.IO as Lazy
 
 ----------------------------------------------------------------------------------------------------
 
@@ -180,11 +178,6 @@ exampleCart = makeCartesian &~ do
   cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
   lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
   lineWeight   .= 3.0
-
-dumpLog :: IO ()
-dumpLog = cart $ do
-  use cartLog >>= liftIO . Lazy.putStr
-  cartLog .= ""
 
 ----------------------------------------------------------------------------------------------------
 

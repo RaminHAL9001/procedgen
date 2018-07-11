@@ -8,8 +8,6 @@ main :: IO ()
 main = do
   --fd <- randFDSignalIO 256
   happlet gtkHapplet $ do
-    win <- newWindow
-    cp1 <- newHapplet example
     registeredAppName      .= "Procgen-GHCI"
     windowTitleBar         .= "Procgen GHCI"
     decorateWindow         .= True
@@ -18,6 +16,8 @@ main = do
     recommendWindowSize    .= (735, 367)
     animationFrameRate     .= 60
     backgroundTransparency .= Just 0.9
+    win <- newWindow
+    cp1 <- newHapplet example
     attachWindow True win cp1 $ const $ runCartesian
   --msgs <- onHapplet cp1 $ \ cp1 -> return (cp1 ^. cartLog, cp1 & cartLog .~ "")
   --Lazy.putStr (fst msgs)

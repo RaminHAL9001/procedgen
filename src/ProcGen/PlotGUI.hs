@@ -6,6 +6,7 @@ module ProcGen.PlotGUI
   ) where
 
 import           ProcGen.Plot
+import           ProcGen.Types
 
 import           Control.Arrow
 import           Control.Lens
@@ -20,10 +21,11 @@ import           Text.Printf
 
 ----------------------------------------------------------------------------------------------------
 
-clearWithBGColor :: PackedRGBA32 -> Cairo.Render ()
+clearWithBGColor :: Color -> Cairo.Render ()
 clearWithBGColor c = do
   let (r,g,b,a) = unpackRGBA32Color c
   cairoClearCanvas r g b a
+{-# SPECIALIZE resizeCart :: GtkGUI (PlotCartesian ProcGenFloat) () #-}
 
 setLineStyle :: (Real num, Fractional num) => LineStyle num -> Cairo.Render ()
 setLineStyle style = do
@@ -32,77 +34,74 @@ setLineStyle style = do
   Cairo.setLineJoin Cairo.LineJoinRound
   Cairo.setLineWidth $ realToFrac $ theLineWeight style
   Cairo.setSourceRGBA r g b a
+{-# SPECIALIZE setLineStyle :: LineStyle ProcGenFloat -> Cairo.Render () #-}
 
-drawPlotAxis
-  :: forall num . (Real num, Fractional num)
-  => SampCoord -> PlotAxis num -> (Double -> Cairo.Render ()) -> Cairo.Render ()
-drawPlotAxis win axis draw = do
-  win <- pure (realToFrac win :: Double)
-  let (lo, hi) = realToFrac . uncurry min &&& realToFrac . uncurry max $
-        (thePlotAxisMax axis, thePlotAxisMin axis) :: (Double, Double)
-  let plotWin = hi - lo
-  let scale = win / plotWin -- Multiply to convert plot coords to window coords.
-  let off = realToFrac (thePlotAxisOffset axis) :: Double
-  let toWinCoords  x = scale * (x - off) :: Double
-  let stepLimit = 3.5 :: Double -- Any less and the grid basically becomes a solid color.
-  let drawAll lines = do
-        let step = realToFrac (theGridLinesSpacing lines :: num) :: Double
-        unless (plotWin == 0 || step * scale < stepLimit) $ do
-          let exactLinesBelowMin = lo / step :: Double
-          let linesBelowMin = floor exactLinesBelowMin :: Int
-          let initOff = exactLinesBelowMin - realToFrac linesBelowMin
-          setLineStyle $ theGridLinesStyle lines
-          mapM_ (draw . toWinCoords) $ takeWhile ((< win) . toWinCoords) $ iterate (+ step) initOff
-  drawAll $ thePlotAxisMajor axis
-  maybe (return ()) drawAll $ thePlotAxisMinor axis
-
-drawPlotWindow :: (Real num, Fractional num) => PlotWindow num -> PixSize -> Cairo.Render ()
-drawPlotWindow plotwin (V2 w h) = do
-  drawPlotAxis h (theYAxis plotwin) $ (+ 0.5) >>> \ y ->
-    Cairo.moveTo  0.5    y  >> Cairo.lineTo  (realToFrac w)  y >> Cairo.stroke
-  drawPlotAxis w (theXAxis plotwin) $ (+ 0.5) >>> \ x ->
-    Cairo.moveTo    x  0.5  >> Cairo.lineTo  x  (realToFrac h) >> Cairo.stroke
+drawPlotWindow :: RealFrac num => PlotWindow num -> PixSize -> Cairo.Render ()
+drawPlotWindow plotwin size@(V2 w h) = do
+  let lim = canonicalRect2D $ winToPlotRect plotwin size
+  let wp2ppX = fromPlotToWinX plotwin size
+  let wp2ppY = fromPlotToWinY plotwin size
+  let steps wp2pp gap lo hi =
+        let s = lo / gap
+            i = realToFrac (floor s :: Int) * gap
+        in  fmap wp2pp $ takeWhile (<= hi) $ iterate (gap +) i
+  let vertical   ymax x = do
+        Cairo.moveTo (realToFrac x + 0.5) (0.0)
+        Cairo.lineTo (realToFrac x + 0.5) (realToFrac ymax)
+        Cairo.stroke
+  let horizontal xmax y = do
+        Cairo.moveTo (0.0)             (realToFrac y + 0.5)
+        Cairo.lineTo (realToFrac xmax) (realToFrac y + 0.5)
+        Cairo.stroke
+  let drawLines paint wmax wp2pp axis point = do
+        let run majmin = case plotwin ^. axis . majmin of
+              Nothing  -> return ()
+              Just gap -> do
+                setLineStyle $ gap ^. lineStyle
+                mapM_ (paint wmax) $ steps wp2pp
+                  (gap ^. gridLinesSpacing) (lim ^. rect2DHead . point) (lim ^. rect2DTail . point)
+        run (plotAxisMajor . re _Just) >> run plotAxisMinor
+  drawLines horizontal w wp2ppY yAxis pointY
+  drawLines vertical   h wp2ppX xAxis pointX
+  
+{-# SPECIALIZE drawPlotWindow :: PlotWindow ProcGenFloat -> PixSize -> Cairo.Render () #-}
 
 renderCartesian :: forall num . RealFrac num => PlotCartesian num -> PixSize -> CairoRender ()
-renderCartesian plot size@(V2 (SampCoord w) (SampCoord h)) = cairoRender $ do
+renderCartesian plot size@(V2 w _h) = cairoRender $ do
   let plotwin = plot ^. plotWindow
-  let xaxis = plotwin ^. xAxis
-  let yaxis = plotwin ^. yAxis
-  let (xlo, xhi) = (xaxis ^. plotAxisMax, xaxis ^. plotAxisMin)
-  let (ylo, yhi) = (yaxis ^. plotAxisMax, yaxis ^. plotAxisMin)
-  let xwin = xhi - xlo
-  let ywin = yhi - ylo
-  let xscale = xwin / realToFrac w
-  let yscale = ywin / realToFrac h
-  let xtrans = (+ xlo) . (* xscale)
-  let ytrans = (/ yscale) . subtract ylo
   let drawAxis isAbove = do
-        isAbove (xaxis ^. plotAxisAbove) $ drawPlotWindow plotwin size
-        isAbove (yaxis ^. plotAxisAbove) $ drawPlotWindow plotwin size
+        isAbove (plot ^. xAxis . plotAxisAbove) $ drawPlotWindow plotwin size
+        isAbove (plot ^. yAxis . plotAxisAbove) $ drawPlotWindow plotwin size
   clearWithBGColor (plot ^. plotWindow ^. bgColor)
   drawAxis unless
-  when (xwin /= 0 && ywin /= 0) $ forM_ (plot ^. plotFunctionList) $ \ cart -> do
-    let f = ytrans . (cart ^. cartFunction) . xtrans
-    let xstep = realToFrac w / xwin
-    setLineStyle (cart ^. lineStyle)
-    let x0 = (if xstep < 0 then realToFrac w else 0) :: num
-    let y0 = f (realToFrac x0) :: num
-    Cairo.moveTo (realToFrac x0) (realToFrac y0)
-    forM_ (if xstep < 0 then [w, w-1 .. 0] else [0 .. w]) $ \ x -> do
-      Cairo.lineTo (realToFrac x) (realToFrac $ f $ realToFrac x)
-    Cairo.stroke
+  let sc2d  = (+ 0.5) . (realToFrac :: Int -> Double) . (fromIntegral :: SampCoord -> Int)
+  let wp2pp =       winToPlotPoint plotwin size  :: Iso' (SampCoord, SampCoord) (num, num)
+  let pp2wp = from (winToPlotPoint plotwin size) :: Iso' (num, num) (SampCoord, SampCoord)
+  let undefined_y = error "renderCartesian: winToPlotPoint evaluated unused Y value"
+  let xOnly x = fst $ (x :: SampCoord, undefined_y :: SampCoord) ^. wp2pp
+  forM_ (plot ^. plotFunctionList) $ \ cart -> do
+    let f = theCartFunction cart
+    case (sc2d *** sc2d) . view pp2wp . (id &&& f) . xOnly <$> [0 .. w] of
+      []              -> return ()
+      (x0, y0):points -> do
+        cairoSetColor $ cart ^. lineColor
+        Cairo.setLineWidth $ realToFrac $ cart ^. lineWeight
+        Cairo.moveTo x0 y0
+        forM_ points $ uncurry Cairo.lineTo
+        Cairo.stroke
   drawAxis when
+{-# SPECIALIZE renderCartesian :: PlotCartesian ProcGenFloat -> PixSize -> CairoRender () #-}
 
 resizeCart :: RealFrac num => GtkGUI (PlotCartesian num) ()
 resizeCart = renderCartesian <$> getModel <*> getWindowSize >>= onCanvas
 
+----------------------------------------------------------------------------------------------------
+
 runCartesian :: forall num . RealFrac num => GtkGUI (PlotCartesian num) ()
 runCartesian = do
   resizeEvents $ const resizeCart
-  mouseEvents MouseAll $ \ mouse@(Mouse _ press1 _mod1 _button1 pt1@(V2 x1 _y1)) -> do
+  mouseEvents MouseAll $ \ mouse1@(Mouse _ press1 _mod1 _button1 pt1@(V2 x1 _y1)) -> do
     funcList <- use plotFunctionList :: GtkGUI (PlotCartesian num) [Cartesian num]
-    cursor   <- use $ plotWindow . lastMouseLocation
-    plotWindow . lastMouseLocation .= Just mouse
     winsize@(V2 _ winH) <- getWindowSize
     let maxLineWidth = round $ maximum $ view lineWeight <$> funcList :: SampCoord
     let clearRegion (V2 x0 _y0) = unless (null funcList) $ refreshRegion
@@ -111,15 +110,16 @@ runCartesian = do
               rect2DTail .= V2 (x0 + maxLineWidth + 2) winH
           ]
     let negColor = const black -- TODO: negate color, set alpha channel to 1.0
-    let drawGuideLine plotwin = unless (null funcList) $
+    plotwin <- use plotWindow
+    let wp2pp =       winToPlotPoint plotwin winsize  :: Iso' (SampCoord, SampCoord) (num, num)
+    let pp2wp = from (winToPlotPoint plotwin winsize) :: Iso' (num, num) (SampCoord, SampCoord)
+    let (x, _y) = (pt1 ^. pointXY) ^. wp2pp :: (num, num)
+    let drawGuideLine = unless (null funcList) $
           drawLine (negColor $ plotwin ^. bgColor) 1.0 $ line2D &~ do
             let x = realToFrac x1 + 0.5
             line2DHead .= V2 x 0
             line2DTail .= V2 x (realToFrac winH)
-    let drawPoints plotwin winsize = forM funcList $ \ func -> do
-          let wp2pp = winPointToPlotPoint plotwin winsize :: Iso' (SampCoord, SampCoord) (num, num)
-          let pp2wp = from wp2pp :: Iso' (num, num) (SampCoord, SampCoord)
-          let (x, _y) = pt1 ^. pointXY . wp2pp :: (num, num)
+    let drawGuidePoints = forM funcList $ \ func -> do
           let y = theCartFunction (func :: Cartesian num) x
               -- HERE ^ is where the plot function is evaluaed
           let cairoCoord = (+ 0.5) . realToFrac :: SampCoord -> Double
@@ -127,28 +127,40 @@ runCartesian = do
           cairoRender $ do
             Cairo.setOperator Cairo.OperatorSource
             Cairo.arc xp yp (realToFrac maxLineWidth) 0 (2*pi)
-            cairoSetColorRGBA32 $ plotwin ^. bgColor
+            cairoSetColor $ plotwin ^. bgColor
             Cairo.fillPreserve
-            cairoSetColorRGBA32 $ func ^. lineColor
+            cairoSetColor $ func ^. lineColor
             Cairo.setLineWidth $ realToFrac $ func ^. lineWeight
             Cairo.stroke
-          return (x, y)
-    case cursor of
+          return (func ^. plotLabel, func ^. lineColor, y)
+    mouse0 <- use $ plotWindow . lastMouseLocation
+    lastMouseLocation .= Just mouse1
+    case mouse0 of
       Nothing -> return ()
-      Just (Mouse _ press0 _mod0 _button0 pt0) ->
+      Just (Mouse _ press0 _mod0 _button0 pt0) -> do
         if press0 && press1 -- if this is a mouse-drag
          then do
-          plotOrigin %= subtract (fmap realToFrac $ pt0 - pt1)
-          resizeCart
+          plotOrigin += (((pt0 - pt1) ^. pointXY) ^. winToPlotScale plotwin winsize) ^. from pointXY
+          (V2 x y) <- use plotOrigin
+          renderCartesian <$> get <*> pure winsize >>= onCanvas
+          onOSBuffer $ screenPrinter $ do
+            printerFontStyle . fontForeColor .= black
+            printerFontStyle . fontBold .= True
+            () <- "Axis Offset:\n"
+            printerFontStyle . fontBold .= False
+            displayString
+              (printf "x = %+.3f\ny = %+.3f\n" (realToFrac x :: Float) (realToFrac y :: Float))
          else clearRegion pt0
-    plotwin <- use plotWindow
     onOSBuffer $ do
-      drawGuideLine plotwin
-      points <- drawPoints plotwin winsize
+      drawGuideLine
       screenPrinter $ do
         textCursor . gridRow    .= 0
         textCursor . gridColumn .= 0
-        displayString $ do
-          (x, y) <- points
-          (printf "x = %+.3f\ny = %+.3f" (realToFrac x :: Float) (realToFrac y :: Float))
+        printerFontStyle . fontForeColor .= black
+        displayString (printf "x = %+.3f\n" (realToFrac x :: Float))
+      points <- drawGuidePoints
+      screenPrinter $ forM_ points $ \ (label, color, y) -> do
+        printerFontStyle . fontForeColor .= color
+        displayString (printf "%s = %+.3f\n" label (realToFrac y :: Float))
   resizeCart
+{-# SPECIALIZE runCartesian :: GtkGUI (PlotCartesian ProcGenFloat) () #-}

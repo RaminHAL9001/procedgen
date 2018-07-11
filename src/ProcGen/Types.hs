@@ -73,7 +73,7 @@ animationUnitQuanta = recip animationRate
 sampleRate :: Frequency
 sampleRate = 44100.0
 
--- | The @'nyquist :: 'Frequency'@ is exactly half of the @'sampleRate' :: 'Frequenccy'@. This value
+-- | The @'nyquist :: 'Frequency'@ is exactly half of the @'sampleRate' :: 'Frequency'@. This value
 -- is used often enough that it is convenient for it to have it's own symbol.
 nyquist :: Frequency
 nyquist = sampleRate / 2

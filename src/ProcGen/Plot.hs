@@ -8,7 +8,7 @@ import           ProcGen.Types
 
 import           Control.Lens
 
-import qualified Data.Text.Lazy as Lazy
+import qualified Data.Text       as Strict
 import           Data.Typeable
 
 import           Happlets.Lib.Gtk
@@ -17,12 +17,16 @@ import           Linear.V2
 
 ----------------------------------------------------------------------------------------------------
 
+class HasPlotLabel a where { plotLabel :: Lens' a Strict.Text }
+
+----------------------------------------------------------------------------------------------------
+
 -- | Provides a lens for changing the colour of various things.
 class HasLineStyle a where { lineStyle :: Lens' (a num) (LineStyle num); }
 
 data LineStyle num
   = LineStyle
-    { theLineColor  :: !PackedRGBA32
+    { theLineColor  :: !Color
     , theLineWeight :: !num
       -- ^ The weight specified in pixels
     }
@@ -30,7 +34,7 @@ data LineStyle num
 
 instance HasLineStyle LineStyle where { lineStyle = lens id $ flip const; }
 
-theLineColour :: LineStyle num -> PackedRGBA32
+theLineColour :: LineStyle num -> Color
 theLineColour = theLineColor
 
 makeLineStyle :: Num num => LineStyle num
@@ -39,10 +43,10 @@ makeLineStyle = LineStyle
   , theLineWeight = 2
   }
 
-lineColor :: HasLineStyle line => Lens' (line num) PackedRGBA32
+lineColor :: HasLineStyle line => Lens' (line num) Color
 lineColor = lineStyle . lens theLineColor (\ a b -> a{ theLineColor = b })
 
-lineColour :: HasLineStyle line => Lens' (line num) PackedRGBA32
+lineColour :: HasLineStyle line => Lens' (line num) Color
 lineColour = lineColor
 
 lineWeight :: HasLineStyle line => Lens' (line num) num
@@ -120,7 +124,7 @@ class HasPlotWindow a where { plotWindow :: Lens' (a num) (PlotWindow num); }
 
 data PlotWindow num
   = PlotWindow
-    { theBGColor           :: !PackedRGBA32
+    { theBGColor           :: !Color
     , theXAxis             :: !(PlotAxis num)
     , theYAxis             :: !(PlotAxis num)
     , theLastMouseLocation :: Maybe Mouse
@@ -137,7 +141,7 @@ makePlotWindow = PlotWindow
   , theLastMouseLocation = Nothing
   }
 
-bgColor :: Lens' (PlotWindow num) PackedRGBA32
+bgColor :: Lens' (PlotWindow num) Color
 bgColor = lens theBGColor $ \ a b -> a{ theBGColor = b }
 
 lastMouseLocation :: HasPlotWindow win => Lens' (win num) (Maybe Mouse)
@@ -157,7 +161,11 @@ plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . p
       yAxis . plotAxisOffset .= y
   )
 
--- | This function is used as an intermediate computational step, and so is designed to be a lazy as
+-- | Convert a window point to a plot point given the window size as a 'Happlets.SampCoord.PixSize'
+-- type, and the 'ProcGen.Plot.PlotWindow' information. Convert in the other direction (from plot
+-- points to window points) using @('Control.Lens.from' 'winToPointPlot')@.
+--
+-- This function is used as an intermediate computational step, and so is designed to be a lazy as
 -- possible. This is the reason why tuples are used as inputs and outputs, rather than taking a
 -- 'Linear.V2.V2' type or 'Happlets.Types2D.Point2D' type. But you can be sure that if you only use
 -- the 'Prelude.fst' value of the result, the 'Prelude.snd' value will not be computed, so it ends
@@ -167,10 +175,42 @@ plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . p
 -- 'Prelude.Double') performs some approximation such that when you evaluate an input to produce an
 -- output, evaluating this function in the inverse direction on the output may not produce the same
 -- input value you started, at least not for the most extreme values.
-winPointToPlotPoint
+winToPlotPoint
   :: RealFrac num
   => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
-winPointToPlotPoint plotwin (V2 winW winH) =
+winToPlotPoint plotwin winsize = winToPlotScale plotwin winsize . winToPlotOffset plotwin
+
+-- | Convert from a 'Happlets.Draw.SampCoord.SampCoord' in the X-axis to a plot local coordinate in
+-- the X axis.
+fromWinToPlotX :: RealFrac num => PlotWindow num -> PixSize -> SampCoord -> num
+fromWinToPlotX plotwin winsize coord =
+  fst $ (coord, error "fromWinToPlotX tried to use Y") ^. winToPlotPoint plotwin winsize
+
+-- | Convert from a 'Happlets.Draw.SampCoord.SampCoord' in the Y-axis to a plot local coordinate in
+-- the Y-axis.
+fromWinToPlotY :: RealFrac num => PlotWindow num -> PixSize -> SampCoord -> num
+fromWinToPlotY plotwin winsize coord =
+  snd $ (error "fromWinToPlotY tried to use X", coord) ^. winToPlotPoint plotwin winsize
+
+-- | Convert from a plot local coordinate in the X-axis to a 'Happlets.Draw.SampCoord.SampCoord'
+-- coordinate in the X-axis.
+fromPlotToWinX :: RealFrac num => PlotWindow num -> PixSize -> num -> SampCoord
+fromPlotToWinX plotwin winsize coord =
+  fst $ (coord, error "fromPlotToWinX tried to use Y") ^. from (winToPlotPoint plotwin winsize)
+
+-- | Convert from a plot local coordinate in the Y-axis to a 'Happlets.Draw.SampCoord.SampCoord'
+-- coordinate in the Y-axis.
+fromPlotToWinY :: RealFrac num => PlotWindow num -> PixSize -> num -> SampCoord
+fromPlotToWinY plotwin winsize coord =
+  snd $ (error "fromPlotToWinY tried to use X", coord) ^. from (winToPlotPoint plotwin winsize)
+
+-- | Similar to 'winPointToPlotPoint' but only scales the point, it does not offset the point. This
+-- is useful when converting changes in position given in window coordinates to changes in position
+-- given in plot coordinates. 
+winToPlotScale
+  :: RealFrac num
+  => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
+winToPlotScale plotwin (V2 winW winH) =
   let xaxis = plotwin ^. xAxis
       yaxis = plotwin ^. yAxis
       (xlo, xhi) = (xaxis ^. plotAxisMin, xaxis ^. plotAxisMax)
@@ -179,8 +219,22 @@ winPointToPlotPoint plotwin (V2 winW winH) =
       ywin = yhi - ylo
       xscale = xwin / realToFrac winW
       yscale = ywin / realToFrac winH
-  in  iso (\ (x, y) -> (realToFrac x * xscale + xlo, realToFrac (winH - y) * yscale + ylo))
-          (\ (x, y) -> (round $ (x - xlo) / xscale, round ((y - ylo) / yscale)))
+  in  iso (\ (x, y) -> (realToFrac x * xscale, negate $ realToFrac y * yscale))
+          (\ (x, y) -> (round    $ x / xscale, negate $ round    $ y / yscale))
+
+-- | Offset the value of the result of a 'winToPlotScale' conversion by the 'plotOrigin'.
+winToPlotOffset :: RealFrac num => PlotWindow num -> Iso' (num, num) (num, num)
+winToPlotOffset plotwin = let (dx, dy) = plotwin ^. plotOrigin . pointXY in
+  iso (\ (x, y) -> (x + dx - 1, y + dy + 1)) (\ (x, y) -> (x - dx + 1, y - dy - 1))
+  -- NOTE: adding or subtracting 1 from the offsets accounts for the width of the window after
+  -- scaling.
+
+-- | Create a 'Happlets.Types2D.Rect2D' that demarks the boundary (in plot units) of the view screen
+-- window.
+winToPlotRect :: RealFrac num => PlotWindow num -> PixSize -> Rect2D num
+winToPlotRect plotwin size@(V2 w h) = rect2D &~ do
+  rect2DHead .= (0, 0) ^. winToPlotPoint plotwin size . from pointXY
+  rect2DTail .= (w, h) ^. winToPlotPoint plotwin size . from pointXY
 
 ----------------------------------------------------------------------------------------------------
 
@@ -190,7 +244,8 @@ class HasPlotFunction plot func | plot -> func where
 
 data Cartesian num
   = Cartesian
-    { theCartStyle    :: !(LineStyle num)
+    { theCartLabel    :: !Strict.Text
+    , theCartStyle    :: !(LineStyle num)
     , theCartFunction :: num -> num
     }
 
@@ -198,10 +253,11 @@ data PlotCartesian num
   = PlotCartesian
     { theCartWindow       :: !(PlotWindow num)
     , theCartFunctionList :: [Cartesian num]
-    , theCartCursor       :: Maybe Mouse
-    , theCartLog          :: Lazy.Text
     }
   deriving Typeable
+
+instance HasPlotLabel (Cartesian num) where
+  plotLabel = lens theCartLabel $ \ a b -> a{ theCartLabel = b }
 
 instance HasLineStyle Cartesian where
   lineStyle = lens theCartStyle $ \ a b -> a{ theCartStyle = b }
@@ -214,7 +270,8 @@ instance HasPlotFunction PlotCartesian Cartesian where
 
 makeCartesian :: Num num => Cartesian num
 makeCartesian = Cartesian
-  { theCartStyle    = makeLineStyle{ theLineColor = packRGBA32 0x00 0x00 0xFF 0xFF }
+  { theCartLabel    = ""
+  , theCartStyle    = makeLineStyle{ theLineColor = packRGBA32 0x00 0x00 0xFF 0xFF }
   , theCartFunction = const 0
   }
 
@@ -225,18 +282,14 @@ plotCartesian :: Num num => PlotCartesian num
 plotCartesian = PlotCartesian
   { theCartWindow       = makePlotWindow
   , theCartFunctionList = []
-  , theCartCursor       = Nothing
-  , theCartLog          = ""
   }
-
-cartLog :: Lens' (PlotCartesian num) Lazy.Text
-cartLog = lens theCartLog $ \ a b -> a{ theCartLog = b }
 
 ----------------------------------------------------------------------------------------------------
 
 data Parametric num
   = Parametric
-    { theParamStyle  :: !(LineStyle num)
+    { theParamLabel  :: !Strict.Text
+    , theParamStyle  :: !(LineStyle num)
     , theParamTStart :: !num
     , theParamTEnd   :: !num
     , theParamX      :: num -> num
@@ -259,6 +312,9 @@ data PlotParametric num
     }
   deriving Typeable
 
+instance HasPlotLabel (Parametric num) where
+  plotLabel = lens theParamLabel $ \ a b -> a{ theParamLabel = b }
+
 instance HasLineStyle Parametric where
   lineStyle = lens theParamStyle $ \ a b -> a{ theParamStyle = b }
 
@@ -272,7 +328,8 @@ instance HasPlotFunction PlotParametric Parametric where
 -- using record syntax.
 parametric :: Num num => Parametric num
 parametric = Parametric
-  { theParamStyle  = makeLineStyle{ theLineColor = packRGBA32 0xFF 0x00 0x00 0xFF }
+  { theParamLabel  = ""
+  , theParamStyle  = makeLineStyle{ theLineColor = packRGBA32 0xFF 0x00 0x00 0xFF }
   , theParamTStart = 0
   , theParamTEnd   = 1
   , theParamTStep  = const 1
@@ -308,8 +365,14 @@ example :: PlotCartesian ProcGenFloat
 example = plotCartesian &~ do
   plotFunctionList .=
     [ makeCartesian &~ do
-        cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
-        lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
+        cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 }
+        plotLabel    .= "sigmoid"
+        lineColor    .= blue
+        lineWeight   .= 3.0
+    , makeCartesian &~ do
+        cartFunction .= sineSquared TimeWindow{ timeStart = (-1), timeEnd = 1 }
+        plotLabel    .= "sineSquared"
+        lineColor    .= red
         lineWeight   .= 3.0
     ]
   let axis = makePlotAxis &~ do
