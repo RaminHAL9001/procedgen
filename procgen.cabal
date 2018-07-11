@@ -59,6 +59,7 @@ Library {
     ProcGen.GHCI
     ProcGen.Plot
     ProcGen.PlotGUI
+    ProcGen.ReaderLogic
     ProcGen.Types
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
@@ -89,6 +90,7 @@ Library {
     FlexibleContexts
     FlexibleInstances
     FunctionalDependencies
+    GADTs
     GeneralizedNewtypeDeriving
     ImplicitParams
     LambdaCase
@@ -118,6 +120,7 @@ Test-suite procgen-live {
     ProcGen.GHCI
     ProcGen.Plot
     ProcGen.PlotGUI
+    ProcGen.ReaderLogic
     ProcGen.Types
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
@@ -148,6 +151,7 @@ Test-suite procgen-live {
     FlexibleContexts
     FlexibleInstances
     FunctionalDependencies
+    GADTs
     GeneralizedNewtypeDeriving
     ImplicitParams
     LambdaCase

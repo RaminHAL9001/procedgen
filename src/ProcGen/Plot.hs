@@ -17,7 +17,7 @@ import           Linear.V2
 
 ----------------------------------------------------------------------------------------------------
 
-class HasPlotLabel a where { plotLabel :: Lens' a Strict.Text }
+class HasPlotLabel func where { plotLabel :: Lens' (func num) Strict.Text }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -242,6 +242,8 @@ winToPlotRect plotwin size@(V2 w h) = rect2D &~ do
 class HasPlotFunction plot func | plot -> func where
   plotFunctionList :: Lens' (plot num) [func num]
 
+class HasDefaultPlot func where { defaultPlot :: Num num => func num; }
+
 data Cartesian num
   = Cartesian
     { theCartLabel    :: !Strict.Text
@@ -256,7 +258,7 @@ data PlotCartesian num
     }
   deriving Typeable
 
-instance HasPlotLabel (Cartesian num) where
+instance HasPlotLabel Cartesian where
   plotLabel = lens theCartLabel $ \ a b -> a{ theCartLabel = b }
 
 instance HasLineStyle Cartesian where
@@ -267,6 +269,8 @@ instance HasPlotWindow PlotCartesian where
 
 instance HasPlotFunction PlotCartesian Cartesian where
   plotFunctionList = lens theCartFunctionList $ \ a b -> a{ theCartFunctionList = b }
+
+instance HasDefaultPlot Cartesian where { defaultPlot = makeCartesian; }
 
 makeCartesian :: Num num => Cartesian num
 makeCartesian = Cartesian
@@ -312,7 +316,7 @@ data PlotParametric num
     }
   deriving Typeable
 
-instance HasPlotLabel (Parametric num) where
+instance HasPlotLabel Parametric where
   plotLabel = lens theParamLabel $ \ a b -> a{ theParamLabel = b }
 
 instance HasLineStyle Parametric where
@@ -323,6 +327,8 @@ instance HasPlotWindow PlotParametric where
 
 instance HasPlotFunction PlotParametric Parametric where
   plotFunctionList = lens theParamFunctionList $ \ a b -> a{ theParamFunctionList = b }
+
+instance HasDefaultPlot Parametric where { defaultPlot = parametric; }
 
 -- | A default 'Parametric' plotting function. You can set the parameters with various lenses, or
 -- using record syntax.
