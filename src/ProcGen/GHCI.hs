@@ -12,7 +12,8 @@ module ProcGen.GHCI
     newPlotWin, newParamWin, param,
     -- * Plot Lists
     -- $PlotLists
-    modifyPlots, copyPlots, getPlots, deletePlots, partPlots, rakeUp, rakeDown,
+    modifyLayers, copyLayers, getLayers, deleteLayers, partLayers, rakeUp, rakeDown,
+    addLayer, onLayer, onLayerGroup, onTopLayer,
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
     -- * Working with persistent values in the GHCI process.
@@ -171,27 +172,27 @@ newPlotWin makeWin = makeHapplet $ makeWin &~ do
 -- over the @model@, evaluate these functions using 'cart' or 'param' to bind the @model@ type.
 
 -- | Copy the plot list of the current plot window, filter and return the copy.
-copyPlots
+copyLayers
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => ([func num] -> [func num]) -- ^ A function to filter the @plot@s to be returned.
   -> GtkGUI model [func num]
-copyPlots filter = modifyPlots [] $ state . const . (id &&& filter)
+copyLayers filter = modifyLayers [] $ state . const . (id &&& filter)
 
 -- | Copy and return plot functions that match the given predicate.
-getPlots
+getLayers
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => PredicateOn (func num)
   -> GtkGUI model [func num]
-getPlots = copyPlots . filter . runReader
+getLayers = copyLayers . filter . runReader
 
-partPlots
+partLayers
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => (([func num], [func num]) -> ([func num], [func num]))
      -- ^ A function to re-order the functions filtered by the partitioning predicate.
   -> PredicateOn (func num)
   -> GtkGUI model [func num]
-partPlots reorder select =
-  modifyPlots [] $ state . const . reorder . partition (runReader select)
+partLayers reorder select =
+  modifyLayers [] $ state . const . reorder . partition (runReader select)
 
 -- | Select all plots that match the given predicate and move them to the "top" of the drawing
 -- order. "Top" means drawn on top of all others so it obscures plots drawn below it.
@@ -199,7 +200,7 @@ rakeUp
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => PredicateOn (func num)
   -> GtkGUI model [func num]
-rakeUp = partPlots (\ (yes, no) -> (yes ++ no, yes))
+rakeUp = partLayers (\ (yes, no) -> (yes ++ no, yes))
 
 -- | Select all plots that match the given predicate and move them to the "bottom" of the drawing
 -- order. "Bottom" means drawn below all others so it is obscured by every plot drawn above it.
@@ -207,59 +208,61 @@ rakeDown
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => PredicateOn (func num)
   -> GtkGUI model [func num]
-rakeDown = partPlots (\ (yes, no) -> (no ++ yes, yes))
+rakeDown = partLayers (\ (yes, no) -> (no ++ yes, yes))
 
----- | Insert a plot function at the top of the stack, use the state lens update functions to define the plot.
---addPlot
---  :: (HasPlotWindow plot, HasPlotFunction plot func, HasDefaultPlot func, Typeable model, model ~ plot num)
---  => State (func num) ()
---  -> GtkGUI model ()
---addPlot select = modifyPlots () $ return . ((runState select defaultPlot) :)
+-- | Insert a plot function at the top of the stack, use the state lens update functions to define the plot.
+addLayer
+  :: (HasPlotWindow plot, HasPlotFunction plot func, HasDefaultPlot func,
+      Typeable model, Num num, model ~ plot num)
+  => State (func num) ()
+  -> GtkGUI model ()
+addLayer select = modifyLayers () $ return . ((execState select defaultPlot) :)
 
----- | Evaluate an updating function on all plots matching a given predicate. Returns a copy of the
----- updated plots.
---onPlot
---  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
---  => PredicateOn (func num)
---  -> State (func num) ()
---  -> GtkGUI model [plot num]
---onPlot select f = modifyPlots [] $ state . const .
---  (fmap (\ layer -> if runReader select layer then runState f layer else layer) &&&
---   filter (runReader select)
---  )
+-- | Evaluate an updating function on all plots matching a given predicate. Returns a copy of the
+-- updated plots.
+onLayer
+  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
+  => PredicateOn (func num)
+  -> State (func num) ()
+  -> GtkGUI model [func num]
+onLayer select f = modifyLayers [] $ state . const .
+  (fmap (\ layer -> if runReader select layer then execState f layer else layer) &&&
+   filter (runReader select)
+  )
 
---onSection
---  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
---  => ([plot num] -> ([plot num], [plot num] -> [plot num]))
---     -- ^ A function that selections a section of elements from a list, then returns the selection
---     -- along with a function on how to re-constitute the selection with the list from which it was
---     -- pulled.
---  -> State (func num) ()
---  -> GtkGUI model [plot num]
---onSection select f = modifyPlots [] $ state . const .
---  (\ (old, regroup) -> let new = runState f <$> old in (regroup new, new)) . select
+onLayerGroup
+  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
+  => ([func num] -> ([func num], [func num] -> [func num]))
+     -- ^ A function that takes a section of elements from a list, then returns the selection along
+     -- with a function on how to re-constitute the selection with the list from which it was
+     -- pulled.
+  -> State (func num) ()
+  -> GtkGUI model [func num]
+onLayerGroup select f = modifyLayers [] $ state . const .
+  (\ (old, regroup) -> let new = execState f <$> old in (regroup new, new)) . select
 
---onTopPlot
---  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
---  => State (func num) ()
---  -> GtkGUI model [plot num]
---onTopPlot = onSection $ splitAt 1 >>> \ (lo, hi) -> (lo, (++ hi))
+-- | Operate on the top-most plot.
+onTopLayer
+  :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
+  => State (func num) ()
+  -> GtkGUI model [func num]
+onTopLayer = onLayerGroup $ splitAt 1 >>> \ (lo, hi) -> (lo, (++ hi))
 
 -- | Remove plots that match the filter. Returns the deleted plots.
-deletePlots
+deleteLayers
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => PredicateOn (func num)
   -> GtkGUI model [func num]
-deletePlots select = modifyPlots [] $ state . const . partition (not . runReader select)
+deleteLayers select = modifyLayers [] $ state . const . partition (not . runReader select)
 
 -- | Operate on the plot list of the current plot window, with a fold value of type @st@.
-modifyPlots
+modifyLayers
   :: (HasPlotWindow plot, HasPlotFunction plot func, Typeable model, model ~ plot num)
   => st
   -> ([func num] -> State st [func num])
       -- ^ A function to fold over the @plot@s, return @plot@s to replace it with.
   -> GtkGUI model st
-modifyPlots st f = do
+modifyLayers st f = do
   list <- use plotFunctionList
   (list, st) <- pure $ runState (f list) st
   plotFunctionList .= list
