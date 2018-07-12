@@ -1,5 +1,6 @@
 #!/bin/bash
 exec ghci \
+    -ghci-script .ghci \
     -XDeriveDataTypeable \
     -XDeriveFunctor \
     -XExistentialQuantification \

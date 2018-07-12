@@ -58,9 +58,11 @@ Library {
     ProcGen.Arbitrary
     ProcGen.GHCI
     ProcGen.Plot
-    ProcGen.PlotGUI
+    ProcGen.Plot.GUI
+    ProcGen.Plot.Examples
     ProcGen.ReaderLogic
     ProcGen.Types
+    ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
     ProcGen.Music.Synth
@@ -119,7 +121,8 @@ Test-suite procgen-live {
     ProcGen.Arbitrary
     ProcGen.GHCI
     ProcGen.Plot
-    ProcGen.PlotGUI
+    ProcGen.Plot.GUI
+    ProcGen.Plot.Examples
     ProcGen.ReaderLogic
     ProcGen.Types
     ProcGen.Music.KeyFreq88

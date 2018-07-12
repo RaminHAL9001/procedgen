@@ -1,6 +1,14 @@
 -- | A module providing handy infix operators for constructing query functions in the Reader monad,
 -- especially using lenses.
-module ProcGen.ReaderLogic where
+module ProcGen.ReaderLogic
+  ( -- * Predicates
+    PredicateOn, QueryLens(..),
+    (?==), (?==?), (?/=), (?/=?), (?->), (?->>), (.&&.), (.||.),
+    -- * Sections
+    Section,
+    top, top1, partBy,
+    module Control.Monad.Reader
+  ) where
 
 import           Control.Lens
 import           Control.Monad.Reader

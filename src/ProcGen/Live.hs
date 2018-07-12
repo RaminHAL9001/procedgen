@@ -3,6 +3,7 @@
 module ProcGen.Live where
 
 import           ProcGen
+import           ProcGen.Plot.Examples
 
 main :: IO ()
 main = do
@@ -17,7 +18,7 @@ main = do
     animationFrameRate     .= 60
     backgroundTransparency .= Just 0.9
     win <- newWindow
-    cp1 <- newHapplet example
+    cp1 <- newHapplet activation
     attachWindow True win cp1 $ const $ runCartesian
   --msgs <- onHapplet cp1 $ \ cp1 -> return (cp1 ^. cartLog, cp1 & cartLog .~ "")
   --Lazy.putStr (fst msgs)

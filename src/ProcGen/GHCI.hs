@@ -17,22 +17,15 @@ module ProcGen.GHCI
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
     -- * Working with persistent values in the GHCI process.
-    module ProcGen.PlotGUI,
-    module ProcGen.ReaderLogic,
+    module ProcGen,
     module Happlets.Lib.Gtk,
   )
   where
 
-import           ProcGen.Music.Synth
-import           ProcGen.PlotGUI
-import           ProcGen.ReaderLogic
-import           ProcGen.Types
+import           ProcGen
 
 import           Control.Arrow
 import           Control.Concurrent
-import           Control.Lens
-import           Control.Monad.Reader
-import           Control.Monad.State
 
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
