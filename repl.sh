@@ -1,5 +1,6 @@
 #!/bin/bash
 exec ghci \
+     -package-db ./dist/package.conf.inplace \
     -ghci-script .ghci \
     -XDeriveDataTypeable \
     -XDeriveFunctor \
