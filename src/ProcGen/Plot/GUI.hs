@@ -79,7 +79,7 @@ renderCartesian plot size@(V2 w _h) = cairoRender $ do
   let pp2wp = from (winToPlotPoint plotwin size) :: Iso' (num, num) (SampCoord, SampCoord)
   let undefined_y = error "renderCartesian: winToPlotPoint evaluated unused Y value"
   let xOnly x = fst $ (x :: SampCoord, undefined_y :: SampCoord) ^. wp2pp
-  forM_ (plot ^. plotFunctionList) $ \ cart -> do
+  forM_ (reverse $ plot ^. plotFunctionList) $ \ cart -> do
     let f = theCartFunction cart
     case (sc2d *** sc2d) . view pp2wp . (id &&& f) . xOnly <$> [0 .. w] of
       []              -> return ()
@@ -113,13 +113,13 @@ runCartesian = do
     plotwin <- use plotWindow
     let wp2pp =       winToPlotPoint plotwin winsize  :: Iso' (SampCoord, SampCoord) (num, num)
     let pp2wp = from (winToPlotPoint plotwin winsize) :: Iso' (num, num) (SampCoord, SampCoord)
-    let (x, _y) = (pt1 ^. pointXY) ^. wp2pp :: (num, num)
+    let (x, y) = (pt1 ^. pointXY) ^. wp2pp :: (num, num)
     let drawGuideLine = unless (null funcList) $
           drawLine (negColor $ plotwin ^. bgColor) 1.0 $ line2D &~ do
             let x = realToFrac x1 + 0.5
             line2DHead .= V2 x 0
             line2DTail .= V2 x (realToFrac winH)
-    let drawGuidePoints = forM funcList $ \ func -> do
+    let drawGuidePoints = forM (reverse funcList) $ \ func -> do
           let y = theCartFunction (func :: Cartesian num) x
               -- HERE ^ is where the plot function is evaluaed
           let cairoCoord = (+ 0.5) . realToFrac :: SampCoord -> Double
@@ -140,8 +140,8 @@ runCartesian = do
       Just (Mouse _ press0 _mod0 _button0 pt0) -> do
         if press0 && press1 -- if this is a mouse-drag
          then do
-          plotOrigin += (((pt0 - pt1) ^. pointXY) ^. winToPlotScale plotwin winsize) ^. from pointXY
-          (V2 x y) <- use plotOrigin
+          plotWinOrigin += (((pt0 - pt1) ^. pointXY) ^. winToPlotScale plotwin winsize) ^. from pointXY
+          (V2 x y) <- use plotWinOrigin
           renderCartesian <$> get <*> pure winsize >>= onCanvas
           onOSBuffer $ screenPrinter $ do
             printerFontStyle . fontForeColor .= black
@@ -149,7 +149,7 @@ runCartesian = do
             () <- "Axis Offset:\n"
             printerFontStyle . fontBold .= False
             displayString
-              (printf "x = %+.3f\ny = %+.3f\n" (realToFrac x :: Float) (realToFrac y :: Float))
+              (printf "x = %+.4f\ny = %+.4f\n" (realToFrac x :: Float) (realToFrac y :: Float))
          else clearRegion pt0
     onOSBuffer $ do
       drawGuideLine
@@ -157,10 +157,12 @@ runCartesian = do
         textCursor . gridRow    .= 0
         textCursor . gridColumn .= 0
         printerFontStyle . fontForeColor .= black
-        displayString (printf "x = %+.3f\n" (realToFrac x :: Float))
+        displayString
+          (printf "mouse: x = %+.4f, y = %+.4f\n"
+            (realToFrac x :: Float) (realToFrac y :: Float))
       points <- drawGuidePoints
       screenPrinter $ forM_ points $ \ (label, color, y) -> do
         printerFontStyle . fontForeColor .= color
-        displayString (printf "%s = %+.3f\n" label (realToFrac y :: Float))
+        displayString (printf "%s = %+.4f\n" label (realToFrac y :: Float))
   resizeCart
 {-# SPECIALIZE runCartesian :: GtkGUI (PlotCartesian ProcGenFloat) () #-}

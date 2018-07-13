@@ -4,8 +4,6 @@
 -- the associated GUI functions.
 module ProcGen.Plot where
 
-import           ProcGen.Types
-
 import           Control.Lens
 
 import qualified Data.Text       as Strict
@@ -78,24 +76,24 @@ gridLinesSpacing = lens theGridLinesSpacing $ \ a b -> a{ theGridLinesSpacing = 
 
 data PlotAxis num
   = PlotAxis
-    { thePlotAxisOffset :: !num
-    , thePlotAxisMin    :: !num
-    , thePlotAxisMax    :: !num
-    , thePlotAxisMajor  :: !(GridLines num)
-    , thePlotAxisMinor  :: !(Maybe (GridLines num))
-    , thePlotAxisAbove  :: !Bool
+    { thePlotAxisMin        :: !num
+    , thePlotAxisMax        :: !num
+    , thePlotAxisMajor      :: !(GridLines num)
+    , thePlotAxisMinor      :: !(Maybe (GridLines num))
+    , thePlotAxisDrawOrigin :: !(Maybe (LineStyle num))
+    , thePlotAxisAbove      :: !Bool
       -- ^ True if the grid lines should be drawn on top of the function plot lines.
     }
   deriving (Eq, Show, Read)
 
 makePlotAxis :: Num num => PlotAxis num
 makePlotAxis = PlotAxis
-  { thePlotAxisOffset = 0
-  , thePlotAxisMin    = (-5)
-  , thePlotAxisMax    = 5
-  , thePlotAxisMajor  = makeGridLines
-  , thePlotAxisMinor  = Nothing
-  , thePlotAxisAbove  = False
+  { thePlotAxisMin        = (-5)
+  , thePlotAxisMax        = (5)
+  , thePlotAxisMajor      = makeGridLines
+  , thePlotAxisMinor      = Nothing
+  , thePlotAxisDrawOrigin = Nothing
+  , thePlotAxisAbove      = False
   }
 
 plotAxisMajor :: Lens' (PlotAxis num) (GridLines num)
@@ -107,14 +105,25 @@ plotAxisMinor = lens thePlotAxisMinor $ \ a b -> a{ thePlotAxisMinor = b }
 plotAxisAbove :: Lens' (PlotAxis num) Bool
 plotAxisAbove = lens thePlotAxisAbove $ \ a b -> a{ thePlotAxisAbove = b }
 
-plotAxisOffset :: Lens' (PlotAxis num) num
-plotAxisOffset = lens thePlotAxisOffset $ \ a b -> a{ thePlotAxisOffset = b }
+plotAxisDrawOrigin :: Lens' (PlotAxis num) (Maybe (LineStyle num))
+plotAxisDrawOrigin = lens thePlotAxisDrawOrigin $ \ a b -> a{ thePlotAxisDrawOrigin = b }
+
+plotAxisOffset :: Fractional num => Lens' (PlotAxis num) num
+plotAxisOffset = lens (\ a -> (a ^. plotAxisMax + a ^. plotAxisMin) / 2)
+  (\ a b ->
+     let halfWidth = (a ^. plotAxisMax - a ^. plotAxisMin) / 2 
+     in  a & plotAxisMax .~ (b + halfWidth) & plotAxisMin .~ (b - halfWidth)
+  )
 
 plotAxisMin :: Lens' (PlotAxis num) num
 plotAxisMin = lens thePlotAxisMin $ \ a b -> a{ thePlotAxisMin = b }
 
 plotAxisMax :: Lens' (PlotAxis num) num
 plotAxisMax = lens thePlotAxisMax $ \ a b -> a{ thePlotAxisMax = b }
+
+plotAxisBounds :: Lens' (PlotAxis num) (num, num)
+plotAxisBounds = lens (\ a -> (a ^. plotAxisMin, a ^. plotAxisMax))
+  (\ a (min, max) -> a & plotAxisMin .~ min & plotAxisMax .~ max)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -154,9 +163,26 @@ xAxis = plotWindow . lens theXAxis (\ a b -> a{ theXAxis = b })
 yAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
 yAxis = plotWindow . lens theYAxis (\ a b -> a{ theYAxis = b })
 
-plotOrigin :: HasPlotWindow win => Lens' (win num) (V2 num)
-plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . plotAxisOffset))
-  (\ win (V2 x y) -> win &~ do
+-- | Return the amount of distance (in plot coordinates) along the number line that the window
+-- spans.
+plotWinSpan :: Fractional num => Lens' (PlotWindow num) (V2 num)
+plotWinSpan = lens
+  (\ plotwin -> let (axX, axY) = (plotwin ^. xAxis, plotwin ^. yAxis) in
+      V2 (axX ^. plotAxisMax - axX ^. plotAxisMin) (axY ^. plotAxisMax - axY ^. plotAxisMin)
+  )
+  (\ plotwin (V2 w0 h0) ->
+     let (V2 x y) = plotwin ^. plotWinOrigin
+         (w , h ) = (w0 / 2.0, h0 / 2.0)
+     in  plotwin &~ do
+           xAxis . plotAxisBounds .= (x - w, x + w)
+           yAxis . plotAxisBounds .= (y - h, y + h)
+  )
+
+-- | Return or set the origin point of the plot window.
+plotWinOrigin :: (HasPlotWindow win, Fractional num) => Lens' (win num) (V2 num)
+plotWinOrigin = lens
+  (\ plotwin -> V2 (plotwin ^. xAxis . plotAxisOffset) (plotwin ^. yAxis . plotAxisOffset))
+  (\ plotwin (V2 x y) -> plotwin &~ do
       xAxis . plotAxisOffset .= x
       yAxis . plotAxisOffset .= y
   )
@@ -178,7 +204,7 @@ plotOrigin = lens (\ win -> V2 (win ^. xAxis . plotAxisOffset) (win ^. yAxis . p
 winToPlotPoint
   :: RealFrac num
   => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
-winToPlotPoint plotwin winsize = winToPlotScale plotwin winsize . winToPlotOffset plotwin
+winToPlotPoint plotwin winsize = winToPlotScale plotwin winsize . winToPlotOffset plotwin winsize
 
 -- | Convert from a 'Happlets.Draw.SampCoord.SampCoord' in the X-axis to a plot local coordinate in
 -- the X axis.
@@ -211,23 +237,21 @@ winToPlotScale
   :: RealFrac num
   => PlotWindow num -> PixSize -> Iso' (SampCoord, SampCoord) (num, num)
 winToPlotScale plotwin (V2 winW winH) =
-  let xaxis = plotwin ^. xAxis
-      yaxis = plotwin ^. yAxis
-      (xlo, xhi) = (xaxis ^. plotAxisMin, xaxis ^. plotAxisMax)
-      (ylo, yhi) = (yaxis ^. plotAxisMin, yaxis ^. plotAxisMax)
-      xwin = xhi - xlo
-      ywin = yhi - ylo
-      xscale = xwin / realToFrac winW
-      yscale = ywin / realToFrac winH
+  let (V2 xwin ywin) = plotwin ^. plotWinSpan
+      (xscale, yscale) = (xwin / realToFrac winW, ywin / realToFrac winH)
   in  iso (\ (x, y) -> (realToFrac x * xscale, negate $ realToFrac y * yscale))
           (\ (x, y) -> (round    $ x / xscale, negate $ round    $ y / yscale))
 
 -- | Offset the value of the result of a 'winToPlotScale' conversion by the 'plotOrigin'.
-winToPlotOffset :: RealFrac num => PlotWindow num -> Iso' (num, num) (num, num)
-winToPlotOffset plotwin = let (dx, dy) = plotwin ^. plotOrigin . pointXY in
-  iso (\ (x, y) -> (x + dx - 1, y + dy + 1)) (\ (x, y) -> (x - dx + 1, y - dy - 1))
-  -- NOTE: adding or subtracting 1 from the offsets accounts for the width of the window after
-  -- scaling.
+winToPlotOffset :: RealFrac num => PlotWindow num -> PixSize -> Iso' (num, num) (num, num)
+winToPlotOffset plotwin winsize@(V2 w0 h0) =
+  let (dx, dy) = plotwin ^. plotWinOrigin . pointXY
+      (w1, h1) = (w0, h0) ^. winToPlotScale plotwin winsize
+      (w , h ) = (w1 / 2.0, h1 / 2.0)
+  in  iso (\ (x, y) -> (x + dx - w, y + dy - h))
+          (\ (x, y) -> (x - dx + w, y - dy + h))
+   -- x  (-) (-) -5.00->-0.00 || (+) (+) +5.00->+10.00
+   -- y  (+) (+) +3.75->+1.25 || (-) (-) -1.25->-3.75
 
 -- | Create a 'Happlets.Types2D.Rect2D' that demarks the boundary (in plot units) of the view screen
 -- window.
