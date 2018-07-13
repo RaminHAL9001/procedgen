@@ -208,6 +208,13 @@ sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
   let { tw = t1 - t0; t = slope win t'; } in
   if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
 
+-- | An function which produces a single cycle of a sinusoidal pulse of the given frequency.
+sinePulse :: Frequency -> Moment -> Sample
+sinePulse freq t = let scaleT = 2*pi*freq in
+  if 0.0 < t && t <= freq then sin $ scaleT * t else 0.0
+
+----------------------------------------------------------------------------------------------------
+
 -- | Construct a permutation of a list. Pass an 'Prelude.Integer' permutation value and an
 -- 'Prelude.Int' list length. The 'Prelude.Integer' permutation is found by multiplying the indicies
 -- used to pull each element from the given list. For example, to create the permutation
