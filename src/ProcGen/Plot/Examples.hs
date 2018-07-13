@@ -15,13 +15,13 @@ import           Happlets.Draw.Color
 -- 1.0.
 smallPlotAxis :: PlotAxis ProcGenFloat
 smallPlotAxis = makePlotAxis &~
-  (do plotAxisBounds    .= (-2.5, 2.5)
-      plotAxisMajor  .=
+  (do plotAxisBounds     .= (-2.5, 2.5)
+      plotAxisMajor      .=
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.5)
             lineWeight       .= (1.0)
             lineColor        .= packRGBA32 0x7F 0x7F 0x7F 0xBF )
-      plotAxisMinor  .= Just
+      plotAxisMinor      .= Just
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.125)
             lineWeight       .= (1.0)

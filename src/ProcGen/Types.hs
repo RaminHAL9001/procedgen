@@ -208,10 +208,23 @@ sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
   let { tw = t1 - t0; t = slope win t'; } in
   if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
 
--- | An function which produces a single cycle of a sinusoidal pulse of the given frequency.
-sinePulse :: Frequency -> Moment -> Sample
-sinePulse freq t = let scaleT = 2*pi*freq in
-  if 0.0 < t && t <= freq then sin $ scaleT * t else 0.0
+-- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
+-- time offset moment. The pulse is a sineusoid enveloped by a gaussian, which is produces a
+-- slightly distorted sinusoud with a duration of a single cycle.
+sinePulse :: Frequency -> Moment -> Moment -> Sample
+sinePulse freq t0 t = gaussian 1.0 t * sin (2 * pi * freq * t + t0)
+
+-- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
+-- requires O(n) time to compute where @n@ is the length of the number of components. However for
+-- simpler functions with a few components, this function is useful.
+sinePulseSum :: [(Frequency, Moment)] -> Moment -> Sample
+sinePulseSum comps t = case comps of
+  [] -> 0
+  (freq, t0):comps -> sinePulse freq t0 t + sinePulseSum comps t
+
+-- | A gaussian normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of about 2.0.
+gaussian :: TimeScale -> Moment -> Sample
+gaussian var x = exp $ negate $ x * x * 4 / var
 
 ----------------------------------------------------------------------------------------------------
 
