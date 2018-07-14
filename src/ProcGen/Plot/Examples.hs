@@ -15,18 +15,18 @@ import           Happlets.Draw.Color
 -- 1.0.
 smallPlotAxis :: PlotAxis ProcGenFloat
 smallPlotAxis = makePlotAxis &~
-  (do plotAxisBounds     .= (-2.5, 2.5)
-      plotAxisMajor      .=
+  (do axisBounds     .= (-2.5, 2.5)
+      axisMajor      .=
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.5)
             lineWeight       .= (1.0)
             lineColor        .= packRGBA32 0x7F 0x7F 0x7F 0xBF )
-      plotAxisMinor      .= Just
+      axisMinor      .= Just
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.125)
             lineWeight       .= (1.0)
             lineColor        .= packRGBA32 0xBF 0xBF 0xBF 0xBF )
-      plotAxisDrawOrigin .= Just
+      axisDrawOrigin .= Just
         ( makeLineStyle &~ do
             lineWeight .= (2.0)
             lineColor  .= packRGBA32 0x00 0x00 0x00 0xBF ))
@@ -37,11 +37,11 @@ smallCart :: PlotCartesian ProcGenFloat
 smallCart = plotCartesian &~ do
   plotWindow .=
     ( makePlotWindow &~ do
-        xAxis   .= smallPlotAxis
-        yAxis   .=
+        xDimension .= smallPlotAxis
+        yDimension .=
           ( smallPlotAxis &~ do
-               plotAxisBounds .= (-1.5, 1.5) )
-        bgColor .= packRGBA32 0xFF 0xFF 0xFF 0xBF )
+               axisBounds .= (-1.5, 1.5) )
+        bgColor    .= packRGBA32 0xFF 0xFF 0xFF 0xBF )
   plotFunctionList .= []
 
 -- | Example 'PlotCartesian' function which plots a sigmoid and a sine-squared curve, typcially used
@@ -49,8 +49,8 @@ smallCart = plotCartesian &~ do
 activation :: PlotCartesian ProcGenFloat
 activation = smallCart &~ do
   plotWindow %= flip (&~)
-    (do xAxis .= smallPlotAxis
-        yAxis . plotAxisMin .= (0.0) )
+    (do xDimension .= smallPlotAxis
+        yDimension . axisMin .= (0.0) )
   plotFunctionList .=
     [ makeCartesian &~ do
         plotLabel    .= "sigmoid"

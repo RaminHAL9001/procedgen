@@ -96,46 +96,46 @@ makePlotAxis = PlotAxis
   , thePlotAxisAbove      = False
   }
 
-plotAxisMajor :: Lens' (PlotAxis num) (GridLines num)
-plotAxisMajor = lens thePlotAxisMajor $ \ a b -> a{ thePlotAxisMajor = b }
+axisMajor :: Lens' (PlotAxis num) (GridLines num)
+axisMajor = lens thePlotAxisMajor $ \ a b -> a{ thePlotAxisMajor = b }
 
-plotAxisMinor :: Lens' (PlotAxis num) (Maybe (GridLines num))
-plotAxisMinor = lens thePlotAxisMinor $ \ a b -> a{ thePlotAxisMinor = b }
+axisMinor :: Lens' (PlotAxis num) (Maybe (GridLines num))
+axisMinor = lens thePlotAxisMinor $ \ a b -> a{ thePlotAxisMinor = b }
 
-plotAxisAbove :: Lens' (PlotAxis num) Bool
-plotAxisAbove = lens thePlotAxisAbove $ \ a b -> a{ thePlotAxisAbove = b }
+axisAbove :: Lens' (PlotAxis num) Bool
+axisAbove = lens thePlotAxisAbove $ \ a b -> a{ thePlotAxisAbove = b }
 
-plotAxisDrawOrigin :: Lens' (PlotAxis num) (Maybe (LineStyle num))
-plotAxisDrawOrigin = lens thePlotAxisDrawOrigin $ \ a b -> a{ thePlotAxisDrawOrigin = b }
+axisDrawOrigin :: Lens' (PlotAxis num) (Maybe (LineStyle num))
+axisDrawOrigin = lens thePlotAxisDrawOrigin $ \ a b -> a{ thePlotAxisDrawOrigin = b }
 
-plotAxisOffset :: Fractional num => Lens' (PlotAxis num) num
-plotAxisOffset = lens (\ a -> (a ^. plotAxisMax + a ^. plotAxisMin) / 2)
+axisOffset :: Fractional num => Lens' (PlotAxis num) num
+axisOffset = lens (\ a -> (a ^. axisMax + a ^. axisMin) / 2)
   (\ a b ->
-     let halfWidth = (a ^. plotAxisMax - a ^. plotAxisMin) / 2 
-     in  a & plotAxisMax .~ (b + halfWidth) & plotAxisMin .~ (b - halfWidth)
+     let halfWidth = (a ^. axisMax - a ^. axisMin) / 2 
+     in  a & axisMax .~ (b + halfWidth) & axisMin .~ (b - halfWidth)
   )
 
-plotAxisMin :: Lens' (PlotAxis num) num
-plotAxisMin = lens thePlotAxisMin $ \ a b -> a{ thePlotAxisMin = b }
+axisMin :: Lens' (PlotAxis num) num
+axisMin = lens thePlotAxisMin $ \ a b -> a{ thePlotAxisMin = b }
 
-plotAxisMax :: Lens' (PlotAxis num) num
-plotAxisMax = lens thePlotAxisMax $ \ a b -> a{ thePlotAxisMax = b }
+axisMax :: Lens' (PlotAxis num) num
+axisMax = lens thePlotAxisMax $ \ a b -> a{ thePlotAxisMax = b }
 
-plotAxisBounds :: Lens' (PlotAxis num) (num, num)
-plotAxisBounds = lens (\ a -> (a ^. plotAxisMin, a ^. plotAxisMax))
-  (\ a (min, max) -> a & plotAxisMin .~ min & plotAxisMax .~ max)
+axisBounds :: Lens' (PlotAxis num) (num, num)
+axisBounds = lens (\ a -> (a ^. axisMin, a ^. axisMax))
+  (\ a (min, max) -> a & axisMin .~ min & axisMax .~ max)
 
 ----------------------------------------------------------------------------------------------------
 
--- | Provides the 'grid' lens, which is common to many different plot types, including 'Cartesian'
--- and 'Parametric'.
+-- | Provides pramaters for drawing a grid on the screen. This data is common to both of the 2D plot
+-- types: 'Cartesian' and 'Parametric'.
 class HasPlotWindow a where { plotWindow :: Lens' (a num) (PlotWindow num); }
 
 data PlotWindow num
   = PlotWindow
     { theBGColor           :: !Color
-    , theXAxis             :: !(PlotAxis num)
-    , theYAxis             :: !(PlotAxis num)
+    , theXDimension        :: !(PlotAxis num)
+    , theYDimension        :: !(PlotAxis num)
     , theLastMouseLocation :: Maybe Mouse
     }
   deriving (Eq, Show)
@@ -145,8 +145,8 @@ instance HasPlotWindow PlotWindow where { plotWindow = lens id $ flip const; }
 makePlotWindow :: Num num => PlotWindow num
 makePlotWindow = PlotWindow
   { theBGColor           = packRGBA32 0xFF 0xFF 0xFF 0xC0
-  , theXAxis             = makePlotAxis
-  , theYAxis             = makePlotAxis
+  , theXDimension        = makePlotAxis
+  , theYDimension        = makePlotAxis
   , theLastMouseLocation = Nothing
   }
 
@@ -157,34 +157,46 @@ lastMouseLocation :: HasPlotWindow win => Lens' (win num) (Maybe Mouse)
 lastMouseLocation = plotWindow .
   lens theLastMouseLocation (\ a b -> a{ theLastMouseLocation = b })
 
-xAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
-xAxis = plotWindow . lens theXAxis (\ a b -> a{ theXAxis = b })
+-- | Direct access to the 'PlotAxis' which draws the axis lines along the X (horizontal).
+xDimension :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+xDimension = plotWindow . lens theXDimension (\ a b -> a{ theXDimension = b })
 
-yAxis :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
-yAxis = plotWindow . lens theYAxis (\ a b -> a{ theYAxis = b })
+-- | Direct access to the 'PlotAxis' which draws the axis lines along the Y (horizontal).
+yDimension :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+yDimension = plotWindow . lens theYDimension (\ a b -> a{ theYDimension = b })
+
+-- | Shortahand for 'xDimension', since when using GHCi you tend to make use of this lens quite
+-- often.
+dimX :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+dimX = xDimension
+
+-- | Shortahand for 'yDimension', since when using GHCi you tend to make use of this lens quite
+-- often.
+dimY :: HasPlotWindow win => Lens' (win num) (PlotAxis num)
+dimY = yDimension
 
 -- | Return the amount of distance (in plot coordinates) along the number line that the window
 -- spans.
 plotWinSpan :: Fractional num => Lens' (PlotWindow num) (V2 num)
 plotWinSpan = lens
-  (\ plotwin -> let (axX, axY) = (plotwin ^. xAxis, plotwin ^. yAxis) in
-      V2 (axX ^. plotAxisMax - axX ^. plotAxisMin) (axY ^. plotAxisMax - axY ^. plotAxisMin)
+  (\ plotwin -> let (axX, axY) = (plotwin ^. xDimension, plotwin ^. yDimension) in
+      V2 (axX ^. axisMax - axX ^. axisMin) (axY ^. axisMax - axY ^. axisMin)
   )
   (\ plotwin (V2 w0 h0) ->
      let (V2 x y) = plotwin ^. plotWinOrigin
          (w , h ) = (w0 / 2.0, h0 / 2.0)
      in  plotwin &~ do
-           xAxis . plotAxisBounds .= (x - w, x + w)
-           yAxis . plotAxisBounds .= (y - h, y + h)
+           xDimension . axisBounds .= (x - w, x + w)
+           yDimension . axisBounds .= (y - h, y + h)
   )
 
 -- | Return or set the origin point of the plot window.
 plotWinOrigin :: (HasPlotWindow win, Fractional num) => Lens' (win num) (V2 num)
 plotWinOrigin = lens
-  (\ plotwin -> V2 (plotwin ^. xAxis . plotAxisOffset) (plotwin ^. yAxis . plotAxisOffset))
+  (\ plotwin -> V2 (plotwin ^. xDimension . axisOffset) (plotwin ^. yDimension . axisOffset))
   (\ plotwin (V2 x y) -> plotwin &~ do
-      xAxis . plotAxisOffset .= x
-      yAxis . plotAxisOffset .= y
+      xDimension . axisOffset .= x
+      yDimension . axisOffset .= y
   )
 
 -- | Convert a window point to a plot point given the window size as a 'Happlets.SampCoord.PixSize'

@@ -60,9 +60,9 @@ drawPlotWindow plotwin size@(V2 w h) = do
                 setLineStyle $ gap ^. lineStyle
                 mapM_ (paint wmax) $ steps wp2pp
                   (gap ^. gridLinesSpacing) (lim ^. rect2DHead . point) (lim ^. rect2DTail . point)
-        run (plotAxisMajor . re _Just) >> run plotAxisMinor
-  drawLines horizontal w wp2ppY yAxis pointY
-  drawLines vertical   h wp2ppX xAxis pointX
+        run (axisMajor . re _Just) >> run axisMinor
+  drawLines vertical   h wp2ppX xDimension pointX
+  drawLines horizontal w wp2ppY yDimension pointY
   
 {-# SPECIALIZE drawPlotWindow :: PlotWindow ProcGenFloat -> PixSize -> Cairo.Render () #-}
 
@@ -70,8 +70,8 @@ renderCartesian :: forall num . RealFrac num => PlotCartesian num -> PixSize -> 
 renderCartesian plot size@(V2 w _h) = cairoRender $ do
   let plotwin = plot ^. plotWindow
   let drawAxis isAbove = do
-        isAbove (plot ^. xAxis . plotAxisAbove) $ drawPlotWindow plotwin size
-        isAbove (plot ^. yAxis . plotAxisAbove) $ drawPlotWindow plotwin size
+        isAbove (plot ^. xDimension . axisAbove) $ drawPlotWindow plotwin size
+        isAbove (plot ^. yDimension . axisAbove) $ drawPlotWindow plotwin size
   clearWithBGColor (plot ^. plotWindow ^. bgColor)
   drawAxis unless
   let sc2d  = (+ 0.5) . (realToFrac :: Int -> Double) . (fromIntegral :: SampCoord -> Int)

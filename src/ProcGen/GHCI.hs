@@ -137,23 +137,23 @@ liveUpdate = _live (error "'ProcGen.GHCI.live' function attempted to evaluate a 
 newPlotWin :: HasPlotWindow plot => plot ProcGenFloat -> IO (Happlet (plot ProcGenFloat))
 newPlotWin makeWin = makeHapplet $ makeWin &~ do
   let axis = makePlotAxis &~ do
-        plotAxisOffset .= (0.0 :: ProcGenFloat)
-        plotAxisMin    .= (-1.0)
-        plotAxisMax    .= 1.0
-        plotAxisMajor  %= flip (&~)
+        axisOffset .= (0.0 :: ProcGenFloat)
+        axisMin    .= (-1.0)
+        axisMax    .= 1.0
+        axisMajor  %= flip (&~)
           (do gridLinesSpacing .= 0.5
               lineColor        .= packRGBA32 0x40 0x40 0x40 0xA0
               lineWeight       .= 2.0
           )
-        plotAxisMinor  .= Just
+        axisMinor  .= Just
           ( makeGridLines &~ do
               gridLinesSpacing .= 0.1
               lineColor        .= packRGBA32 0x80 0x80 0x80 0x80
               lineWeight       .= 1.0
           )
   plotWindow %= flip (&~)
-    (do xAxis .= axis
-        yAxis .= axis
+    (do dimX .= axis
+        dimY .= axis
     )
 
 ----------------------------------------------------------------------------------------------------
