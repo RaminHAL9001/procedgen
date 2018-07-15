@@ -136,7 +136,7 @@ data PlotWindow num
     { theBGColor           :: !Color
     , theXDimension        :: !(PlotAxis num)
     , theYDimension        :: !(PlotAxis num)
-    , theLastMouseLocation :: Maybe Mouse
+    , theLastMouseLocation :: !(Maybe Mouse)
     }
   deriving (Eq, Show)
 
@@ -254,7 +254,7 @@ winToPlotScale plotwin (V2 winW winH) =
   in  iso (\ (x, y) -> (realToFrac x * xscale, negate $ realToFrac y * yscale))
           (\ (x, y) -> (round    $ x / xscale, negate $ round    $ y / yscale))
 
--- | Offset the value of the result of a 'winToPlotScale' conversion by the 'plotOrigin'.
+-- | Offset the value of the result of a 'winToPlotScale' conversion by the 'plotWinOrigin'.
 winToPlotOffset :: RealFrac num => PlotWindow num -> PixSize -> Iso' (num, num) (num, num)
 winToPlotOffset plotwin winsize@(V2 w0 h0) =
   let (dx, dy) = plotwin ^. plotWinOrigin . pointXY

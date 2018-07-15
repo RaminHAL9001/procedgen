@@ -39,12 +39,12 @@ setLineStyle style = do
 drawPlotWindow :: RealFrac num => PlotWindow num -> PixSize -> Cairo.Render ()
 drawPlotWindow plotwin size@(V2 w h) = do
   let lim = canonicalRect2D $ winToPlotRect plotwin size
-  let wp2ppX = fromPlotToWinX plotwin size
-  let wp2ppY = fromPlotToWinY plotwin size
-  let steps wp2pp gap lo hi =
+  let pp2wpX = fromPlotToWinX plotwin size
+  let pp2wpY = fromPlotToWinY plotwin size
+  let steps pp2wp gap lo hi =
         let s = lo / gap
             i = realToFrac (floor s :: Int) * gap
-        in  fmap wp2pp $ takeWhile (<= hi) $ iterate (gap +) i
+        in  fmap pp2wp $ takeWhile (<= hi) $ iterate (gap +) i
   let vertical   ymax x = do
         Cairo.moveTo (realToFrac x + 0.5) (0.0)
         Cairo.lineTo (realToFrac x + 0.5) (realToFrac ymax)
@@ -53,17 +53,20 @@ drawPlotWindow plotwin size@(V2 w h) = do
         Cairo.moveTo (0.0)             (realToFrac y + 0.5)
         Cairo.lineTo (realToFrac xmax) (realToFrac y + 0.5)
         Cairo.stroke
-  let drawLines paint wmax wp2pp axis point = do
-        let run majmin = case plotwin ^. axis . majmin of
+  let drawLines paint wmax pp2wp dim point = do
+        let axis = plotwin ^. dim
+        let run majmin = case axis ^. majmin of
               Nothing  -> return ()
               Just gap -> do
                 setLineStyle $ gap ^. lineStyle
-                mapM_ (paint wmax) $ steps wp2pp
+                mapM_ (paint wmax) $ steps pp2wp
                   (gap ^. gridLinesSpacing) (lim ^. rect2DHead . point) (lim ^. rect2DTail . point)
         run (axisMajor . re _Just) >> run axisMinor
-  drawLines vertical   h wp2ppX xDimension pointX
-  drawLines horizontal w wp2ppY yDimension pointY
-  
+        case axis ^. axisDrawOrigin  of
+          Nothing     -> return ()
+          Just origin -> setLineStyle origin >> paint wmax (pp2wp 0)
+  drawLines  vertical   h pp2wpX xDimension pointX
+  drawLines  horizontal w pp2wpY yDimension pointY
 {-# SPECIALIZE drawPlotWindow :: PlotWindow ProcGenFloat -> PixSize -> Cairo.Render () #-}
 
 renderCartesian :: forall num . RealFrac num => PlotCartesian num -> PixSize -> CairoRender ()

@@ -19,16 +19,16 @@ smallPlotAxis = makePlotAxis &~
       axisMajor      .=
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.5)
-            lineWeight       .= (1.0)
+            lineWeight       .= (1.5)
             lineColor        .= packRGBA32 0x7F 0x7F 0x7F 0xBF )
       axisMinor      .= Just
         ( makeGridLines &~ do
             gridLinesSpacing .= (0.125)
-            lineWeight       .= (1.0)
+            lineWeight       .= (0.5)
             lineColor        .= packRGBA32 0xBF 0xBF 0xBF 0xBF )
       axisDrawOrigin .= Just
         ( makeLineStyle &~ do
-            lineWeight .= (2.0)
+            lineWeight .= (3.0)
             lineColor  .= packRGBA32 0x00 0x00 0x00 0xBF ))
 
 -- | An unpopulated cartesian plot with a 'smallPlotAxis', with reasonable defaults for inspecting
