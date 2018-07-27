@@ -65,6 +65,7 @@ nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A lazy functional data type isomorphic to 'FDSignal'.
 data FDComponentList
   = FDComponentList
     { theFDCompListLength :: !Int
@@ -79,6 +80,38 @@ instance Semigroup FDComponentList where
 instance Monoid FDComponentList where
   mempty = FDComponentList{ theFDCompListLength = 0, theFDCompListElems = [] }
   mappend = (<>)
+
+randFDComponents :: Frequency -> TFRand FDComponentList
+randFDComponents base = do
+  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
+    dice <- getRandom :: TFRand Word8
+    if dice > 4 then return [] else do
+      amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
+      phase <- onRandFloat $ (* (2*pi)) . subtract 0.5
+      decay <- onRandFloat (* 2)
+      return $ do
+        let freq = base * mul
+        guard $ freq < nyquist
+        guard $ amp  > 0.1
+        return $ (,) 1 $ FDComponent
+          { fdFrequency  = base * mul
+          , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
+          , fdPhaseShift = phase
+          , fdDecayRate  = decay
+          }
+  return FDComponentList
+    { theFDCompListLength = count + 1
+    , theFDCompListElems  = FDComponent
+        { fdFrequency  = base
+        , fdAmplitude  = 1.0
+        , fdPhaseShift = 0.0
+        , fdDecayRate  = 0.0
+        } : components
+    }
+
+fdSignalFromComponents :: FDComponentList -> FDSignal
+fdSignalFromComponents (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
+  fdSignal size elems
 
 ----------------------------------------------------------------------------------------------------
 
@@ -199,37 +232,12 @@ componentMultipliers = do
 compMult :: [Frequency]
 compMult = componentMultipliers
 
-randFDComponents :: Frequency -> TFRand (Int, [FDComponent])
-randFDComponents base = do
-  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
-    dice <- getRandom :: TFRand Word8
-    if dice > 4 then return [] else do
-      amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
-      phase <- onRandFloat $ (* (2*pi)) . subtract 0.5
-      decay <- onRandFloat (* 2)
-      return $ do
-        let freq = base * mul
-        guard $ freq < nyquist
-        guard $ amp  > 0.1
-        return $ (,) 1 $ FDComponent
-          { fdFrequency  = base * mul
-          , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
-          , fdPhaseShift = phase
-          , fdDecayRate  = decay
-          }
-  return $! (,) (count + 1) $ FDComponent
-    { fdFrequency  = base
-    , fdAmplitude  = 1.0
-    , fdPhaseShift = 0.0
-    , fdDecayRate  = 0.0
-    } : components
-
 -- | Construct an 'ProcGen.Arbitrary.Arbitrary' 'FDSignal' with random 'ProcGen.Types.Frequency'
 -- components generated with rational-numbered scaled frequency components around a given base
 -- frequency. This will generate up to 1920 components, but is most likely to generate around 480
 -- components.
 randFDSignal :: Frequency -> TFRand FDSignal
-randFDSignal = fmap (uncurry fdSignal) . randFDComponents
+randFDSignal = fmap fdSignalFromComponents . randFDComponents
 
 randFDSignalIO :: Frequency -> IO FDSignal
 randFDSignalIO = evalTFRandIO . randFDSignal
