@@ -9,41 +9,41 @@ import           Control.Monad.Primitive
 import           Control.Monad.State.Strict
 import           Control.Monad.ST
 
-import qualified Data.Vector.Generic.Mutable.Base  as MVec
-import qualified Data.Vector.Generic.Mutable       as MVec
+import qualified Data.Vector.Generic.Mutable.Base  as GMVec
+import qualified Data.Vector.Generic.Mutable       as GMVec
 import qualified Data.Vector.Unboxed               as UVec
 
 ----------------------------------------------------------------------------------------------------
 
 -- | A function type for buliding mutable 'UVec.Vector's with a function that uses a cursor to move
 -- around withtin a mutable 'Vec.Vector'.
-newtype VectorBuilder vec elem m a
+newtype VectorBuilder mvec elem m a
   = VectorBuilder
-    { unwrapVectorBuilder :: StateT (VectorBuilderState vec elem m) m a
+    { unwrapVectorBuilder :: StateT (VectorBuilderState mvec elem m) m a
     }
   deriving (Functor, Applicative, Monad)
 
-instance MonadTrans (VectorBuilder vec elem) where
+instance MonadTrans (VectorBuilder mvec elem) where
   lift = VectorBuilder . lift
 
-instance Monad m => MonadState (VectorBuilderState vec elem m) (VectorBuilder vec elem m) where
+instance Monad m => MonadState (VectorBuilderState mvec elem m) (VectorBuilder mvec elem m) where
   state = VectorBuilder . state
 
-data VectorBuilderState vec elem m
+data VectorBuilderState mvec elem m
   = VectorBuilderState
     { theBuilderCursor :: !Int
-    , theBuilderVector :: !(vec (PrimState m) elem)
+    , theBuilderVector :: !(mvec (PrimState m) elem)
     }
 
--- | Given an initial vector size, allocate an 'MVec.STVector' of that size and then evaluate a
--- 'VectorBuilder' function to populate the 'MVec.STVector'. When 'VectorBuilder' function
--- evaluation completes, freeze the 'MVec.STVector' to a 'UVec.Vector' and eliminate the monad
+-- | Given an initial vector size, allocate an 'GMVec.STVector' of that size and then evaluate a
+-- 'VectorBuilder' function to populate the 'GMVec.STVector'. When 'VectorBuilder' function
+-- evaluation completes, freeze the 'GMVec.STVector' to a 'UVec.Vector' and eliminate the monad
 -- entirely, becoming a pure function.
 runVectorBuilderST
   :: (UVec.Unbox elem)
   => Int -> (forall s . VectorBuilder UVec.MVector elem (ST s) void) -> UVec.Vector elem
 runVectorBuilderST size build = UVec.create $ do
-  vec <- MVec.new size
+  vec <- GMVec.new size
   evalStateT (unwrapVectorBuilder $ build >> use builderVector) VectorBuilderState
     { theBuilderCursor = 0
     , theBuilderVector = vec
@@ -52,34 +52,34 @@ runVectorBuilderST size build = UVec.create $ do
 -- | A lens to access the cursor at which 'builderPutElem' and 'builderGetElem' will put or get an
 -- element value.
 builderCursor
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => Lens' (VectorBuilderState vec elem m) Int
 builderCursor = lens theBuilderCursor $ \ a b -> a{ theBuilderCursor = b }
 
 -- | A lens to access the vector that is currently being filled with @elem@ values.
 builderVector
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => Lens' (VectorBuilderState vec elem m) (vec (PrimState m) elem)
 builderVector = lens theBuilderVector $ \ a b -> a{ theBuilderVector = b }
 
 -- | Take the value of an @elem@ at the current 'builderCursor' in the 'builderVector'.
-builderGetElem :: (PrimMonad m, MVec.MVector vec elem) => VectorBuilder vec elem m elem
-builderGetElem = MVec.read <$> use builderVector <*> use builderCursor >>= lift
+builderGetElem :: (PrimMonad m, GMVec.MVector vec elem) => VectorBuilder vec elem m elem
+builderGetElem = GMVec.read <$> use builderVector <*> use builderCursor >>= lift
 
 -- | Reposition the 'builderCursor'. Returns the value of the 'builderCursor' as it was set before the
 -- @('Int' -> 'Int')@ function was applied.
-modifyCursor :: (PrimMonad m, MVec.MVector vec elem) => (Int -> Int) -> VectorBuilder vec elem m Int
+modifyCursor :: (PrimMonad m, GMVec.MVector vec elem) => (Int -> Int) -> VectorBuilder vec elem m Int
 modifyCursor = (<*) (use builderCursor) . (builderCursor %=)
 
 -- | Get the current length of the vector allocation size being built.
-maxBuildLength :: (PrimMonad m, MVec.MVector vec elem) => VectorBuilder vec elem m Int
-maxBuildLength = MVec.length <$> use builderVector
+maxBuildLength :: (PrimMonad m, GMVec.MVector vec elem) => VectorBuilder vec elem m Int
+maxBuildLength = GMVec.length <$> use builderVector
 
--- | Force re-allocation of the vector using 'MVec.grow' or 'MVec.take', depending on whether the
+-- | Force re-allocation of the vector using 'GMVec.grow' or 'GMVec.take', depending on whether the
 -- updated size value computed by the given @('Int' -> 'Int')@ function is greater or less than the
 -- current vector size.
 resizeVector
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => (Int -> Int)
   -> VectorBuilder vec elem m ()
 resizeVector f = do
@@ -87,49 +87,49 @@ resizeVector f = do
   let newsize = f oldsize
   if oldsize == newsize then return () else
     if oldsize < newsize
-     then MVec.unsafeGrow <$> use builderVector <*> pure newsize >>= lift >>= (builderVector .=)
-     else MVec.take newsize <$> use builderVector >>= (builderVector .=)
+     then GMVec.unsafeGrow <$> use builderVector <*> pure newsize >>= lift >>= (builderVector .=)
+     else GMVec.take newsize <$> use builderVector >>= (builderVector .=)
 
 -- | Place an @elem@ value at the current 'builderCursor', and then increment the 'builderCursor'.
-buildStep :: (PrimMonad m, MVec.MVector vec elem) => elem -> VectorBuilder vec elem m ()
+buildStep :: (PrimMonad m, GMVec.MVector vec elem) => elem -> VectorBuilder vec elem m ()
 buildStep e = do
-  MVec.write <$> use builderVector <*> use builderCursor <*> pure e >>= lift
+  GMVec.write <$> use builderVector <*> use builderCursor <*> pure e >>= lift
   builderCursor += 1
 
 -- | Get the @elem@ value at the current 'builderCursor', and then increment the 'builderCursor'.
-buildTake1 :: (PrimMonad m, MVec.MVector vec elem) => VectorBuilder vec elem m elem
+buildTake1 :: (PrimMonad m, GMVec.MVector vec elem) => VectorBuilder vec elem m elem
 buildTake1 =
-  (MVec.read <$> use builderVector <*> use builderCursor >>= lift) <*
+  (GMVec.read <$> use builderVector <*> use builderCursor >>= lift) <*
   (builderCursor += 1)
 
 -- | The 'buildTake1' value applied 2 times to return a double, and thus advancing the
 -- 'builderCursor' by 2 indicies as well.
-buildTake2 :: (PrimMonad m, MVec.MVector vec elem) => VectorBuilder vec elem m (elem, elem)
+buildTake2 :: (PrimMonad m, GMVec.MVector vec elem) => VectorBuilder vec elem m (elem, elem)
 buildTake2 = (,) <$> buildTake1 <*> buildTake1
 
 -- | The 'buildTake1' value applied 3 times to return a tripple, and thus advancing the
 -- 'builderCursor' by 3 indicies as well.
-buildTake3 :: (PrimMonad m, MVec.MVector vec elem) => VectorBuilder vec elem m (elem, elem, elem)
+buildTake3 :: (PrimMonad m, GMVec.MVector vec elem) => VectorBuilder vec elem m (elem, elem, elem)
 buildTake3 = (,,) <$> buildTake1 <*> buildTake1 <*> buildTake1
 
 -- | The 'buildTake1' value applied 4 times to return a tripple, and thus advancing the
 -- 'builderCursor' by 4 indicies as well.
 buildTake4
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => VectorBuilder vec elem m (elem, elem, elem, elem)
 buildTake4 = (,,,) <$> buildTake1 <*> buildTake1 <*> buildTake1 <*> buildTake1
 
 -- | The 'buildTake1' value applied 5 times to return a tripple, and thus advancing the
 -- 'builderCursor' by 5 indicies as well.
 buildTake5
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => VectorBuilder vec elem m (elem, elem, elem, elem, elem)
 buildTake5 = (,,,,) <$> buildTake1 <*> buildTake1 <*> buildTake1 <*> buildTake1 <*> buildTake1
 
 -- | The 'buildTake1' value applied 5 times to return a tripple, and thus advancing the
 -- 'builderCursor' by 5 indicies as well.
 buildTake6
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => VectorBuilder vec elem m (elem, elem, elem, elem, elem, elem)
 buildTake6 = (,,,,,) <$> buildTake1 <*> buildTake1 <*>
   buildTake1 <*> buildTake1 <*> buildTake1 <*> buildTake1
@@ -150,7 +150,7 @@ allBeforeCursor :: MakeRange
 allBeforeCursor i _ = rangeFence 0 i
 
 -- | A 'MakeRange' function that ranges all elements from the current 'builderCursor' (including the
--- element under the cursor) all the way to the final element in the 'MVec.Vector'.
+-- element under the cursor) all the way to the final element in the 'GMVec.Vector'.
 allAfterCursor :: MakeRange
 allAfterCursor = rangeFence
 
@@ -164,7 +164,7 @@ rangeFence a b = (a, b-1)
 
 -- | Map elements over a range, updating them as you go.
 buildMapRange
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => MakeRange
   -> (Int -> elem -> elem)
   -> VectorBuilder vec elem m ()
@@ -172,19 +172,19 @@ buildMapRange makeRange f = buildMapRangeM makeRange (\ i -> pure . f i)
 
 -- | A version of 'buildMapRange' that takes a monadic mapping function.
 buildMapRangeM
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => MakeRange
   -> (Int -> elem -> VectorBuilder vec elem m elem)
   -> VectorBuilder vec elem m ()
 buildMapRangeM makeRange f = do
   vec   <- use builderVector
   range <- makeRange <$> use builderCursor <*> maxBuildLength
-  forM_ range $ \ i -> lift (MVec.read vec i) >>= f i >>= lift . MVec.write vec i
+  forM_ range $ \ i -> lift (GMVec.read vec i) >>= f i >>= lift . GMVec.write vec i
 
 -- | Scan over a range of @elem@ values, updating a stateful value with each @elem@, and returning
 -- an optional new value to write back to the 'builderVector'.
 buildScanRange
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => MakeRange -> st
   -> (Int -> elem -> st -> (Maybe elem, st))
   -> VectorBuilder vec elem m st
@@ -192,26 +192,26 @@ buildScanRange makeRange st f = buildScanRangeM makeRange st (\ i e -> pure . f 
 
 -- | A version of 'buildScanRange' that takes a monadic scanning function.
 buildScanRangeM
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => MakeRange -> st
   -> (Int -> elem -> st -> VectorBuilder vec elem m (Maybe elem, st))
   -> VectorBuilder vec elem m st
 buildScanRangeM makeRange st f = do
   vec <- use builderVector
   makeRange <$> use builderCursor <*> maxBuildLength >>=
-    foldM (\ st i -> lift (MVec.read vec i) >>= flip (f i) st >>= \ (update, st) ->
-      maybe (return ()) (lift . MVec.write vec i) update >> return st) st
+    foldM (\ st i -> lift (GMVec.read vec i) >>= flip (f i) st >>= \ (update, st) ->
+      maybe (return ()) (lift . GMVec.write vec i) update >> return st) st
 
 -- | Like 'buildScanRangeM' but does not update any elements.
 buildFoldRangeM
-  :: (PrimMonad m, MVec.MVector vec elem)
+  :: (PrimMonad m, GMVec.MVector vec elem)
   => MakeRange -> st
   -> (Int -> elem -> st -> VectorBuilder vec elem m st)
   -> VectorBuilder vec elem m st
 buildFoldRangeM makeRange st f = do
   vec <- use builderVector
   makeRange <$> use builderCursor <*> maxBuildLength >>=
-    foldM (\ st i -> lift (MVec.read vec i) >>= flip (f i) st) st
+    foldM (\ st i -> lift (GMVec.read vec i) >>= flip (f i) st) st
 
 ----------------------------------------------------------------------------------------------------
 
