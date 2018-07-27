@@ -144,6 +144,7 @@ runCartesian = do
         if press0 && press1 -- if this is a mouse-drag
          then do
           plotWinOrigin += (((pt0 - pt1) ^. pointXY) ^. winToPlotScale plotwin winsize) ^. from pointXY
+          cancelIfBusy
           (V2 x y) <- use plotWinOrigin
           renderCartesian <$> get <*> pure winsize >>= onCanvas
           onOSBuffer $ screenPrinter $ do
