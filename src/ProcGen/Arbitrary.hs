@@ -5,10 +5,13 @@
 -- which you can use to define instances of the 'arbitrary' function for your procedurally generated
 -- data types.
 module ProcGen.Arbitrary
-  ( Arbitrary(..), TFRand(..), evalTFRandSeed, evalTFRandIO, arbTFRandSeed, arbTFRandIO,
+  ( Arbitrary(..), onArbitrary, onRandFloat,
+    TFRand(..), evalTFRandSeed, evalTFRandIO, arbTFRandSeed, arbTFRandIO,
     evalTFRand, runTFRand,
     module Control.Monad.Random.Class,
   ) where
+
+import           ProcGen.Types
 
 import           Control.Monad
 import           Control.Monad.Random.Class
@@ -34,7 +37,16 @@ class Arbitrary a where
   -- values.
   arbitraryList :: (Functor m, Monad m, Applicative m, MonadRandom m) => (Int, Int) -> m [a]
   arbitraryList = getRandomR >=> flip replicateM arbitrary
-  
+
+-- | Often you obtain a random value and then immediately perform some transformation on it by using
+-- 'fmap' or 'Control.Monad.liftM'. This function allows you to specify the transformation as a
+-- parameter without using 'fmap' or 'Control.Monad.liftM'.
+onArbitrary :: (MonadRandom m, Arbitrary a) => (a -> b) -> m b
+onArbitrary f = f <$> arbitrary
+
+onRandFloat :: MonadRandom m => (ProcGenFloat -> a) -> m a
+onRandFloat f = f <$> getRandom
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A simple default pure random number generator based on the Twofish pseudo-random number
