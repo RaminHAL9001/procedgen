@@ -23,6 +23,7 @@ import           ProcGen.Properties
 import           Control.Arrow
 import           Control.Monad.ST
 
+import           Data.Semigroup
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
@@ -61,6 +62,23 @@ emptyFDComponent = FDComponent
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
 nullFDComponent :: FDComponent -> Bool
 nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
+
+----------------------------------------------------------------------------------------------------
+
+data FDComponentList
+  = FDComponentList
+    { theFDCompListLength :: !Int
+    , theFDCompListElems  :: [FDComponent]
+    }
+
+instance Semigroup FDComponentList where
+  (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
+       (FDComponentList{theFDCompListLength=b,theFDCompListElems=bElems})
+    = FDComponentList{ theFDCompListLength = a + b, theFDCompListElems = aElems ++ bElems }
+
+instance Monoid FDComponentList where
+  mempty = FDComponentList{ theFDCompListLength = 0, theFDCompListElems = [] }
+  mappend = (<>)
 
 ----------------------------------------------------------------------------------------------------
 
