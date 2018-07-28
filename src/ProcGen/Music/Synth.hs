@@ -1,5 +1,6 @@
 module ProcGen.Music.Synth
-  ( FDComponent(..), randFDComponents,
+  ( FDComponent(..),
+    FDComponentList, randFDComponents, fdComponentInsert,
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
@@ -68,9 +69,13 @@ nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
 -- | A lazy functional data type isomorphic to 'FDSignal'.
 data FDComponentList
   = FDComponentList
-    { theFDCompListLength :: !Int
+    { theFDCompListLength :: !ComponentCount
     , theFDCompListElems  :: [FDComponent]
     }
+
+instance Show FDComponentList where
+  show (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
+    "num elems: " ++ show size ++ unlines (show <$> elems)
 
 instance Semigroup FDComponentList where
   (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
@@ -109,9 +114,11 @@ randFDComponents base = do
         } : components
     }
 
-fdSignalFromComponents :: FDComponentList -> FDSignal
-fdSignalFromComponents (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
-  fdSignal size elems
+fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
+fdComponentInsert c list = FDComponentList
+  { theFDCompListElems  = c : theFDCompListElems  list
+  , theFDCompListLength = 1 + theFDCompListLength list
+  }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -155,43 +162,44 @@ nullFDSignal = (<= 0) . fdSize
 -- of components. The number of components is created regardless of the number of elements in the
 -- list given, with zero values filling out space not covered by the list, or elements from the list
 -- being dropped if there are mor than the given number of components.
-fdSignal :: ComponentCount -> [FDComponent] -> FDSignal
-fdSignal n = filter (not . nullFDComponent) >>> \ case
-  []       -> emptyFDSignal
-  c0:elems -> runST $ do
-    let [grpFreq, grpAmp, grpPhase, grpDecay, grpSize] = [0 .. 4] :: [Int]
-    let putVec i c vec = do
-          let write j get = Mutable.write vec (i + j) (get c)
-          write grpFreq  fdFrequency
-          write grpAmp   fdAmplitude
-          write grpPhase fdPhaseShift
-          write grpDecay fdDecayRate
-          return vec
-    vec <- Mutable.new (n * 4) >>= putVec 0 c0
-    -- Write sampels to array while measuring fdMinFreq, fdMaxFreq, and which frequency has the
-    -- biggest amplitude, which will be the 'fdBaseFreq'.
-    (ampMax, count, fd) <- foldM
-      (\ (ampMax, count, fd) (i, c) ->
-         if nullFDComponent c then return (ampMax, count, fd) else do
-           putVec i c vec
-           count <- pure $! count + 1
-           let freq = fdFrequency c
-           fd <- pure $ fd
-             { fdMinFreq  = min freq $ fdMinFreq fd
-             , fdMaxFreq  = max freq $ fdMaxFreq fd
-             }
-           pure $ if ampMax >= fdAmplitude c then (ampMax, count, fd) else
-             (fdAmplitude c, count, fd{ fdBaseFreq = freq })
-      )
-      (fdAmplitude c0, 1, emptyFDSignal{ fdMinFreq = fdFrequency c0, fdMaxFreq = fdFrequency c0 })
-      (zip [grpSize .. grpSize * (n - 1)] $ elems ++ repeat emptyFDComponent)
-    -- Normalize, such that the base freq has an amplitude of 1 and all other frequencies have an
-    -- amplitude proportional to that.
-    unless (ampMax == 0) $ forM_
-      [grpAmp, grpAmp + grpSize .. grpSize * (n - 1)]
-      (\ i -> Mutable.read vec i >>= Mutable.write vec i . (/ ampMax))
-    vec <- Unboxed.freeze vec
-    return fd{ fdSize = count, fdSignalVector = vec }
+fdSignal :: FDComponentList -> FDSignal
+fdSignal (FDComponentList{theFDCompListLength=n,theFDCompListElems=elems}) =
+  case filter (not . nullFDComponent) elems of
+    []       -> emptyFDSignal
+    c0:elems -> runST $ do
+      let [grpFreq, grpAmp, grpPhase, grpDecay, grpSize] = [0 .. 4] :: [Int]
+      let putVec i c vec = do
+            let write j get = Mutable.write vec (i + j) (get c)
+            write grpFreq  fdFrequency
+            write grpAmp   fdAmplitude
+            write grpPhase fdPhaseShift
+            write grpDecay fdDecayRate
+            return vec
+      vec <- Mutable.new (n * 4) >>= putVec 0 c0
+      -- Write sampels to array while measuring fdMinFreq, fdMaxFreq, and which frequency has the
+      -- biggest amplitude, which will be the 'fdBaseFreq'.
+      (ampMax, count, fd) <- foldM
+        (\ (ampMax, count, fd) (i, c) ->
+           if nullFDComponent c then return (ampMax, count, fd) else do
+             putVec i c vec
+             count <- pure $! count + 1
+             let freq = fdFrequency c
+             fd <- pure $ fd
+               { fdMinFreq  = min freq $ fdMinFreq fd
+               , fdMaxFreq  = max freq $ fdMaxFreq fd
+               }
+             pure $ if ampMax >= fdAmplitude c then (ampMax, count, fd) else
+               (fdAmplitude c, count, fd{ fdBaseFreq = freq })
+        )
+        (fdAmplitude c0, 1, emptyFDSignal{ fdMinFreq = fdFrequency c0, fdMaxFreq = fdFrequency c0 })
+        (zip [grpSize .. grpSize * (n - 1)] $ elems ++ repeat emptyFDComponent)
+      -- Normalize, such that the base freq has an amplitude of 1 and all other frequencies have an
+      -- amplitude proportional to that.
+      unless (ampMax == 0) $ forM_
+        [grpAmp, grpAmp + grpSize .. grpSize * (n - 1)]
+        (\ i -> Mutable.read vec i >>= Mutable.write vec i . (/ ampMax))
+      vec <- Unboxed.freeze vec
+      return fd{ fdSize = count, fdSignalVector = vec }
 
 -- | Extract a copy of every element triple from the 'FDSignal' as a list.
 listFDElems :: FDSignal -> [FDComponent]
@@ -237,7 +245,7 @@ compMult = componentMultipliers
 -- frequency. This will generate up to 1920 components, but is most likely to generate around 480
 -- components.
 randFDSignal :: Frequency -> TFRand FDSignal
-randFDSignal = fmap fdSignalFromComponents . randFDComponents
+randFDSignal = fmap fdSignal . randFDComponents
 
 randFDSignalIO :: Frequency -> IO FDSignal
 randFDSignalIO = evalTFRandIO . randFDSignal

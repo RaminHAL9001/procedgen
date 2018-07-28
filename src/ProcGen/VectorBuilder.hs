@@ -1,3 +1,4 @@
+{-# LANGUAGE NoMonomorphismRestriction #-}
 -- | A typeclass providing a consistent interface to various objects which can be marshalled to an
 -- immutable unboxed Vector representation. Objects of this type should be stored in memory as
 -- vectors and should be observed by being converted to lazy data types.
@@ -41,13 +42,20 @@ data VectorBuilderState mvec elem m
 -- entirely, becoming a pure function.
 runVectorBuilderST
   :: (UVec.Unbox elem)
-  => Int -> (forall s . VectorBuilder UVec.MVector elem (ST s) void) -> UVec.Vector elem
-runVectorBuilderST size build = UVec.create $ do
+  => Int -> VectorBuilder UVec.MVector elem (ST s) a -> ST s (a, UVec.MVector s elem)
+runVectorBuilderST size build = do
   vec <- GMVec.new size
-  evalStateT (unwrapVectorBuilder $ build >> use builderVector) VectorBuilderState
+  liftM (fmap theBuilderVector) $ runStateT (unwrapVectorBuilder build) VectorBuilderState
     { theBuilderCursor = 0
     , theBuilderVector = vec
     }
+
+-- | Evaluate 'runVectorBuilderST' and then immediately dissolve the 'Control.Monad.ST.ST' monad and
+-- freeze the mutable 'UVec.MVector' into a pure, immutable 'UVec.Vector'.
+runVectorBuilder
+  :: (UVec.Unbox elem)
+  => Int -> (forall s . VectorBuilder UVec.MVector elem (ST s) void) -> UVec.Vector elem
+runVectorBuilder size build = UVec.create $ liftM snd $ runVectorBuilderST size build
 
 -- | A lens to access the cursor at which 'builderPutElem' and 'builderGetElem' will put or get an
 -- element value.
