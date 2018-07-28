@@ -10,6 +10,7 @@ import           Control.Monad.Primitive
 import           Control.Monad.State.Strict
 import           Control.Monad.ST
 
+import           Data.Semigroup
 import qualified Data.Vector.Generic.Mutable.Base  as GMVec
 import qualified Data.Vector.Generic.Mutable       as GMVec
 import qualified Data.Vector.Unboxed               as UVec
@@ -29,6 +30,13 @@ instance MonadTrans (VectorBuilder mvec elem) where
 
 instance Monad m => MonadState (VectorBuilderState mvec elem m) (VectorBuilder mvec elem m) where
   state = VectorBuilder . state
+
+instance (Monad m, Semigroup a) => Semigroup (VectorBuilder mvec elem m a) where
+  a <> b = liftM2 (<>) a b
+
+instance (Monad m, Monoid a) => Monoid (VectorBuilder mvec elem m a) where
+  mempty = return mempty
+  mappend a b = liftM2 mappend a b
 
 data VectorBuilderState mvec elem m
   = VectorBuilderState
@@ -97,6 +105,21 @@ resizeVector f = do
     if oldsize < newsize
      then GMVec.unsafeGrow <$> use builderVector <*> pure newsize >>= lift >>= (builderVector .=)
      else GMVec.take newsize <$> use builderVector >>= (builderVector .=)
+
+-- | Useful when defining a 'ProcGen.Collapsible.collapse' function, this function takes a record
+-- field for a @data@ type and the data value itself, and accesses the element from the data value
+-- using the record and passes the record value to 'buildStep'. This allows you to define
+-- 'ProcGen.Collapsible.collapse' functions like so:
+--
+-- @
+-- data Point2D = Point2D{ x :: !'Prelude.Double', y :: !'Prelude.Double' }
+-- instance 'ProcGen.Collapsible.Collapsible' 'Prelude.Double' Point2D where
+--     'ProcGen.Collapsible.collapse' = 'buildRecord' x 'Data.Semigroup.<>' 'buildRecord' y
+-- @
+buildRecord
+  :: (PrimMonad m, GMVec.MVector vec elem)
+  => (a -> elem) -> a -> VectorBuilder vec elem m ()
+buildRecord record dat = buildStep (record dat)
 
 -- | Place an @elem@ value at the current 'builderCursor', and then increment the 'builderCursor'.
 buildStep :: (PrimMonad m, GMVec.MVector vec elem) => elem -> VectorBuilder vec elem m ()
