@@ -55,7 +55,7 @@ data FDComponent
   deriving (Eq, Ord)
 
 instance Show FDComponent where
-  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4r)"
+  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f)"
     (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
 
 instance Collapsible Float FDComponent where
@@ -176,15 +176,16 @@ fdSignal :: FDComponentList -> FDSignal
 fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcomps) of
     []       -> emptyFDSignal
     c0:elems -> let size = theFDCompListLength fdcomps in runST $ execStateT
-      (do mvec <- lift $ Mutable.new size
+      (do let [freqi, ampi, phasi, decai, stepsize] = [0 .. 4]
+          mvec <- lift $ Mutable.new $ size * stepsize
           let loop i = \ case
                 []         -> return ()
                 comp:elems -> seq i $! do
                   let wr off record = lift $ Mutable.write mvec (i + off) (record comp)
-                  wr 0 fdFrequency
-                  wr 1 fdAmplitude
-                  wr 2 fdPhaseShift
-                  wr 3 fdDecayRate
+                  wr freqi fdFrequency
+                  wr ampi  fdAmplitude
+                  wr phasi fdPhaseShift
+                  wr decai fdDecayRate
                   modify $ \ st -> st
                     { fdMinFreq = min (fdMinFreq st) (fdFrequency comp)
                     , fdMaxFreq = max (fdMaxFreq st) (fdFrequency comp)
