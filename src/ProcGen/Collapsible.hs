@@ -5,6 +5,10 @@
 -- elements in memory, which takes a heavy load off of the garbage collector.
 module ProcGen.Collapsible where
 
+import           ProcGen.VectorBuilder
+
+import           Control.Monad.ST
+
 import qualified Data.Vector.Unboxed               as UVec
 
 ----------------------------------------------------------------------------------------------------
@@ -13,6 +17,6 @@ import qualified Data.Vector.Unboxed               as UVec
 -- @a@ can be frozen into a contiguous block of memory and therefore requiring considerably fewer
 -- thunk allocations and garbage collection cycles.
 class Collapsible elem a | a -> elem where
-  collapse   :: a -> UVec.Vector elem
+  collapse   :: a -> VectorBuilder UVec.MVector elem (ST s) ()
   uncollapse :: UVec.Vector elem -> a
 
