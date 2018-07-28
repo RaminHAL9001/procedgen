@@ -1,5 +1,5 @@
 module ProcGen.Music.Synth
-  ( FDComponent(..),
+  ( FDComponent(..), emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
@@ -18,8 +18,10 @@ import           Happlets.Lib.Gtk
 
 import           ProcGen.Types
 import           ProcGen.Arbitrary
+import           ProcGen.Collapsible
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
+import           ProcGen.VectorBuilder
 
 import           Control.Arrow
 import           Control.Monad.ST
@@ -50,7 +52,19 @@ data FDComponent
     , fdPhaseShift :: !PhaseShift
     , fdDecayRate  :: !HalfLife
     }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show FDComponent where
+  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4r)"
+    (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
+
+instance Collapsible Float FDComponent where
+  collapse =
+    buildRecord fdFrequency <>
+    buildRecord fdAmplitude <>
+    buildRecord fdPhaseShift <>
+    buildRecord fdDecayRate
+  uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
 
 emptyFDComponent :: FDComponent
 emptyFDComponent = FDComponent
@@ -75,7 +89,7 @@ data FDComponentList
 
 instance Show FDComponentList where
   show (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
-    "num elems: " ++ show size ++ unlines (show <$> elems)
+    "num elems: " ++ show size ++ '\n' : unlines (show <$> elems)
 
 instance Semigroup FDComponentList where
   (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
@@ -135,13 +149,9 @@ data FDSignal
   deriving Eq
 
 instance Show FDSignal where
-  show fd = "size="++show (fdSize fd)++", minFreq="++show (fdMinFreq fd)++
-    ", maxFreq="++show (fdMaxFreq fd)++", baseFreq="++show (fdBaseFreq fd)++"\n"++
-    ( listFDAssocs fd >>= \ (i, comp) -> show i
-        ++' ':show (fdFrequency  comp)++' ':show (fdAmplitude comp)
-        ++' ':show (fdPhaseShift comp)++' ':show (fdDecayRate comp)
-        ++"\n"
-    )
+  show fd = "size: "++show (fdSize fd)++"\nminFreq: "++show (fdMinFreq fd)++
+    "\nmaxFreq: "++show (fdMaxFreq fd)++"\nbaseFreq: "++show (fdBaseFreq fd)++"\n"++
+    unlines (listFDAssocs fd >>= \ (i, comp) -> [show i ++ ' ' : show comp])
 
 -- | Construct an empty 'FDSignal'.
 emptyFDSignal :: FDSignal
@@ -163,43 +173,32 @@ nullFDSignal = (<= 0) . fdSize
 -- list given, with zero values filling out space not covered by the list, or elements from the list
 -- being dropped if there are mor than the given number of components.
 fdSignal :: FDComponentList -> FDSignal
-fdSignal (FDComponentList{theFDCompListLength=n,theFDCompListElems=elems}) =
-  case filter (not . nullFDComponent) elems of
+fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcomps) of
     []       -> emptyFDSignal
-    c0:elems -> runST $ do
-      let [grpFreq, grpAmp, grpPhase, grpDecay, grpSize] = [0 .. 4] :: [Int]
-      let putVec i c vec = do
-            let write j get = Mutable.write vec (i + j) (get c)
-            write grpFreq  fdFrequency
-            write grpAmp   fdAmplitude
-            write grpPhase fdPhaseShift
-            write grpDecay fdDecayRate
-            return vec
-      vec <- Mutable.new (n * 4) >>= putVec 0 c0
-      -- Write sampels to array while measuring fdMinFreq, fdMaxFreq, and which frequency has the
-      -- biggest amplitude, which will be the 'fdBaseFreq'.
-      (ampMax, count, fd) <- foldM
-        (\ (ampMax, count, fd) (i, c) ->
-           if nullFDComponent c then return (ampMax, count, fd) else do
-             putVec i c vec
-             count <- pure $! count + 1
-             let freq = fdFrequency c
-             fd <- pure $ fd
-               { fdMinFreq  = min freq $ fdMinFreq fd
-               , fdMaxFreq  = max freq $ fdMaxFreq fd
-               }
-             pure $ if ampMax >= fdAmplitude c then (ampMax, count, fd) else
-               (fdAmplitude c, count, fd{ fdBaseFreq = freq })
-        )
-        (fdAmplitude c0, 1, emptyFDSignal{ fdMinFreq = fdFrequency c0, fdMaxFreq = fdFrequency c0 })
-        (zip [grpSize .. grpSize * (n - 1)] $ elems ++ repeat emptyFDComponent)
-      -- Normalize, such that the base freq has an amplitude of 1 and all other frequencies have an
-      -- amplitude proportional to that.
-      unless (ampMax == 0) $ forM_
-        [grpAmp, grpAmp + grpSize .. grpSize * (n - 1)]
-        (\ i -> Mutable.read vec i >>= Mutable.write vec i . (/ ampMax))
-      vec <- Unboxed.freeze vec
-      return fd{ fdSize = count, fdSignalVector = vec }
+    c0:elems -> let size = theFDCompListLength fdcomps in runST $ execStateT
+      (do mvec <- lift $ Mutable.new size
+          let loop i = \ case
+                []         -> return ()
+                comp:elems -> seq i $! do
+                  let wr off record = lift $ Mutable.write mvec (i + off) (record comp)
+                  wr 0 fdFrequency
+                  wr 1 fdAmplitude
+                  wr 2 fdPhaseShift
+                  wr 3 fdDecayRate
+                  modify $ \ st -> st
+                    { fdMinFreq = min (fdMinFreq st) (fdFrequency comp)
+                    , fdMaxFreq = max (fdMaxFreq st) (fdFrequency comp)
+                    }
+                  loop (i + 4) elems
+          loop 0 (c0 : elems)
+          vec <- Unboxed.freeze mvec
+          modify $ \ st -> st{ fdSignalVector = vec }
+      ) emptyFDSignal
+        { fdBaseFreq = fdFrequency c0
+        , fdMinFreq  = fdFrequency c0
+        , fdMaxFreq  = fdFrequency c0
+        , fdSize     = size
+        }
 
 -- | Extract a copy of every element triple from the 'FDSignal' as a list.
 listFDElems :: FDSignal -> [FDComponent]
