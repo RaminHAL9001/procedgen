@@ -5,6 +5,7 @@ import           Control.Monad.ST
 
 import           Data.Int
 import           Data.STRef
+import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 
 import           Happlets.Lib.Gtk
@@ -223,9 +224,43 @@ sinePulseSum comps t = case comps of
   [] -> 0
   (freq, t0):comps -> sinePulse freq t0 t + sinePulseSum comps t
 
--- | A gaussian normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of about 2.0.
+-- | A gaussian normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
+-- curve fits pretty nicely within the range between -1.0 and 1.0.
 gaussian :: TimeScale -> Moment -> Sample
-gaussian var x = exp $ negate $ x * x * 4 / var
+gaussian var x = exp $ negate $ x * x * exp 2 / var * var
+
+-- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
+-- converting from a real-number value to an integer vector index, with linear smoothing for values
+-- between vector elements (which means, for example, an index of 0.5 will be the average of index 0
+-- and index 1). There are three values you pass before the vector, the value of the function for
+-- values that exist before the vector, the value of the function for values that exist after the
+-- vector, and a scalar value that will be multipled times every input time value which converts
+-- integer indicies to real-number indicies and scales them
+continuous :: Sample -> Sample -> TimeScale -> Unboxed.Vector Sample -> Moment -> Sample
+continuous before after scale vec t =
+  if i + 1 < 0 then before else if len < i then after else lo + d * (hi - lo) where
+    st  = scale * t
+    i   = floor st
+    d   = st - realToFrac i
+    len = Unboxed.length vec
+    (lo, hi) =
+      if i + 1 == 0   then (before, vec Unboxed.! 0) else
+      if i + 1 == len then (vec Unboxed.! i, after)  else
+        (vec Unboxed.! i, vec Unboxed.! (i + 1))
+
+-- | A function for generating a 'Unboxed.Vector' that can be used to lookup an index associated
+-- with a probability, This function can be used to shape randomly generated numbers so that they
+-- tend more toward a gaussian distribution. Simply request the size of the table to generate, the
+-- larger the table, the more accurate the inverse function will be. 4096 elements should be plenty
+-- for most purposes.
+inverseGaussianTable :: Int -> Unboxed.Vector Moment
+inverseGuassianTable = Unboxed.create $ do
+  mvec <- Mutable.new 4096
+  let f s i = do
+        Mutable.write mvec i (s / 1335.0)
+        return $ s + gaussian 1.0 (1.0 - (2.0 * realToFrac i / 4095.0))
+  foldM f (0.0) [0 .. 4095]
+  return mvec
 
 ----------------------------------------------------------------------------------------------------
 
