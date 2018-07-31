@@ -30,7 +30,7 @@ type Amplitude   = ProcGenFloat
 type Duration    = ProcGenFloat
 type Wavelength  = ProcGenFloat
 type PhaseShift  = ProcGenFloat
-type Percentage  = ProcGenFloat
+type Probability = ProcGenFloat
 type HalfLife    = ProcGenFloat
 
 -- | Note that when you apply the 'TimeWindow', the remaining 'Envelope' type is synonymous with the
@@ -43,6 +43,17 @@ type HalfLife    = ProcGenFloat
 -- As a law, the output of an 'Envelope' function must be on the inclusive interval
 -- @[0 .. 1]@ for all input 'Moment's, although there is no type-level enforcement of this law.
 type Envelope = TimeWindow Moment -> Moment -> Amplitude
+
+-- | A 1-D continuous probability fistribution function
+type CPDFunction = Moment -> Probability
+
+-- | A 1-D continuous cumulative distribution function
+type CCDFunction = Moment -> Probability
+
+-- | A vector approximating a 'CCDFunction'. Table values of this type are constructed from a
+-- 'CPDFunction' using the 'newIDSTable' function, and can be used by the 'inverseTransformSample'
+-- function to generate random values "shaped" to the 'CPDFunction'.
+type CumulativeDistributionTable = Unboxed.Vector Moment 
 
 -- | This is a class to convert things that can be converted to 'Frequency' values, for example like
 -- piano key values.
@@ -232,11 +243,13 @@ normal var x = exp $ negate $ x * x * exp 2 / var * var
 -- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
 -- converting from a real-number value to an integer vector index, with linear smoothing for values
 -- between vector elements (which means, for example, an index of 0.5 will be the average of index 0
--- and index 1). There are three values you pass before the vector, the value of the function for
--- values that exist before the vector, the value of the function for values that exist after the
--- vector, and a scalar value that will be multipled times every input time value which converts
--- integer indicies to real-number indicies and scales them
-continuous :: Sample -> Sample -> TimeScale -> Unboxed.Vector Sample -> Moment -> Sample
+-- and index 1).
+continuous
+  :: Sample -- ^ The value of the function for values that exist before the vector.
+  -> Sample -- ^ The value of the function for values that exist after the vector.
+  -> TimeScale -- ^ A scalar value that will be multipled times every input time value which converts
+               -- integer indicies to real-number indicies.
+  -> Unboxed.Vector Sample -> Moment -> Sample
 continuous before after scale vec t =
   if i + 1 < 0 then before else if len < i then after else lo + d * (hi - lo) where
     st  = scale * t
@@ -249,29 +262,31 @@ continuous before after scale vec t =
         (vec Unboxed.! i, vec Unboxed.! (i + 1))
 
 -- | A function for generating a 'Unboxed.Vector' that can contains a discrete approximation of the
--- integral of the Gaussian normal function, which can be used with the 'inverseNormal' function
--- to lookup an index associated with a probability. This function can be used to shape randomly
--- generated numbers so that they tend more toward a normal distribution. Simply request the size of
--- the table to generate, the larger the table, the more accurate the inverse function will be. 4096
--- elements should be plenty for most purposes.
-newInverseNormalTable :: Int -> Unboxed.Vector Moment
-newInverseNormalTable size = Unboxed.create $ do
+-- integral of any continuous probability distribution function ('CPDFunction'), which can be used
+-- with the 'inverseTransformSample' function to lookup an index associated with a probability. This
+-- function can be used to shape randomly generated numbers so that they tend more toward a normal
+-- distribution. Simply request the size of the table to generate, the larger the table, the more
+-- accurate the inverse function will be. 4096 elements should be plenty for most purposes. If you
+-- are concerned about performance you may also want to keep in mind the physical CPU hardware this
+-- program is running on, and what the size of available level-2/level-3 cache is, and choose a
+-- table size that will fit within the cache.
+newITSTable :: CPDFunction -> Int -> Unboxed.Vector Moment
+newITSTable cpdf size = Unboxed.create $ do
   mvec <- Mutable.new (size - 1)
   let f s i = do
         Mutable.write mvec i s
-        return $ s + normal 1.0 (1.0 - 2.0 * realToFrac i / realToFrac size)
+        return $ s + cpdf (1.0 - 2.0 * realToFrac i / realToFrac size)
   maxsamp <- foldM f (0.0) [0 .. size - 1]
   mapM_ (\ i -> Mutable.read mvec i >>= Mutable.write mvec i . (/ maxsamp)) [0 .. size - 1]
   return mvec
 
--- | A default inverse normal table, which is equal to @('newInverseNormalTable' 4096)@.
-inverseNormalTable :: Unboxed.Vector Moment
-inverseNormalTable = newInverseNormalTable 4096
-
--- | Compute the inverse of the 'normal' function with 'TimeScale' of 1.0, the computation is
--- performed with a 'Unboxed.Vector' created by the 'inverseNormalTable' function.
-inverseNormal :: Unboxed.Vector Moment -> Sample -> Moment
-inverseNormal table s = loop (div len 2) i0 $ lookup i0 where
+-- | Compute the inverse transform sample function, the computation is performed with a
+-- 'Unboxed.Vector' created by the 'newITSTable' function. This function uses a binary search to
+-- traverse the 'CumulativeDistributionTable', so the time compexity of this function is @O(log n)@
+-- where @n@ is the size of the 'CumulativeDistributionTable'. For a table of 4096 == 2^12 elements,
+-- this function is guaranteed to execute no more than 12 table lookups.
+inverseTransformSample :: CumulativeDistributionTable -> Sample -> Moment
+inverseTransformSample table s = loop (div len 2) i0 $ lookup i0 where
   lookup = (table Unboxed.!)
   len    = Unboxed.length table
   i0     = div len 2
@@ -281,11 +296,11 @@ inverseNormal table s = loop (div len 2) i0 $ lookup i0 where
       let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
           i        = i0 + nextStep
       in  loop nextStep i $ lookup i
-  -- This algorithm works by creating a table for values of the Gaussian normal function. Suppose it
-  -- takes a random 'Sample' input between 0 and 1, and a sequence of descrete buckets along the X
-  -- axis. This purpose of this function is to adjust all random 'Sample's so that the odds of a
-  -- sample landing in a discrete bucket along the X axis is about equal to the value of the
-  -- normal curve for the X position of that bucket.
+  -- This algorithm works by using a table for values of the continuous cumulative distribution
+  -- function. Suppose it takes a random 'Sample' input between 0 and 1, and a sequence of descrete
+  -- buckets along the X axis. This purpose of this function is to adjust all random 'Sample's so
+  -- that the odds of a sample landing in a discrete bucket along the X axis is about equal to the
+  -- value of the normal curve for the X position of that bucket.
   --
   -- To accomplish this, the list of weighted elements method is used, which is a method of
   -- specifying a list of elements with weights, and taking a random number, then taking a running
@@ -295,11 +310,11 @@ inverseNormal table s = loop (div len 2) i0 $ lookup i0 where
   -- until the running sum exceeds the random number.
   --
   -- This function does the same, but with a mathematical "hack" to make it faster. The list of
-  -- elements is the bucket along the X axis to choose, and the weight of each bucket is the
-  -- normal of the X position of that bucket. So instead of taking a running sum through the list
-  -- every time, we store the running sum of each bucket into a table (i.e. we take the discrete
-  -- integral of the normal function). Then we binary search for which index in the table is
-  -- closest to the random input variable. The expression:
+  -- elements is the bucket along the X axis to choose, and the weight of each bucket is the normal
+  -- of the X position of that bucket. So instead of taking a running sum through the list every
+  -- time, we store the running sum of each bucket into a table (i.e. we take the discrete integral
+  -- of the probability distribution function). Then we binary search for which index in the table
+  -- is closest to the random input variable. The expression:
   -- 
   -- @(prevStep <= 1 || prevValue == s)@
   --
@@ -310,10 +325,19 @@ inverseNormal table s = loop (div len 2) i0 $ lookup i0 where
   -- each jump, the step value is halved. The cursor continues to seek a value until the step size
   -- is less than or equal to 1, or in the event that the exact input 'Sample' value is found in the
   -- table (which is highly unlikely).
-  --
-  -- As a binary search, the complexity of this function is @O(log n)@ where @n@ is the length of
-  -- the lookup table. A table size of 4096 == 2^12 elements is guaranteed to require at most 12
-  -- table lookups for each evaluation of this function.
+
+-- | The most commonly used probability distribution function is the Gaussian 'normal'
+-- function. Since it is so common, a default cumulative distribution table for the normal
+-- distribution is provided here, which is equal to @('newITSTable' ('normal' 1.0) 4096)@.
+inverseNormalTable :: CumulativeDistributionTable
+inverseNormalTable = newITSTable (normal 1.0) 4096
+
+-- | The most commonly used probability distribution function is the Gaussian 'normal'
+-- function. Since it is so common, a default inverse transofmr sample function for the normal
+-- distribution is provided here, which is equal to a memoized version of the expression
+-- @(inverseTransformSample ('newITSTable' ('normal' 1.0) 4096))@.
+inverseNormal :: Sample -> Moment
+inverseNormal = inverseTransformSample inverseNormalTable
 
 ----------------------------------------------------------------------------------------------------
 
