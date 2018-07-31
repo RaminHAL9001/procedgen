@@ -248,19 +248,71 @@ continuous before after scale vec t =
       if i + 1 == len then (vec Unboxed.! i, after)  else
         (vec Unboxed.! i, vec Unboxed.! (i + 1))
 
--- | A function for generating a 'Unboxed.Vector' that can be used to lookup an index associated
--- with a probability, This function can be used to shape randomly generated numbers so that they
--- tend more toward a gaussian distribution. Simply request the size of the table to generate, the
--- larger the table, the more accurate the inverse function will be. 4096 elements should be plenty
--- for most purposes.
-inverseGaussianTable :: Int -> Unboxed.Vector Moment
-inverseGuassianTable = Unboxed.create $ do
-  mvec <- Mutable.new 4096
+-- | A function for generating a 'Unboxed.Vector' that can contains a discrete approximation of the
+-- integral of the gaussian function, which can be used with the 'inverseGaussian' function to
+-- lookup an index associated with a probability. This function can be used to shape randomly
+-- generated numbers so that they tend more toward a gaussian distribution. Simply request the size
+-- of the table to generate, the larger the table, the more accurate the inverse function will
+-- be. 4096 elements should be plenty for most purposes.
+newInverseGaussianTable :: Int -> Unboxed.Vector Moment
+newInverseGaussianTable size = Unboxed.create $ do
+  mvec <- Mutable.new (size - 1)
   let f s i = do
-        Mutable.write mvec i (s / 1335.0)
-        return $ s + gaussian 1.0 (1.0 - (2.0 * realToFrac i / 4095.0))
-  foldM f (0.0) [0 .. 4095]
+        Mutable.write mvec i s
+        return $ s + gaussian 1.0 (1.0 - 2.0 * realToFrac i / realToFrac size)
+  maxsamp <- foldM f (0.0) [0 .. size - 1]
+  mapM_ (\ i -> Mutable.read mvec i >>= Mutable.write mvec i . (/ maxsamp)) [0 .. size - 1]
   return mvec
+
+-- | A default inverse gaussian table, which is equal to @('newInverseGaussianTable' 4096)@.
+inverseGaussianTable :: Unboxed.Vector Moment
+inverseGaussianTable = newInverseGaussianTable 4096
+
+-- | Compute the inverse of the 'gaussian' function with 'TimeScale' of 1.0, the computation is
+-- performed with a 'Unboxed.Vector' created by the 'inverseGaussianTable' function.
+inverseGaussian :: Unboxed.Vector Moment -> Sample -> Moment
+inverseGaussian table s = loop (div len 2) i0 $ lookup i0 where
+  lookup = (table Unboxed.!)
+  len    = Unboxed.length table
+  i0     = div len 2
+  loop :: Int -> Int -> Sample -> Moment
+  loop prevStep i0 prevVal =
+    if prevStep <= 1 || prevVal == s then 1.0 - 2.0 * realToFrac i0 / realToFrac len else
+      let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
+          i        = i0 + nextStep
+      in  loop nextStep i $ lookup i
+  -- This algorithm works by creating a table for values of the gaussian function. Suppose it takes
+  -- a random 'Sample' input between 0 and 1, and a sequence of descrete buckets along the X
+  -- axis. This purpose of this function is to adjust all random 'Sample's so that the odds of a
+  -- sample landing in a discrete bucket along the X axis is about equal to the value of the
+  -- gaussian curve for the X position of that bucket.
+  --
+  -- To accomplish this, the list of weighted elements method is used, which is a method of
+  -- specifying a list of elements with weights, and taking a random number, then taking a running
+  -- sum of all of the weights of each element in the list. If the running sum is less than the
+  -- random number, then the weight is added to the running sum and the next element is
+  -- checked. Each succesive element is checked until the running sum exceeds the random number.
+  --
+  -- This function does the same, but with a mathematical "hack" to make it faster. The list of
+  -- elements is the bucket along the X axis to choose, and the weight of each bucket is the
+  -- gaussian of the X position of that bucket. So instead of taking a running sum through the list
+  -- every time, we store the running sum of each bucket into a table (i.e. we take the discrete
+  -- integral of the gaussian function). Then we binary search for which index in the table is
+  -- closest to the random input variable. The expression:
+  -- 
+  -- @(prevStep <= 1 || prevValue == s)@
+  --
+  -- is the binary branch choice, which decides whether to move the search cursor up or down based
+  -- on whether the running sum at the current table index is less than or greater the input
+  -- 'Sample'. The search cursor starts in the middle of the table and has a step value which starts
+  -- at a quarter the length of the table. The cursor jumps up or down by this step value, and after
+  -- each jump, the step value is halved. The cursor continues to seek a value until the step size
+  -- is less than or equal to 1, or in the event that the exact input 'Sample' value is found in the
+  -- table (which is highly unlikely).
+  --
+  -- As a binary search, the complexity of this function is @O(log n)@ where @n@ is the length of
+  -- the lookup table. A table size of 4096 == 2^12 elements is guaranteed to require at most 12
+  -- table lookups for each evaluation of this function.
 
 ----------------------------------------------------------------------------------------------------
 
