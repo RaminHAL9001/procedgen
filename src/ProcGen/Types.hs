@@ -211,10 +211,10 @@ sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
   if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
 
 -- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
--- time offset moment. The pulse is a sineusoid enveloped by a gaussian, which is produces a
--- slightly distorted sinusoud with a duration of a single cycle.
+-- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which is
+-- produces a slightly distorted sinusoud with a duration of a single cycle.
 sinePulse :: Frequency -> Moment -> Moment -> Sample
-sinePulse freq t0 t = gaussian 1.0 t * sin (2 * pi * freq * t + t0)
+sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
 
 -- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
 -- requires O(n) time to compute where @n@ is the length of the number of components. However for
@@ -224,10 +224,10 @@ sinePulseSum comps t = case comps of
   [] -> 0
   (freq, t0):comps -> sinePulse freq t0 t + sinePulseSum comps t
 
--- | A gaussian normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
+-- | A normal normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
 -- curve fits pretty nicely within the range between -1.0 and 1.0.
-gaussian :: TimeScale -> Moment -> Sample
-gaussian var x = exp $ negate $ x * x * exp 2 / var * var
+normal :: TimeScale -> Moment -> Sample
+normal var x = exp $ negate $ x * x * exp 2 / var * var
 
 -- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
 -- converting from a real-number value to an integer vector index, with linear smoothing for values
@@ -249,29 +249,29 @@ continuous before after scale vec t =
         (vec Unboxed.! i, vec Unboxed.! (i + 1))
 
 -- | A function for generating a 'Unboxed.Vector' that can contains a discrete approximation of the
--- integral of the gaussian function, which can be used with the 'inverseGaussian' function to
--- lookup an index associated with a probability. This function can be used to shape randomly
--- generated numbers so that they tend more toward a gaussian distribution. Simply request the size
--- of the table to generate, the larger the table, the more accurate the inverse function will
--- be. 4096 elements should be plenty for most purposes.
-newInverseGaussianTable :: Int -> Unboxed.Vector Moment
-newInverseGaussianTable size = Unboxed.create $ do
+-- integral of the Gaussian normal function, which can be used with the 'inverseNormal' function
+-- to lookup an index associated with a probability. This function can be used to shape randomly
+-- generated numbers so that they tend more toward a normal distribution. Simply request the size of
+-- the table to generate, the larger the table, the more accurate the inverse function will be. 4096
+-- elements should be plenty for most purposes.
+newInverseNormalTable :: Int -> Unboxed.Vector Moment
+newInverseNormalTable size = Unboxed.create $ do
   mvec <- Mutable.new (size - 1)
   let f s i = do
         Mutable.write mvec i s
-        return $ s + gaussian 1.0 (1.0 - 2.0 * realToFrac i / realToFrac size)
+        return $ s + normal 1.0 (1.0 - 2.0 * realToFrac i / realToFrac size)
   maxsamp <- foldM f (0.0) [0 .. size - 1]
   mapM_ (\ i -> Mutable.read mvec i >>= Mutable.write mvec i . (/ maxsamp)) [0 .. size - 1]
   return mvec
 
--- | A default inverse gaussian table, which is equal to @('newInverseGaussianTable' 4096)@.
-inverseGaussianTable :: Unboxed.Vector Moment
-inverseGaussianTable = newInverseGaussianTable 4096
+-- | A default inverse normal table, which is equal to @('newInverseNormalTable' 4096)@.
+inverseNormalTable :: Unboxed.Vector Moment
+inverseNormalTable = newInverseNormalTable 4096
 
--- | Compute the inverse of the 'gaussian' function with 'TimeScale' of 1.0, the computation is
--- performed with a 'Unboxed.Vector' created by the 'inverseGaussianTable' function.
-inverseGaussian :: Unboxed.Vector Moment -> Sample -> Moment
-inverseGaussian table s = loop (div len 2) i0 $ lookup i0 where
+-- | Compute the inverse of the 'normal' function with 'TimeScale' of 1.0, the computation is
+-- performed with a 'Unboxed.Vector' created by the 'inverseNormalTable' function.
+inverseNormal :: Unboxed.Vector Moment -> Sample -> Moment
+inverseNormal table s = loop (div len 2) i0 $ lookup i0 where
   lookup = (table Unboxed.!)
   len    = Unboxed.length table
   i0     = div len 2
@@ -281,23 +281,24 @@ inverseGaussian table s = loop (div len 2) i0 $ lookup i0 where
       let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
           i        = i0 + nextStep
       in  loop nextStep i $ lookup i
-  -- This algorithm works by creating a table for values of the gaussian function. Suppose it takes
-  -- a random 'Sample' input between 0 and 1, and a sequence of descrete buckets along the X
+  -- This algorithm works by creating a table for values of the Gaussian normal function. Suppose it
+  -- takes a random 'Sample' input between 0 and 1, and a sequence of descrete buckets along the X
   -- axis. This purpose of this function is to adjust all random 'Sample's so that the odds of a
   -- sample landing in a discrete bucket along the X axis is about equal to the value of the
-  -- gaussian curve for the X position of that bucket.
+  -- normal curve for the X position of that bucket.
   --
   -- To accomplish this, the list of weighted elements method is used, which is a method of
   -- specifying a list of elements with weights, and taking a random number, then taking a running
-  -- sum of all of the weights of each element in the list. If the running sum is less than the
-  -- random number, then the weight is added to the running sum and the next element is
-  -- checked. Each succesive element is checked until the running sum exceeds the random number.
+  -- sum of all of the weights of each element in the list (this is also called a Cumulative
+  -- Distribution Function). If the running sum is less than the random number, then the weight is
+  -- added to the running sum and the next element is checked. Each succesive element is checked
+  -- until the running sum exceeds the random number.
   --
   -- This function does the same, but with a mathematical "hack" to make it faster. The list of
   -- elements is the bucket along the X axis to choose, and the weight of each bucket is the
-  -- gaussian of the X position of that bucket. So instead of taking a running sum through the list
+  -- normal of the X position of that bucket. So instead of taking a running sum through the list
   -- every time, we store the running sum of each bucket into a table (i.e. we take the discrete
-  -- integral of the gaussian function). Then we binary search for which index in the table is
+  -- integral of the normal function). Then we binary search for which index in the table is
   -- closest to the random input variable. The expression:
   -- 
   -- @(prevStep <= 1 || prevValue == s)@
