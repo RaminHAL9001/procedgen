@@ -5,6 +5,7 @@ module ProcGen.Music.Synth
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
+    randAmpPulseST, randAmpPulse,
     TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, idct,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     FDView(..), fdView, runFDView,
@@ -319,6 +320,43 @@ idct dt fd = TDSignal
         return vec
   }
 
+-- | Accumulates a signal into an 'Mutable.STVector' that consists of a single sine wave, but the
+-- amplitude of the wave is randomly modified for every cycle. This creates noise with a very narrow
+-- frequency spectrum.
+randAmpPulseST
+  :: Mutable.STVector s Sample
+  -> TimeWindow Moment
+  -> Frequency -> TFRandT (ST s) ()
+randAmpPulseST mvec cwin freq = do
+  let ti = fst . timeIndex
+  let size = ti (3 / freq) + 1
+  table <- lift $ Mutable.new size
+  lift $ forM_ [0 .. size - 1] $ \ i ->
+    Mutable.write table i $ sinePulse3 freq (0.0) $ indexToTime i
+  let loop amp i j =
+        if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
+          lift $ Mutable.write mvec i =<<
+            liftM2 (+) (Mutable.read mvec i) ((* amp) <$> Mutable.read table j)
+          loop amp (i + 1) (j + 1)
+  let pulses t = if t >= timeEnd cwin then return () else do
+        amp <- getRandom :: TFRandT (ST s) Float
+        let i = fst $ timeIndex t
+        loop amp i 0
+        pulses $ t + (2 / freq)
+  pulses $ timeStart cwin
+
+randAmpPulse :: Frequency -> Duration -> IO TDSignal
+randAmpPulse freq dur = do
+  gen <- initTFGen
+  let size = durationSampleCount dur
+  let win = TimeWindow{ timeStart = 0, timeEnd = dur } :: TimeWindow Moment
+  return TDSignal
+    { tdSamples = Unboxed.create $ do
+        mvec <- Mutable.new size
+        flip evalTFRandT gen $ randAmpPulseST mvec win freq
+        return mvec
+    }
+
 -- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
 -- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
 randTDSignalIO :: Duration -> Frequency -> IO TDSignal
@@ -481,7 +519,7 @@ drawTDView v (V2 (SampCoord w) (SampCoord h)) = do
   screenPrinter $ do
     gridRow    .= 0
     gridColumn .= 0
-    displayString (printf "time = %.+4" (realToFrac (v ^. animFrame) :: ProcGenFloat))
+    displayString (printf "time = %+.4f" (realToFrac (v ^. animFrame) :: ProcGenFloat))
 
 resizeTDView :: GtkGUI TDView ()
 resizeTDView = drawTDView <$> getModel <*> getWindowSize >>= onCanvas
