@@ -215,6 +215,16 @@ sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
   in  if tw==0 then if t'<t0 then 0 else 1 else
       if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
 
+-- | A function that constructs a fade-in and fade-out envelope.
+fadeInOut
+  :: Moment -- ^ t0
+  -> Moment -- ^ t1 (fade-in occurs betwen t0 and t1)
+  -> Moment -- ^ t2 (no fading occurs between t1 and t2)
+  -> Moment -- ^ t3 (fade-out occurs between t2 and t3)
+  -> Moment -> Sample
+fadeInOut t0 t1 t2 t3 t = sigmoid TimeWindow{ timeStart = t0, timeEnd = t1 } t *
+  (1.0 - sigmoid TimeWindow{ timeStart = t2, timeEnd = t3 } t)
+
 -- | An 'Envelope' increasing over the square of the sine of @t@.
 sineSquared :: Envelope
 sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
@@ -224,8 +234,16 @@ sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
 -- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
 -- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which is
 -- produces a slightly distorted sinusoud with a duration of a single cycle.
-sinePulse :: Frequency -> Moment -> Moment -> Sample
+sinePulse :: Frequency -> PhaseShift -> Moment -> Sample
 sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
+
+-- | Like a 'sinePulse' but produces three cycles: 1 cycle with a sigmoidal ramp-up envelope, 1
+-- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that the
+-- name of this function has to do with the fact that it creates a sine pulse of three cycles, not
+-- that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
+sinePulse3 :: Frequency -> PhaseShift -> Moment -> Sample
+sinePulse3 freq t0 t = sin (2 * pi * freq * (t0 + t)) *
+  fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
 
 -- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
 -- requires O(n) time to compute where @n@ is the length of the number of components. However for
@@ -369,21 +387,20 @@ permute perm len list = if null list then [] else if len<=0 then list else
 
 -- | Find the minimum and maximum element in an 'Mutable.STVector', evaluates to an error if the
 -- vector is empty so this function is not total.
-minMaxVec :: (Mutable.Unbox elem, Ord elem, Show elem {- TODO: delete Show -}) => Mutable.STVector s elem -> ST s (elem, elem)
+minMaxVec :: (Mutable.Unbox elem, Ord elem) => Mutable.STVector s elem -> ST s (elem, elem)
 minMaxVec vec = do
   let len = Mutable.length vec
   if len == 0 then error $ "minMaxVec called on empty vector" else do
-    --traceM "compute (minimum, maximum) of vector..."
     init <- Mutable.read vec 0
     lo <- newSTRef init
     hi <- newSTRef init
     forM_ [1 .. len - 1] $ \ i ->
       Mutable.read vec i >>= \ elem -> modifySTRef lo (min elem) >> modifySTRef hi (max elem)
-    id $ -- liftM (\ mm -> trace ("done, 'minMaxVec' returns " ++ show mm) $
-      liftM2 (,) (readSTRef lo) (readSTRef hi)
+    liftM2 (,) (readSTRef lo) (readSTRef hi)
 
--- | Given a minimum and maximum value, perform a simple linear transformation that normalizes all
--- elements in the given 'Mutable.STVector'.
+-- | Not to be confused with the Gaussian 'normal' function. Given a minimum and maximum value, this
+-- function performs a simple linear transformation that normalizes all elements in the given
+-- 'Mutable.STVector'.
 normalize
   :: (Eq elem, Num elem, Fractional elem, Mutable.Unbox elem, Show elem {- TODO: delete Show -})
   => Mutable.STVector s elem -> (elem, elem) -> ST s ()
