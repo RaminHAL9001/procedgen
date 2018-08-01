@@ -6,17 +6,20 @@
 -- data types.
 module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary, onRandFloat,
-    TFRand(..), evalTFRandSeed, evalTFRandIO, arbTFRandSeed, arbTFRandIO,
-    evalTFRand, runTFRand,
+    TFRandT(..), TFRand, evalTFRandSeed, evalTFRandIO, arbTFRandSeed, arbTFRandIO,
+    evalTFRand, runTFRand, evalTFRandT, runTFRandT,
+    System.Random.TF.Init.initTFGen,
     module Control.Monad.Random.Class,
   ) where
 
 import           ProcGen.Types
 
 import           Control.Monad
+import           Control.Monad.Trans
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
+import           Data.Functor.Identity
 import           Data.Word
 
 import           System.Random.TF
@@ -53,14 +56,18 @@ onRandFloat f = f <$> getRandom
 -- generator provided by the 'System.Random.TF.Gen'. This function type instantiates the
 -- 'Control.Monad.Random.Class.MonadRandom' class so that you can use this to evaluate an instance
 -- of 'arbitrary'. 
-newtype TFRand a = TFRand { unwrapTFRandT :: Rand TFGen a }
+newtype TFRandT m a = TFRandT { unwrapTFRandT :: RandT TFGen m a }
   deriving (Functor, Applicative, Monad)
 
-instance MonadRandom TFRand where
-  getRandomR  = TFRand . getRandomR
-  getRandom   = TFRand getRandom
-  getRandomRs = TFRand . getRandomRs
-  getRandoms  = TFRand getRandoms
+type TFRand a = TFRandT Identity a
+
+instance Monad m => MonadRandom (TFRandT m) where
+  getRandomR  = TFRandT . getRandomR
+  getRandom   = TFRandT getRandom
+  getRandomRs = TFRandT . getRandomRs
+  getRandoms  = TFRandT getRandoms
+
+instance MonadTrans TFRandT where { lift = TFRandT . lift; }
 
 -- | Evaluate a 'TFRand' function using a Twofish pseudo-random seed composed of any four 64-bit
 -- unsigned integers. The pure random result is returned.
@@ -89,9 +96,15 @@ arbTFRandIO = evalTFRandIO arbitrary
 -- function within another 'TFRand' function. If you simply want to generate a random value, it is
 -- better to use 'runTFRandSeed' or 'runTFRandIO'.
 evalTFRand :: TFRand a -> TFGen -> a
-evalTFRand (TFRand f) = evalRand f
+evalTFRand (TFRandT f) = evalRand f
 
 -- | Like 'evalTFRand' but does not disgard the Twofish random generator, allowing you to re-use it
 -- elsewhere.
 runTFRand :: TFRand a -> TFGen -> (a, TFGen)
-runTFRand (TFRand f) = runRand f
+runTFRand (TFRandT f) = runRand f
+
+evalTFRandT :: Monad m => TFRandT m a -> TFGen -> m a
+evalTFRandT (TFRandT f) = evalRandT f
+
+runTFRandT :: Monad m => TFRandT m a -> TFGen -> m (a, TFGen)
+runTFRandT (TFRandT f) = runRandT f
