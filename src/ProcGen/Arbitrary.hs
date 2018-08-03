@@ -19,6 +19,7 @@ import           Control.Monad.Trans
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
+import           Data.Semigroup
 import           Data.Functor.Identity
 import           Data.Word
 
@@ -68,6 +69,36 @@ instance Monad m => MonadRandom (TFRandT m) where
   getRandoms  = TFRandT getRandoms
 
 instance MonadTrans TFRandT where { lift = TFRandT . lift; }
+
+instance (Monad m, Semigroup a) => Semigroup (TFRandT m a) where
+  a <> b = (<>) <$> a <*> b
+
+instance (Monad m, Monoid a) => Monoid (TFRandT m a) where
+  mempty      = pure mempty
+  mappend a b = mappend <$> a <*> b
+
+instance (Num n, Monad m) => Num (TFRandT m n) where
+  (+) a b     = (+) <$> a <*> b
+  (-) a b     = (-) <$> a <*> b
+  (*) a b     = (*) <$> a <*> b
+  negate      = fmap negate
+  abs         = fmap abs
+  signum      = fmap signum
+  fromInteger = pure . fromInteger
+
+instance (Fractional n, Monad m) => Fractional (TFRandT m n) where
+  (/) a b      = (/) <$> a <*> b
+  recip        = fmap recip
+  fromRational = pure . fromRational
+
+instance (Floating n, Monad m) => Floating (TFRandT m n) where
+  { pi = pure pi; exp = fmap exp; log = fmap log; sqrt = fmap sqrt;
+    (**) a b = (**) <$> a <*> b; logBase a b = logBase <$> a <*> b;
+    sin   = fmap sin;   cos   = fmap cos;   tan   = fmap tan;
+    asin  = fmap asin;  acos  = fmap acos;  atan  = fmap atan;
+    sinh  = fmap sinh;  cosh  = fmap cosh;  tanh  = fmap tanh;
+    asinh = fmap asinh; acosh = fmap acosh; atanh = fmap atanh;
+  }
 
 -- | Evaluate a 'TFRand' function using a Twofish pseudo-random seed composed of any four 64-bit
 -- unsigned integers. The pure random result is returned.
