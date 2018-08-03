@@ -1,6 +1,11 @@
 module ProcGen.Music.Synth
   ( FDComponent(..), emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
+    FDSignalDefinition(..),
+    FDSigDefinitionElem(..),
+    FDSigShapeFreqSel(..),
+    FDSigShape(..),
+    FDSigShapeElem(..),
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
@@ -28,6 +33,7 @@ import           Control.Arrow
 import           Control.Monad.ST
 
 import           Data.Semigroup
+import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
@@ -78,6 +84,19 @@ emptyFDComponent = FDComponent
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
 nullFDComponent :: FDComponent -> Bool
 nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
+
+-- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this component.
+fdComponentSampleAt :: FDComponent -> Moment -> Sample
+fdComponentSampleAt fd t =
+  let (FDComponent{fdFrequency=freq,fdPhaseShift=phase}) = fd
+  in  if freq > nyquist then 0 else
+        fdComponentAmplitudeAt fd t * sin (phase + 2.0 * pi * freq * t)
+
+-- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
+-- time.
+fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
+fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
+  let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
 
 ----------------------------------------------------------------------------------------------------
 
@@ -134,6 +153,104 @@ fdComponentInsert c list = FDComponentList
   { theFDCompListElems  = c : theFDCompListElems  list
   , theFDCompListLength = 1 + theFDCompListLength list
   }
+
+----------------------------------------------------------------------------------------------------
+
+-- | This is a randomizable data structure that can define various kinds of frequency domain "shape"
+-- of a signal. These shapes can then be "rendered" to a 'FDSignal' using 'renderFDShape'.
+--
+-- When rendering a shape, there is always a reference frequency which always begins at t0 at 100%
+-- amplitude. All other components have random amplitudes, but the randomization is "shaped" by this
+-- data type.
+--
+-- The 'FDSigDefinition' is composed of a few fundamental elements that can be superimposed to
+-- construct the final 'FDSignal' rendering.
+--
+-- The 'FDSigDefinition' data itself does not contain a reference frequency, rather when rendering
+-- to a 'FDSignal' a reference frequency is specified and is applied to every rendering function
+-- that generates the 'FDComponent's.
+newtype FDSignalDefinition
+  = FDSignalDefinition{ unwrapFDSignalDefinition :: Boxed.Vector FDSigDefinitionElem }
+  deriving (Eq)
+
+-- | A 'FDSigShape' is constructed from one or more elements, where each element is a fundamental
+-- probability distribution (uniform, normal, quadratic) with it's own frequency and amplitude
+-- distribution characteristics.
+data FDSigDefinitionElem
+  = FDSigDefinitionElem
+    { sigShapeFreqSel :: !FDSigShapeFreqSel
+      -- ^ Select the frequencies for this element.
+    , sigShapeLevels  :: !FDSigShape
+      -- ^ Shape the amplitude of the selected frequencies by semi-randomly selecting amplitude
+      -- levels for each frequency.
+    }
+  deriving (Eq)
+
+-- | A frequency selector.
+data FDSigShapeFreqSel
+  = FDSigFreqSelArbitrary !Int !Int
+    -- ^ select more than or equal to @(lo :: Int)@ and less than or equal to @(hi :: Int)@
+    -- frequencies completely randomly.
+  | FDSigFreqSelRationals
+    { sigFreqSelNumerators   :: !(Unboxed.Vector Word8)
+    , sigFreqSelDenominators :: !(Unboxed.Vector Word8)
+    , sigFreqSelRandomizer   :: !FDSigFreqSelRandomizer -- ^ Maybe randomly limit the selection.
+    } -- ^ compose a list of rationals consisting of all given numerators divided by all given
+      -- denominators, these rationals will be multiplied by the reference frequency to generate the
+      -- frequencies for this shape element.
+  deriving (Eq)
+
+-- | This data type is used by the 'FDSigFreqSelRationals' constructor of the 'FDSigShapeFreqSel'
+-- data type. The 'FDSigFreqSelRationals' selector selects frequencies from a list of rational
+-- scalar multiples of the base frequency. 
+data FDSigFreqSelRandomizer
+  = FDSigFreqSelAll -- ^ Select all frequencies, do not randomly choose a subset of them.
+  | FDSigFreqSelRandomizer !Word8 !Word8
+    -- ^ Randomly choose a subset of frequencies containing a some number between
+    -- @(lo :: 'Data.Word.Word8')@ to @(hi :: 'Data.Word.Word8')@ elements.
+  deriving (Eq)
+
+-- | This data type defines how to randomized the "shape" of the amplitude levels of the various
+-- frequencies distributed across the audible spectrum.
+data FDSigShape
+  = FDSigShape
+  { sigShapeOvertones  :: !(Boxed.Vector FDSigShapeElem)
+    -- ^ Describes the frequencies higher the reference frequency.
+  , sigShapeUndertones :: !(Boxed.Vector FDSigShapeElem)
+    -- ^ Describes the freqeuncies lower than the reference frequency.
+  }
+  deriving (Eq)
+
+data FDSigShapeElem
+  = FDSigShapeElem
+    { sigShapeBandwidth :: !Probability
+      -- ^ What percentage of bandwidth along the audible frequency band does this particular
+      -- primitive apply it's shape.
+    , sigShapePrimitive :: !FDSigShapePrimitive
+      -- ^ The primitive function that generates the shape.
+    }
+  deriving (Eq)
+
+-- | This data type contains a few functions for shaping the amplitude levels of a set of
+-- frequencies. One or more of these defines the shape of all amplitudes along the frequency
+-- distribution.
+data FDSigShapePrimitive
+  = FDSigShapeLiner
+    -- ^ All frequencies draw a random amplitude between 0.0 and the reciporical of the reference
+    -- frequency.
+  | FSSigShapeUniformDist !Amplitude !Amplitude
+    -- ^ All frequencies draw a random amplitude between @(aMin :: 'Amplitude')@ and
+    -- @(aMax :: 'Amplitude').
+  | FDSigShapeNormal    !Bandwidth
+    -- ^ Bell curve shape with a given bandwidth variance around the reference frequency.
+  | FDSigShapeTrinomial !ProcGenFloat !ProcGenFloat !ProcGenFloat !ProcGenFloat
+    -- ^ Quadratic curve shape with four parameters @(a :: 'ProcGenFloat')@,
+    -- @(b :: 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of
+    -- this curve is given by the equation: @(\ t -> a*t^3 + b*t^2 + c*t + d)@, where the amplitude
+    -- of a frequency value @f@ and the reference frequency @r@, the value of @t@ passed to this
+    -- function is @t = r - f@, meaning the value t0 applied to this trinomial function describes
+    -- the amplitude of the reference frequency.
+  deriving (Eq)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -291,34 +408,27 @@ listTDSamples td@(TDSignal vec) =
 minMaxTDSignal :: TDSignal -> (Sample, Sample)
 minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 
--- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this component.
-fdComponentSampleAt :: FDComponent -> Moment -> Sample
-fdComponentSampleAt fd t =
-  let (FDComponent{fdFrequency=freq,fdPhaseShift=phase}) = fd
-  in  if freq > nyquist then 0 else
-        fdComponentAmplitudeAt fd t * sin(phase + 2.0 * pi * freq * t)
-
--- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
--- time.
-fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
-fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
-  let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
-
 -- | This function creates a 'TDSignal' by performing the __I__nverse __D__iscrete __C__osine
 -- __T__ransform on the given 'FDSignal'.
 idct :: Duration -> FDSignal -> TDSignal
-idct dt fd = TDSignal
-  { tdSamples = Unboxed.create $ do
-      let n = durationSampleCount dt
-      if n <= 0 then Mutable.new 0 else do
-        vec <- Mutable.new n
-        forM_ [0 .. n-1] $ \ t -> Mutable.write vec t $ sum $ do
-          fd <- listFDElems fd
-          guard $ fdFrequency fd <= nyquist
-          [fdComponentSampleAt fd $ indexToTime t]
-        minMaxVec vec >>= normalize vec
-        return vec
-  }
+idct dt fd = TDSignal{ tdSamples = Unboxed.create $ idctST dt fd}
+
+-- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be
+-- incorporated into functions with randomized signals more easily (by
+-- 'Control.Monad.Trans.lift'-ing it into a 'ProcGen.Arbitrary.TFRandT' function type). This
+-- function has no randomization itself, it is simply designed to play well with randomizing
+-- functions.
+idctST :: Duration -> FDSignal -> ST s (Mutable.STVector s Sample)
+idctST dt fd = do
+  let n = durationSampleCount dt
+  if n <= 0 then Mutable.new 0 else do
+    vec <- Mutable.new n
+    forM_ [0 .. n-1] $ \ t -> Mutable.write vec t $ sum $ do
+      fd <- listFDElems fd
+      guard $ fdFrequency fd <= nyquist
+      [fdComponentSampleAt fd $ indexToTime t]
+    minMaxVec vec >>= normalize vec
+    return vec
 
 -- | Accumulates a signal into an 'Mutable.STVector' that consists of a single sine wave, but the
 -- amplitude of the wave is randomly modified for every cycle. This creates noise with a very narrow
@@ -326,8 +436,8 @@ idct dt fd = TDSignal
 randAmpPulseST
   :: Mutable.STVector s Sample
   -> TimeWindow Moment
-  -> Frequency -> TFRandT (ST s) ()
-randAmpPulseST mvec cwin freq = do
+  -> Frequency -> PhaseShift -> TFRandT (ST s) ()
+randAmpPulseST mvec cwin freq phase = do
   let ti = fst . timeIndex
   let size = ti (3 / freq) + 1
   table <- lift $ Mutable.new size
@@ -343,8 +453,10 @@ randAmpPulseST mvec cwin freq = do
         let i = fst $ timeIndex t
         loop amp i 0
         pulses $ t + (2 / freq)
-  pulses $ timeStart cwin
+  pulses $ ((\ p -> if p < 0 then p + freq else p) $ contMod phase freq) + timeStart cwin
 
+-- | Uses the @IO@ monad to generate a random seed, then evaluates the 'randAmpPulseST' function to
+-- a pure function value.
 randAmpPulse :: Frequency -> Duration -> IO TDSignal
 randAmpPulse freq dur = do
   gen <- initTFGen
@@ -353,7 +465,7 @@ randAmpPulse freq dur = do
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new size
-        flip evalTFRandT gen $ randAmpPulseST mvec win freq
+        flip evalTFRandT gen $ randAmpPulseST mvec win freq (0.0)
         return mvec
     }
 

@@ -32,6 +32,7 @@ type Wavelength  = ProcGenFloat
 type PhaseShift  = ProcGenFloat
 type Probability = ProcGenFloat
 type HalfLife    = ProcGenFloat
+type Bandwidth   = ProcGenFloat
 
 -- | Note that when you apply the 'TimeWindow', the remaining 'Envelope' type is synonymous with the
 -- type @'Moment' -> 'Sample'@, and that this data type has an @instance@ for the 'TimeDomain'
