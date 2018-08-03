@@ -5,8 +5,8 @@ import           Control.Monad.ST
 
 import           Data.Int
 import           Data.STRef
-import qualified Data.Vector.Unboxed         as Unboxed
-import qualified Data.Vector.Unboxed.Mutable as Mutable
+import qualified Data.Vector.Unboxed              as Unboxed
+import qualified Data.Vector.Unboxed.Mutable      as Mutable
 
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
@@ -474,3 +474,13 @@ twEnum (TimeWindow{ timeStart=t0, timeEnd=t1 }) =
 twMoments :: TimeWindow Moment -> [Moment]
 twMoments = twParametric unitQuanta
 
+-- | Similar to 'twMoments' but maps the results with @('timeIndex')@
+twIterate :: TimeWindow Moment -> [(Int, ProcGenFloat)]
+twIterate = fmap timeIndex . twMoments
+
+-- | Similar to 'twIterate' but is designed for use with vectors, this function does bounds checking
+-- on the vector once to make sure the 'TimeWindow' given does not exceed the bounds of the
+-- vector. Pass the length of the vector as the first parameter.
+twIndicies :: Int -> TimeWindow Moment -> [Int]
+twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
+  [max 0 $ min len $ durationSampleCount t0 .. min len $ durationSampleCount end]

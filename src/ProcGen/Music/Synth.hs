@@ -11,7 +11,8 @@ module ProcGen.Music.Synth
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
     randAmpPulseST, randAmpPulse,
-    TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, idct,
+    TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration,
+    idct, idctST, idctRandAmpPulse, idctRandAmpPulseST,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     FDView(..), fdView, runFDView,
     TDView(..), tdView, runTDView,
@@ -156,8 +157,8 @@ fdComponentInsert c list = FDComponentList
 
 ----------------------------------------------------------------------------------------------------
 
--- | This is a randomizable data structure that can define various kinds of frequency domain "shape"
--- of a signal. These shapes can then be "rendered" to a 'FDSignal' using 'renderFDShape'.
+-- | This is a randomizable data structure that can define various kinds of spectral "shapes" of a
+-- signal. These shapes can then be rendered to a 'FDSignal' using 'renderFDShape'.
 --
 -- When rendering a shape, there is always a reference frequency which always begins at t0 at 100%
 -- amplitude. All other components have random amplitudes, but the randomization is "shaped" by this
@@ -411,61 +412,93 @@ minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 -- | This function creates a 'TDSignal' by performing the __I__nverse __D__iscrete __C__osine
 -- __T__ransform on the given 'FDSignal'.
 idct :: Duration -> FDSignal -> TDSignal
-idct dt fd = TDSignal{ tdSamples = Unboxed.create $ idctST dt fd}
+idct dt fd = TDSignal
+  { tdSamples = let n = durationSampleCount dt in Unboxed.create $
+      if n <= 0 then Mutable.new 0 else do
+        mvec <- Mutable.new $ n + 1
+        idctST mvec (TimeWindow{ timeStart = 0, timeEnd = dt }) fd
+        minMaxVec mvec >>= normalize mvec
+        return mvec
+  }
 
--- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be
--- incorporated into functions with randomized signals more easily (by
--- 'Control.Monad.Trans.lift'-ing it into a 'ProcGen.Arbitrary.TFRandT' function type). This
--- function has no randomization itself, it is simply designed to play well with randomizing
--- functions.
-idctST :: Duration -> FDSignal -> ST s (Mutable.STVector s Sample)
-idctST dt fd = do
-  let n = durationSampleCount dt
-  if n <= 0 then Mutable.new 0 else do
-    vec <- Mutable.new n
-    forM_ [0 .. n-1] $ \ t -> Mutable.write vec t $ sum $ do
-      fd <- listFDElems fd
-      guard $ fdFrequency fd <= nyquist
-      [fdComponentSampleAt fd $ indexToTime t]
-    minMaxVec vec >>= normalize vec
-    return vec
+-- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be use
+-- cumulatively on 'Mutable.STVector's. WARNING: the results are not normalized, so you will almost
+-- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate
+-- @\ mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
+idctST :: Mutable.STVector s Sample -> TimeWindow Moment -> FDSignal -> ST s ()
+idctST mvec win fd =
+  forM_ (twIndicies (Mutable.length mvec) win) $ \ i -> Mutable.write mvec i $! sum $ do
+    fd <- listFDElems fd
+    guard $ fdFrequency fd <= nyquist
+    [fdComponentSampleAt fd $ indexToTime i]
 
 -- | Accumulates a signal into an 'Mutable.STVector' that consists of a single sine wave, but the
 -- amplitude of the wave is randomly modified for every cycle. This creates noise with a very narrow
 -- frequency spectrum.
 randAmpPulseST
   :: Mutable.STVector s Sample
-  -> TimeWindow Moment
-  -> Frequency -> PhaseShift -> TFRandT (ST s) ()
-randAmpPulseST mvec cwin freq phase = do
-  let ti = fst . timeIndex
-  let size = ti (3 / freq) + 1
-  table <- lift $ Mutable.new size
-  lift $ forM_ [0 .. size - 1] $ \ i ->
-    Mutable.write table i $ sinePulse3 freq (0.0) $ indexToTime i
-  let loop amp i j =
-        if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
-          lift $ Mutable.write mvec i =<<
-            liftM2 (+) (Mutable.read mvec i) ((* amp) <$> Mutable.read table j)
-          loop amp (i + 1) (j + 1)
-  let pulses t = if t >= timeEnd cwin then return () else do
-        amp <- getRandom :: TFRandT (ST s) Float
-        let i = fst $ timeIndex t
-        loop amp i 0
-        pulses $ t + (2 / freq)
-  pulses $ ((\ p -> if p < 0 then p + freq else p) $ contMod phase freq) + timeStart cwin
+  -> TimeWindow Moment -> FDComponent -> TFRandT (ST s) ()
+randAmpPulseST mvec win
+  (FDComponent{fdFrequency=freq,fdAmplitude=amp0,fdPhaseShift=phase,fdDecayRate=decay}) = do
+    let ti = fst . timeIndex
+    let size = ti (3 / freq) + 1
+    -- A table of values is used here because we are not simply summing sine waves, we are creating a
+    -- sine wave with a sigmoidal fade-in and fade-out, which requires two Float32 multiplications,
+    -- two calls to 'exp', two calls to 'recip', and one calls to 'sin' for each index. It is probably
+    -- faster on most computer hardware to store these values to a table rather than compute them on
+    -- the fly.
+    table <- lift $ Mutable.new size
+    lift $ forM_ [0 .. size - 1] $ \ i ->
+      Mutable.write table i $ sinePulse3 freq (0.0) $ indexToTime i
+    let t0 = ((\ p -> if p < 0 then p + freq else p) $ contMod phase freq) + timeStart win
+    let loop amp i j =
+          if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
+            let decamp = amp0 * amp * decay ** (indexToTime i - t0)
+            lift $ Mutable.write mvec i =<<
+              liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
+            loop amp (i + 1) (j + 1)
+    let pulses t = if t >= timeEnd win then return () else do
+          amp <- getRandom :: TFRandT (ST s) Float
+          let i = fst $ timeIndex t
+          loop amp i 0
+          pulses $! t + 2 / freq
+    pulses t0
+
+-- | Renders a 'FDSignal' using 'randAmpPulseST', rather than a clean sine wave. This can be used to
+-- generate noise with very precise spectral characteristics.
+idctRandAmpPulseST
+  :: Mutable.STVector s Sample
+  -> TimeWindow Moment -> FDSignal -> TFRandT (ST s) ()
+idctRandAmpPulseST mvec win = mapM_ (randAmpPulseST mvec win) . listFDElems
+
+-- | Renders a 'FDSignal' using 'randAmpPulseST', rather than a clean sine wave. This can be used to
+-- generate noise with very precise spectral characteristics.
+idctRandAmpPulse :: Duration -> FDSignal -> IO TDSignal
+idctRandAmpPulse dur fd = do
+  gen <- initTFGen
+  let size = durationSampleCount dur
+  let win  = TimeWindow { timeStart = 0, timeEnd = dur }
+  return TDSignal
+    { tdSamples = Unboxed.create $ do
+        mvec <- Mutable.new $ size + 1
+        flip evalTFRandT gen $ idctRandAmpPulseST mvec win fd
+        minMaxVec mvec >>= normalize mvec
+        return mvec
+    }
 
 -- | Uses the @IO@ monad to generate a random seed, then evaluates the 'randAmpPulseST' function to
 -- a pure function value.
-randAmpPulse :: Frequency -> Duration -> IO TDSignal
-randAmpPulse freq dur = do
+randAmpPulse :: Frequency -> Duration -> HalfLife -> IO TDSignal
+randAmpPulse freq dur decay = do
   gen <- initTFGen
   let size = durationSampleCount dur
-  let win = TimeWindow{ timeStart = 0, timeEnd = dur } :: TimeWindow Moment
+  let win  = TimeWindow{ timeStart = 0, timeEnd = dur } :: TimeWindow Moment
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new size
-        flip evalTFRandT gen $ randAmpPulseST mvec win freq (0.0)
+        flip evalTFRandT gen $ randAmpPulseST mvec win FDComponent
+          { fdFrequency = freq, fdAmplitude = 1.0, fdPhaseShift = 0.0, fdDecayRate = decay }
+        minMaxVec mvec >>= normalize mvec
         return mvec
     }
 
@@ -672,7 +705,7 @@ runTDView = do
 
 ----------------------------------------------------------------------------------------------------
 
--- | A GUI designed to allow you to dra wa random frequency domain graph with the mouse cursor. As
+-- | A GUI designed to allow you to draw a random frequency domain graph with the mouse cursor. As
 -- you draw, random 'FDComponents' are added or removed (depending on whether you have set
 -- 'InsertMode' or 'RemoveMode'). You can then scale-up these components to an 'FDSignal' which can
 -- then be converted to a 'TDSignal'.
