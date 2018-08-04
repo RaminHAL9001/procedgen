@@ -242,8 +242,14 @@ sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
 -- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that the
 -- name of this function has to do with the fact that it creates a sine pulse of three cycles, not
 -- that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
-sinePulse3 :: Frequency -> PhaseShift -> Moment -> Sample
-sinePulse3 freq t0 t = sin (2 * pi * freq * (t0 + t)) *
+sinePulse3
+  :: Frequency
+     -- ^ Frequency of the sine wave, also determines the size of the pulse equal to 3 times the
+     -- inverse of the frequency.
+  -> Moment -- ^ The start time of the pulse, where the signal ramps-up.
+  -> PhaseShift -- ^ The phase shift of the sine wave relative to the above pulse start time.
+  -> Moment -> Sample
+sinePulse3 freq t0 phase t = sin (2 * pi * freq * (t0 + phase + t)) *
   fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
 
 -- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
