@@ -265,6 +265,15 @@ sinePulseSum comps t = case comps of
 normal :: TimeScale -> Moment -> Sample
 normal var x = exp $ negate $ x * x * exp 2 / var * var
 
+-- | Create a Beta distribution curve of rank @n@ where @n is the first paramter passed to this
+-- function. The curve is not limited to the range between 'Moment's 0 and 1, however it is mostly
+-- on this interval between 0 and 1 where this function is useful. The rank is compareable to the
+-- rank of a polynomial, however non-integer values may be passed for exponentiation. The
+-- reciporical of the rank defines where the peak value lies, that is for which value of @n@ such
+-- that @(beta n (1/n)) == 1.0@.
+beta :: ProcGenFloat -> Moment -> Sample
+beta rank x = let n = rank - 1 in rank**rank * x * (1 - x)**n / n**n
+
 -- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
 -- converting from a real-number value to an integer vector index, with linear smoothing for values
 -- between vector elements (which means, for example, an index of 0.5 will be the average of index 0
@@ -317,7 +326,7 @@ inverseTransformSample table s = loop (div len 2) i0 $ lookup i0 where
   i0     = div len 2
   loop :: Int -> Int -> Sample -> Moment
   loop prevStep i0 prevVal =
-    if prevStep <= 1 || prevVal == s then 1.0 - 2.0 * realToFrac i0 / realToFrac len else
+    if prevStep <= 1 then 1.0 - 2.0 * realToFrac i0 / realToFrac len else
       let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
           i        = i0 + nextStep
       in  loop nextStep i $ lookup i
@@ -363,6 +372,26 @@ inverseNormalTable = newITSTable (normal 1.0) 4096
 -- @(inverseTransformSample ('newITSTable' ('normal' 1.0) 4096))@.
 inverseNormal :: Sample -> Moment
 inverseNormal = inverseTransformSample inverseNormalTable
+
+-- | Another often used probability distribution is the Beta distribution, which is a polynomial
+-- favoring values closest to the point @1/n@ where @n@ is the rank of the polynomial. This table
+-- approximates the cumulative distribution function for a Beta distribution polynomial of rank 5,
+-- thus the most probably values produced by the 'inverseBeta5' are values around @1/5@.
+inverseBeta5Table :: CumulativeDistributionTable
+inverseBeta5Table = newITSTable (beta 5) 4096
+
+-- | Another often used probability distribution is the Beta distribution, which is a polynomial
+-- favoring values closest to the point @1/n@ where @n@ is the rank of the polynomial. This table
+-- approximates the cumulative distribution function for a Beta distribution polynomial of rank 5,
+-- thus the most probably values produced by the 'inverseBeta5' are values around @1/5@.
+inverseBeta5 :: Sample -> Moment
+inverseBeta5 = inverseTransformSample inverseBeta5Table
+
+inverseBeta3Table :: CumulativeDistributionTable
+inverseBeta3Table = newITSTable (beta 3) 4096
+
+inverseBeta3 :: Sample -> Moment
+inverseBeta3 = inverseTransformSample inverseBeta3Table
 
 ----------------------------------------------------------------------------------------------------
 
