@@ -11,8 +11,6 @@ import qualified Data.Vector.Unboxed.Mutable      as Mutable
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
 
---import Debug.Trace
-
 ----------------------------------------------------------------------------------------------------
 
 type SampleCount = Int
@@ -315,50 +313,65 @@ newITSTable cpdf size = Unboxed.create $ do
   return mvec
 
 -- | Compute the inverse transform sample function, the computation is performed with a
--- 'Unboxed.Vector' created by the 'newITSTable' function. This function uses a binary search to
--- traverse the 'CumulativeDistributionTable', so the time compexity of this function is @O(log n)@
--- where @n@ is the size of the 'CumulativeDistributionTable'. For a table of 4096 == 2^12 elements,
--- this function is guaranteed to execute no more than 12 table lookups.
+-- 'Unboxed.Vector' created by the 'newITSTable' function. The result of this function is always an
+-- index value in the given 'CumulativeDistributionTable' divided by the size of the
+-- 'CumulativeDistributionTable', which guarantees the result is a value between 0 and 1. When a
+-- random value between 0 and 1 is selected as an input 'Sample' to this function, the output random
+-- value is going to be shifted such that it is more likely to lie near a high point on the
+-- probability distribution function, and less likely to lie near a low point.
+--
+-- For example, for a 'inverseNormalTable' (which approximates the cumulative distribution function
+-- table for the 'normal' function), most of the values resulting from this function will be near to
+-- @1/2@, and there will almost never be a value near 0 or near 1. As another example, when
+-- evaluating this function on random value with the 'inverseBeta5' table, most random outputs will
+-- be nearest the value @1/5@, and values near 1.0 will almost never happen.
+--
+-- This function uses a binary search to traverse the 'CumulativeDistributionTable', so the time
+-- compexity of this function is @O(log n)@ where @n@ is the size of the
+-- 'CumulativeDistributionTable'. For a table of 4096 == 2^12 elements, this function is guaranteed
+-- to execute no more than 12 table lookups.
 inverseTransformSample :: CumulativeDistributionTable -> Sample -> Moment
-inverseTransformSample table s = loop (div len 2) i0 $ lookup i0 where
-  lookup = (table Unboxed.!)
-  len    = Unboxed.length table
-  i0     = div len 2
-  loop :: Int -> Int -> Sample -> Moment
-  loop prevStep i0 prevVal =
-    if prevStep <= 1 then 1.0 - 2.0 * realToFrac i0 / realToFrac len else
-      let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
-          i        = i0 + nextStep
-      in  loop nextStep i $ lookup i
-  -- This algorithm works by using a table for values of the continuous cumulative distribution
-  -- function. Suppose it takes a random 'Sample' input between 0 and 1, and a sequence of descrete
-  -- buckets along the X axis. This purpose of this function is to adjust all random 'Sample's so
-  -- that the odds of a sample landing in a discrete bucket along the X axis is about equal to the
-  -- value of the normal curve for the X position of that bucket.
-  --
-  -- To accomplish this, the list of weighted elements method is used, which is a method of
-  -- specifying a list of elements with weights, and taking a random number, then taking a running
-  -- sum of all of the weights of each element in the list (this is also called a Cumulative
-  -- Distribution Function). If the running sum is less than the random number, then the weight is
-  -- added to the running sum and the next element is checked. Each succesive element is checked
-  -- until the running sum exceeds the random number.
-  --
-  -- This function does the same, but with a mathematical "hack" to make it faster. The list of
-  -- elements is the bucket along the X axis to choose, and the weight of each bucket is the normal
-  -- of the X position of that bucket. So instead of taking a running sum through the list every
-  -- time, we store the running sum of each bucket into a table (i.e. we take the discrete integral
-  -- of the probability distribution function). Then we binary search for which index in the table
-  -- is closest to the random input variable. The expression:
-  -- 
-  -- @(prevStep <= 1 || prevValue == s)@
-  --
-  -- is the binary branch choice, which decides whether to move the search cursor up or down based
-  -- on whether the running sum at the current table index is less than or greater the input
-  -- 'Sample'. The search cursor starts in the middle of the table and has a step value which starts
-  -- at a quarter the length of the table. The cursor jumps up or down by this step value, and after
-  -- each jump, the step value is halved. The cursor continues to seek a value until the step size
-  -- is less than or equal to 1, or in the event that the exact input 'Sample' value is found in the
-  -- table (which is highly unlikely).
+inverseTransformSample table s = if 0.0 < s && s < 1.0 then loop i0 i0 $ lookup i0 else
+  error $ "(inverseTransformSample "++show s++") error: must be evaluated on value beween 0 and 1"
+  where
+    lookup = (table Unboxed.!)
+    len    = Unboxed.length table
+    i0     = div len 2
+    loop :: Int -> Int -> Sample -> Moment
+    loop prevStep i0 prevVal =
+      if prevStep <= 1 || prevVal == s then realToFrac i0 / realToFrac len else
+        let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
+            i        = i0 + nextStep
+        in  loop nextStep i $ lookup i
+    -- This algorithm works by using a table for values of the continuous cumulative distribution
+    -- function. Suppose it takes a random 'Sample' input between 0 and 1, and a sequence of descrete
+    -- buckets along the X axis. This purpose of this function is to adjust all random 'Sample's so
+    -- that the odds of a sample landing in a discrete bucket along the X axis is about equal to the
+    -- value of the normal curve for the X position of that bucket.
+    --
+    -- To accomplish this, the list of weighted elements method is used, which is a method of
+    -- specifying a list of elements with weights, and taking a random number, then taking a running
+    -- sum of all of the weights of each element in the list (this is also called a Cumulative
+    -- Distribution Function). If the running sum is less than the random number, then the weight is
+    -- added to the running sum and the next element is checked. Each succesive element is checked
+    -- until the running sum exceeds the random number.
+    --
+    -- This function does the same, but with a mathematical "hack" to make it faster. The list of
+    -- elements is the bucket along the X axis to choose, and the weight of each bucket is the normal
+    -- of the X position of that bucket. So instead of taking a running sum through the list every
+    -- time, we store the running sum of each bucket into a table (i.e. we take the discrete integral
+    -- of the probability distribution function). Then we binary search for which index in the table
+    -- is closest to the random input variable. The expression:
+    -- 
+    -- @(prevStep <= 1 || prevValue == s)@
+    --
+    -- is the binary branch choice, which decides whether to move the search cursor up or down based
+    -- on whether the running sum at the current table index is less than or greater the input
+    -- 'Sample'. The search cursor starts in the middle of the table and has a step value which starts
+    -- at a quarter the length of the table. The cursor jumps up or down by this step value, and after
+    -- each jump, the step value is halved. The cursor continues to seek a value until the step size
+    -- is less than or equal to 1, or in the event that the exact input 'Sample' value is found in the
+    -- table (which is highly unlikely).
 
 -- | The most commonly used probability distribution function is the Gaussian 'normal'
 -- function. Since it is so common, a default cumulative distribution table for the normal

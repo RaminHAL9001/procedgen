@@ -8,19 +8,23 @@ module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary, onRandFloat,
     TFRandT(..), TFRand, evalTFRandSeed, evalTFRandIO, arbTFRandSeed, arbTFRandIO,
     evalTFRand, runTFRand, evalTFRandT, runTFRandT,
-    System.Random.TF.Init.initTFGen,
+    System.Random.TF.Init.initTFGen, testDistributionFunction,
     module Control.Monad.Random.Class,
   ) where
 
 import           ProcGen.Types
 
+import           Control.Exception (evaluate)
 import           Control.Monad
+import           Control.Monad.ST
 import           Control.Monad.Trans
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
 import           Data.Semigroup
 import           Data.Functor.Identity
+import qualified Data.Vector.Unboxed              as Unboxed
+import qualified Data.Vector.Unboxed.Mutable      as Mutable
 import           Data.Word
 
 import           System.Random.TF
@@ -58,7 +62,7 @@ onRandFloat f = f <$> getRandom
 -- 'Control.Monad.Random.Class.MonadRandom' class so that you can use this to evaluate an instance
 -- of 'arbitrary'. 
 newtype TFRandT m a = TFRandT { unwrapTFRandT :: RandT TFGen m a }
-  deriving (Functor, Applicative, Monad)
+  deriving (Functor, Applicative, Monad, MonadIO)
 
 type TFRand a = TFRandT Identity a
 
@@ -139,3 +143,44 @@ evalTFRandT (TFRandT f) = evalRandT f
 
 runTFRandT :: Monad m => TFRandT m a -> TFGen -> m (a, TFGen)
 runTFRandT (TFRandT f) = runRandT f
+
+----------------------------------------------------------------------------------------------------
+
+-- not for export
+normIOtoST
+  :: Mutable.IOVector Int
+  -> ProcGenFloat -- maxval
+  -> Int -- index
+  -> (forall s . ST s (Mutable.STVector s ProcGenFloat))
+  -> IO (Unboxed.Vector ProcGenFloat)
+normIOtoST mvec maxval i nvecst = seq nvecst $!
+  if i == Mutable.length mvec then evaluate (Unboxed.create nvecst) else do
+    e <- Mutable.read mvec i
+    normIOtoST mvec maxval (i + 1) $ do
+      nvec <- nvecst
+      Mutable.write nvec i $! realToFrac e / maxval
+      return nvec
+
+-- | A function for testing a 'CPDFunction' using a 'CumulativeDistributionTable'. This function
+-- creates an immutable 'Unboxed.Vector' with a number of "buckets" evenly-spaced along the
+-- 'Unboxed.Vector' indicies, then uses a fair random number generator to produce random values and
+-- applying each to the 'inverseTransformSample' function with the 'CumulativeDistributionTable' to
+-- generate random index values distributed according to the bias in the
+-- 'CumulativeDistributionTable'. Each biased random index is then treated as a counter token used
+-- to increment the index of the associated "bucket" (as if the token is placed in the bucket) in
+-- the 'Unboxed.Vector'. The result is a normalized 'Unboxed.Vector', where the maximum index in the
+-- vector is @1.0@ and all elements in the array have been divided by the number of token counters
+-- in the bucket with the most token counters.
+testDistributionFunction
+  :: Int -- ^ The size of the 'Unboxed.Vector' to create.
+  -> Int -- ^ The number of random indicies to generate
+  -> IO (Unboxed.Vector ProcGenFloat)
+testDistributionFunction size count = do
+  mvec <- Mutable.new size :: IO (Mutable.IOVector Int)
+  let loop maxval count = if count <= 0 then return maxval else do
+        i <- onRandFloat $ floor . ((realToFrac size) *)
+        e <- (1 +) <$> liftIO (Mutable.read mvec i)
+        liftIO $ Mutable.write mvec i (e + 1)
+        (loop $! max e maxval) $! count - 1
+  (maxval, _) <- initTFGen >>= runTFRandT (loop 0 count)
+  normIOtoST mvec (realToFrac maxval) 0 (Mutable.new (Mutable.length mvec))
