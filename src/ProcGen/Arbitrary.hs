@@ -146,6 +146,31 @@ runTFRandT (TFRandT f) = runRandT f
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A function for testing a 'CPDFunction' using a 'CumulativeDistributionTable'. This function
+-- creates an immutable 'Unboxed.Vector' with a number of "buckets" evenly-spaced along the
+-- 'Unboxed.Vector' indicies, then uses a fair random number generator to produce random values and
+-- applying each to the 'inverseTransformSample' function with the 'CumulativeDistributionTable' to
+-- generate random index values distributed according to the bias in the
+-- 'CumulativeDistributionTable'. Each biased random index is then treated as a counter token used
+-- to increment the index of the associated "bucket" (as if the token is placed in the bucket) in
+-- the 'Unboxed.Vector'. The result is a normalized 'Unboxed.Vector', where the maximum index in the
+-- vector is @1.0@ and all elements in the array have been divided by the number of token counters
+-- in the bucket with the most token counters.
+testDistributionFunction
+  :: Int -- ^ The size of the 'Unboxed.Vector' to create.
+  -> Int -- ^ The number of random indicies to generate
+  -> CumulativeDistributionTable
+  -> IO (Unboxed.Vector ProcGenFloat)
+testDistributionFunction size count table = do
+  mvec <- Mutable.new size :: IO (Mutable.IOVector Int)
+  let loop maxval count = if count <= 0 then return maxval else do
+        i <- onRandFloat $ floor . ((realToFrac size) *) . inverseTransformSample table
+        e <- (1 +) <$> liftIO (Mutable.read mvec i)
+        liftIO $ Mutable.write mvec i (e + 1)
+        (loop $! max e maxval) $! count - 1
+  (maxval, _) <- initTFGen >>= runTFRandT (loop 0 count)
+  normIOtoST mvec (realToFrac maxval) 0 (Mutable.new (Mutable.length mvec))
+
 -- not for export
 normIOtoST
   :: Mutable.IOVector Int
@@ -160,27 +185,3 @@ normIOtoST mvec maxval i nvecst = seq nvecst $!
       nvec <- nvecst
       Mutable.write nvec i $! realToFrac e / maxval
       return nvec
-
--- | A function for testing a 'CPDFunction' using a 'CumulativeDistributionTable'. This function
--- creates an immutable 'Unboxed.Vector' with a number of "buckets" evenly-spaced along the
--- 'Unboxed.Vector' indicies, then uses a fair random number generator to produce random values and
--- applying each to the 'inverseTransformSample' function with the 'CumulativeDistributionTable' to
--- generate random index values distributed according to the bias in the
--- 'CumulativeDistributionTable'. Each biased random index is then treated as a counter token used
--- to increment the index of the associated "bucket" (as if the token is placed in the bucket) in
--- the 'Unboxed.Vector'. The result is a normalized 'Unboxed.Vector', where the maximum index in the
--- vector is @1.0@ and all elements in the array have been divided by the number of token counters
--- in the bucket with the most token counters.
-testDistributionFunction
-  :: Int -- ^ The size of the 'Unboxed.Vector' to create.
-  -> Int -- ^ The number of random indicies to generate
-  -> IO (Unboxed.Vector ProcGenFloat)
-testDistributionFunction size count = do
-  mvec <- Mutable.new size :: IO (Mutable.IOVector Int)
-  let loop maxval count = if count <= 0 then return maxval else do
-        i <- onRandFloat $ floor . ((realToFrac size) *)
-        e <- (1 +) <$> liftIO (Mutable.read mvec i)
-        liftIO $ Mutable.write mvec i (e + 1)
-        (loop $! max e maxval) $! count - 1
-  (maxval, _) <- initTFGen >>= runTFRandT (loop 0 count)
-  normIOtoST mvec (realToFrac maxval) 0 (Mutable.new (Mutable.length mvec))
