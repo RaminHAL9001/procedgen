@@ -283,7 +283,7 @@ continuous
                -- integer indicies to real-number indicies.
   -> Unboxed.Vector Sample -> Moment -> Sample
 continuous before after scale vec t =
-  if i + 1 < 0 then before else if len < i then after else lo + d * (hi - lo) where
+  if i + 1 < 0 then before else if len <= i then after else lo + d * (hi - lo) where
     st  = scale * t
     i   = floor st
     d   = st - realToFrac i
@@ -304,10 +304,10 @@ continuous before after scale vec t =
 -- table size that will fit within the cache.
 newITSTable :: CPDFunction -> Int -> Unboxed.Vector Moment
 newITSTable cpdf size = Unboxed.create $ do
-  mvec <- Mutable.new (size - 1)
+  mvec <- Mutable.new size
   let f s i = do
         Mutable.write mvec i s
-        return $ s + cpdf (1.0 - 2.0 * realToFrac i / realToFrac size)
+        return $ s + cpdf (realToFrac i / realToFrac size)
   maxsamp <- foldM f (0.0) [0 .. size - 1]
   mapM_ (\ i -> Mutable.read mvec i >>= Mutable.write mvec i . (/ maxsamp)) [0 .. size - 1]
   return mvec
@@ -331,16 +331,15 @@ newITSTable cpdf size = Unboxed.create $ do
 -- 'CumulativeDistributionTable'. For a table of 4096 == 2^12 elements, this function is guaranteed
 -- to execute no more than 12 table lookups.
 inverseTransformSample :: CumulativeDistributionTable -> Sample -> Moment
-inverseTransformSample table s = if 0.0 < s && s < 1.0 then loop i0 i0 $ lookup i0 else
+inverseTransformSample table s = if 0.0 <= s && s <= 1.0 then loop i0 i0 $ lookup i0 else
   error $ "(inverseTransformSample "++show s++") error: must be evaluated on value beween 0 and 1"
   where
     lookup = (table Unboxed.!)
-    len    = Unboxed.length table
-    i0     = div len 2
-    loop :: Int -> Int -> Sample -> Moment
-    loop prevStep i0 prevVal =
-      if prevStep <= 1 || prevVal == s then realToFrac i0 / realToFrac len else
-        let nextStep = (if prevVal > s then negate else id) $ abs $ div prevStep 2
+    size   = Unboxed.length table
+    i0     = div size 2
+    loop prevStep i0 prevVal = let absPrevStep = abs prevStep in
+      if absPrevStep <= 1 || prevVal == s then realToFrac i0 / realToFrac size else
+        let nextStep = (if prevVal > s then negate else id) $ div absPrevStep 2
             i        = i0 + nextStep
         in  loop nextStep i $ lookup i
     -- This algorithm works by using a table for values of the continuous cumulative distribution
@@ -377,7 +376,7 @@ inverseTransformSample table s = if 0.0 < s && s < 1.0 then loop i0 i0 $ lookup 
 -- function. Since it is so common, a default cumulative distribution table for the normal
 -- distribution is provided here, which is equal to @('newITSTable' ('normal' 1.0) 4096)@.
 inverseNormalTable :: CumulativeDistributionTable
-inverseNormalTable = newITSTable (normal 1.0) 4096
+inverseNormalTable = newITSTable (normal 1.0 . subtract 1.0 . (2.0 *)) 4096
 
 -- | The most commonly used probability distribution function is the Gaussian 'normal'
 -- function. Since it is so common, a default inverse transofmr sample function for the normal

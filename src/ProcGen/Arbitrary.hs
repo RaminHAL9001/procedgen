@@ -164,7 +164,7 @@ testDistributionFunction
 testDistributionFunction size count table = do
   mvec <- Mutable.new size :: IO (Mutable.IOVector Int)
   let loop maxval count = if count <= 0 then return maxval else do
-        i <- onRandFloat $ floor . ((realToFrac size) *) . inverseTransformSample table
+        i <- onRandFloat $ round . ((realToFrac (size - 1)) *) . inverseTransformSample table
         e <- (1 +) <$> liftIO (Mutable.read mvec i)
         liftIO $ Mutable.write mvec i (e + 1)
         (loop $! max e maxval) $! count - 1
