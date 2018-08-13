@@ -33,6 +33,7 @@ import           ProcGen.VectorBuilder
 import           Control.Arrow
 import           Control.Monad.ST
 
+import           Data.Bits
 import           Data.Semigroup
 import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
@@ -157,6 +158,9 @@ fdComponentInsert c list = FDComponentList
 
 ----------------------------------------------------------------------------------------------------
 
+class FDSignalRenderable a where
+  fdSignalRender :: Monad m => a -> StateT FDComponentList (TFRandT m) ()
+
 -- | This is a randomizable data structure that can define various kinds of spectral "shapes" of a
 -- signal. These shapes can then be rendered to a 'FDSignal' using 'renderFDShape'.
 --
@@ -174,6 +178,14 @@ newtype FDSignalDefinition
   = FDSignalDefinition{ unwrapFDSignalDefinition :: Boxed.Vector FDSigDefinitionElem }
   deriving (Eq)
 
+instance Arbitrary FDSignalDefinition where
+  arbitrary = FDSignalDefinition . Boxed.fromList <$> arbitraryList (1, 11)
+
+--instance FDSignalRenderable FDSignalDefinition where
+--  fdSignalRender = mapM_ fdSignalRender . unwrapFDSignalDefinition
+
+----------------------------------------------------------------------------------------------------
+
 -- | A 'FDSigShape' is constructed from one or more elements, where each element is a fundamental
 -- probability distribution (uniform, normal, quadratic) with it's own frequency and amplitude
 -- distribution characteristics.
@@ -182,34 +194,51 @@ data FDSigDefinitionElem
     { sigShapeFreqSel :: !FDSigShapeFreqSel
       -- ^ Select the frequencies for this element.
     , sigShapeLevels  :: !FDSigShape
-      -- ^ Shape the amplitude of the selected frequencies by semi-randomly selecting amplitude
-      -- levels for each frequency.
+      -- ^ Shape the amplitude of the selected frequencies using a function that determines what
+      -- shape of the frequency domain levels will look like when rendered.
     }
   deriving (Eq)
 
--- | A frequency selector.
+instance Arbitrary FDSigDefinitionElem where
+  arbitrary = FDSigDefinitionElem <$> arbitrary <*> arbitrary
+  arbitraryList (lo, hi) = do
+    nelems <- onBeta5RandFloat (floatToIntRange lo hi)
+    replicateM nelems arbitrary
+
+----------------------------------------------------------------------------------------------------
+
+-- | A frequency selector, which can limit frequencies that can be randomly selected. A "rational"
+-- selector allows only rational-numbered multiples of the base frequency to be selected.
 data FDSigShapeFreqSel
-  = FDSigFreqSelArbitrary !Int !Int
+  = FDSigFreqSelArbitrary !Word8 !Word8
     -- ^ select more than or equal to @(lo :: Int)@ and less than or equal to @(hi :: Int)@
-    -- frequencies completely randomly.
+    -- frequencies, but the frequencies are selected randomly using an unbiased, uniform random
+    -- number distribution.
   | FDSigFreqSelRationals
-    { sigFreqSelNumerators   :: !(Unboxed.Vector Word8)
-    , sigFreqSelDenominators :: !(Unboxed.Vector Word8)
-    , sigFreqSelRandomizer   :: !FDSigFreqSelRandomizer -- ^ Maybe randomly limit the selection.
-    } -- ^ compose a list of rationals consisting of all given numerators divided by all given
+    { sigFreqSelNumerators   :: !(Unboxed.Vector Word16)
+    , sigFreqSelDenominators :: !(Unboxed.Vector Word16)
+      } -- ^ compose a list of rationals consisting of all given numerators divided by all given
       -- denominators, these rationals will be multiplied by the reference frequency to generate the
       -- frequencies for this shape element.
   deriving (Eq)
 
--- | This data type is used by the 'FDSigFreqSelRationals' constructor of the 'FDSigShapeFreqSel'
--- data type. The 'FDSigFreqSelRationals' selector selects frequencies from a list of rational
--- scalar multiples of the base frequency. 
-data FDSigFreqSelRandomizer
-  = FDSigFreqSelAll -- ^ Select all frequencies, do not randomly choose a subset of them.
-  | FDSigFreqSelRandomizer !Word8 !Word8
-    -- ^ Randomly choose a subset of frequencies containing a some number between
-    -- @(lo :: 'Data.Word.Word8')@ to @(hi :: 'Data.Word.Word8')@ elements.
-  deriving (Eq)
+instance Arbitrary FDSigShapeFreqSel where
+  arbitrary = do
+    unrestricted <- ((< 128) :: Word8 -> Bool) <$> getRandom
+    if unrestricted
+     then do
+      let word8 max = onBeta5RandFloat (floatToIntRange 1 max)
+      a <- word8 63
+      b <- word8 255
+      return $ FDSigFreqSelArbitrary (min a b) (max a b)
+     else do
+      let factors = liftM (Unboxed.fromList . concat) $ forM [2,3,5,7] $ \ p -> do
+            w <- getRandom
+            let exps = testBit (w :: Word8) `filter` [0..4]
+            return $ (p ^) <$> exps
+      FDSigFreqSelRationals <$> factors <*> factors
+
+----------------------------------------------------------------------------------------------------
 
 -- | This data type defines how to randomized the "shape" of the amplitude levels of the various
 -- frequencies distributed across the audible spectrum.
@@ -222,15 +251,32 @@ data FDSigShape
   }
   deriving (Eq)
 
+instance Arbitrary FDSigShape where
+  arbitrary = do
+    let elems a b = Boxed.fromList <$> arbitraryList (a, b)
+    FDSigShape <$> elems 1 7 <*> elems 0 6
+
+----------------------------------------------------------------------------------------------------
+
 data FDSigShapeElem
   = FDSigShapeElem
-    { sigShapeBandwidth :: !Probability
+    { sigShapeBandwidth :: !Bandwidth
       -- ^ What percentage of bandwidth along the audible frequency band does this particular
       -- primitive apply it's shape.
     , sigShapePrimitive :: !FDSigShapePrimitive
       -- ^ The primitive function that generates the shape.
     }
   deriving (Eq)
+
+instance Arbitrary FDSigShapeElem where
+  arbitrary = FDSigShapeElem <$> onNormalRandFloat id <*> arbitrary
+  arbitraryList (a, b) = do
+    n <- onBeta5RandFloat (floatToIntRange a b)
+    elems <- replicateM n arbitrary
+    let s = sum $ sigShapeBandwidth <$> elems
+    return $ (\ e -> e{ sigShapeBandwidth = sigShapeBandwidth e / s }) <$> elems
+
+----------------------------------------------------------------------------------------------------
 
 -- | This data type contains a few functions for shaping the amplitude levels of a set of
 -- frequencies. One or more of these defines the shape of all amplitudes along the frequency
@@ -239,19 +285,27 @@ data FDSigShapePrimitive
   = FDSigShapeLiner
     -- ^ All frequencies draw a random amplitude between 0.0 and the reciporical of the reference
     -- frequency.
-  | FSSigShapeUniformDist !Amplitude !Amplitude
+  | FDSigShapeUniformDist !Amplitude !Amplitude
     -- ^ All frequencies draw a random amplitude between @(aMin :: 'Amplitude')@ and
     -- @(aMax :: 'Amplitude').
   | FDSigShapeNormal    !Bandwidth
     -- ^ Bell curve shape with a given bandwidth variance around the reference frequency.
   | FDSigShapeTrinomial !ProcGenFloat !ProcGenFloat !ProcGenFloat !ProcGenFloat
-    -- ^ Quadratic curve shape with four parameters @(a :: 'ProcGenFloat')@,
-    -- @(b :: 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of
-    -- this curve is given by the equation: @(\ t -> a*t^3 + b*t^2 + c*t + d)@, where the amplitude
-    -- of a frequency value @f@ and the reference frequency @r@, the value of @t@ passed to this
-    -- function is @t = r - f@, meaning the value t0 applied to this trinomial function describes
-    -- the amplitude of the reference frequency.
+    -- ^ Quadratic curve shape with four parameters @(a :: 'ProcGenFloat')@, @(b ::
+    -- 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of this
+    -- curve is given by four points that construct a Bezier curve for the amplitude as a function
+    -- of frequency.
   deriving (Eq)
+
+instance Arbitrary FDSigShapePrimitive where
+  arbitrary = do
+    n <- (`mod` (4 :: Word8)) <$> getRandom
+    case n of
+      0 -> return FDSigShapeLiner
+      1 -> FDSigShapeUniformDist <$> getRandom <*> getRandom
+      2 -> FDSigShapeNormal      <$> getRandom
+      3 -> FDSigShapeTrinomial   <$> getRandom <*> getRandom <*> getRandom <*> getRandom
+      _ -> error $ "Arbitrary FDSigShapePrimitive -- (constructor "++show n++")"
 
 ----------------------------------------------------------------------------------------------------
 
