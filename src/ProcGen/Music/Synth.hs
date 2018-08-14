@@ -2,10 +2,10 @@ module ProcGen.Music.Synth
   ( FDComponent(..), emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
     FDSignalDefinition(..),
-    FDSigDefinitionElem(..),
+    FDSigDefElem(..),
     FDSigShapeFreqSel(..),
     FDSigShape(..),
-    FDSigShapeElem(..),
+    FDSigShapeElem(..), fdSignalRender,
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
@@ -100,6 +100,9 @@ fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
 fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
   let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
 
+randPhase :: MonadRandom m => m PhaseShift
+randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A lazy functional data type isomorphic to 'FDSignal'.
@@ -128,7 +131,7 @@ randFDComponents base = do
     dice <- getRandom :: TFRand Word8
     if dice > 4 then return [] else do
       amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
-      phase <- onRandFloat $ (* (2*pi)) . subtract 0.5
+      phase <- randPhase
       decay <- onRandFloat (* 2)
       return $ do
         let freq = base * mul
@@ -158,9 +161,6 @@ fdComponentInsert c list = FDComponentList
 
 ----------------------------------------------------------------------------------------------------
 
-class FDSignalRenderable a where
-  fdSignalRender :: Monad m => a -> StateT FDComponentList (TFRandT m) ()
-
 -- | This is a randomizable data structure that can define various kinds of spectral "shapes" of a
 -- signal. These shapes can then be rendered to a 'FDSignal' using 'renderFDShape'.
 --
@@ -168,29 +168,42 @@ class FDSignalRenderable a where
 -- amplitude. All other components have random amplitudes, but the randomization is "shaped" by this
 -- data type.
 --
--- The 'FDSigDefinition' is composed of a few fundamental elements that can be superimposed to
+-- The 'FDSigDef' is composed of a few fundamental elements that can be superimposed to
 -- construct the final 'FDSignal' rendering.
 --
--- The 'FDSigDefinition' data itself does not contain a reference frequency, rather when rendering
+-- The 'FDSigDef' data itself does not contain a reference frequency, rather when rendering
 -- to a 'FDSignal' a reference frequency is specified and is applied to every rendering function
 -- that generates the 'FDComponent's.
 newtype FDSignalDefinition
-  = FDSignalDefinition{ unwrapFDSignalDefinition :: Boxed.Vector FDSigDefinitionElem }
+  = FDSignalDefinition{ unwrapFDSignalDefinition :: Boxed.Vector FDSigDefElem }
   deriving (Eq)
 
 instance Arbitrary FDSignalDefinition where
   arbitrary = FDSignalDefinition . Boxed.fromList <$> arbitraryList (1, 11)
 
---instance FDSignalRenderable FDSignalDefinition where
---  fdSignalRender = mapM_ fdSignalRender . unwrapFDSignalDefinition
+type FDSignalRenderer m a = StateT FDComponentList m a
+type Base freq = freq
+
+-- | Within a random monad render as 'FDSignalDefinition' to a 'FDSignal'.
+fdSignalRender :: MonadRandom m => FDSignalDefinition -> Base Frequency -> m FDSignal
+fdSignalRender def base = flip evalStateT (mempty :: FDComponentList) $ do
+  forM_ (Boxed.toList $ unwrapFDSignalDefinition def) $ flip fdSigDefElemRender base
+  phase <- randPhase
+  modify $ fdComponentInsert FDComponent
+    { fdFrequency  = base
+    , fdAmplitude  = 1.0
+    , fdPhaseShift = phase
+    , fdDecayRate  = 0.0
+    }
+  gets fdSignal
 
 ----------------------------------------------------------------------------------------------------
 
 -- | A 'FDSigShape' is constructed from one or more elements, where each element is a fundamental
 -- probability distribution (uniform, normal, quadratic) with it's own frequency and amplitude
 -- distribution characteristics.
-data FDSigDefinitionElem
-  = FDSigDefinitionElem
+data FDSigDefElem
+  = FDSigDefElem
     { sigShapeFreqSel :: !FDSigShapeFreqSel
       -- ^ Select the frequencies for this element.
     , sigShapeLevels  :: !FDSigShape
@@ -199,11 +212,26 @@ data FDSigDefinitionElem
     }
   deriving (Eq)
 
-instance Arbitrary FDSigDefinitionElem where
-  arbitrary = FDSigDefinitionElem <$> arbitrary <*> arbitrary
+instance Arbitrary FDSigDefElem where
+  arbitrary = FDSigDefElem <$> arbitrary <*> arbitrary
   arbitraryList (lo, hi) = do
     nelems <- onBeta5RandFloat (floatToIntRange lo hi)
     replicateM nelems arbitrary
+
+fdSigDefElemRender :: MonadRandom m => FDSigDefElem -> Base Frequency -> FDSignalRenderer m ()
+fdSigDefElemRender (FDSigDefElem{sigShapeFreqSel=selFreq,sigShapeLevels=levels}) base =
+  fdSigShapeFreqSelRender selFreq base >>= mapM_
+    (\ freq -> do
+        phase <- lift randPhase
+        decay <- lift $ onBeta5RandFloat id
+        amp   <- lift $ fdSigShaper levels base freq
+        modify $ fdComponentInsert FDComponent
+          { fdFrequency  = freq
+          , fdAmplitude  = amp
+          , fdPhaseShift = phase
+          , fdDecayRate  = decay
+          }
+    )
 
 ----------------------------------------------------------------------------------------------------
 
@@ -212,12 +240,12 @@ instance Arbitrary FDSigDefinitionElem where
 data FDSigShapeFreqSel
   = FDSigFreqSelArbitrary !Word8 !Word8
     -- ^ select more than or equal to @(lo :: Int)@ and less than or equal to @(hi :: Int)@
-    -- frequencies, but the frequencies are selected randomly using an unbiased, uniform random
-    -- number distribution.
+    -- frequencies, but the frequencies are selected using an normal distribution centered around
+    -- the base frequency.
   | FDSigFreqSelRationals
     { sigFreqSelNumerators   :: !(Unboxed.Vector Word16)
     , sigFreqSelDenominators :: !(Unboxed.Vector Word16)
-      } -- ^ compose a list of rationals consisting of all given numerators divided by all given
+    } -- ^ compose a list of rationals consisting of all given numerators divided by all given
       -- denominators, these rationals will be multiplied by the reference frequency to generate the
       -- frequencies for this shape element.
   deriving (Eq)
@@ -238,6 +266,20 @@ instance Arbitrary FDSigShapeFreqSel where
             return $ (p ^) <$> exps
       FDSigFreqSelRationals <$> factors <*> factors
 
+fdSigShapeFreqSelRender
+  :: MonadRandom m
+  => FDSigShapeFreqSel
+  -> Base Frequency
+  -> m [Frequency]
+fdSigShapeFreqSelRender = \ case
+  FDSigFreqSelArbitrary   lo     hi -> \ base -> do
+    n <- getRandomR (lo, hi)
+    replicateM (fromIntegral n) $ onNormalRandFloat $ (* base) . (* 2)
+  FDSigFreqSelRationals nums denoms -> \ base -> return $ do
+    a <- realToFrac <$> Unboxed.toList nums
+    b <- realToFrac <$> Unboxed.toList denoms
+    if a == b then [] else [a * base / b]
+
 ----------------------------------------------------------------------------------------------------
 
 -- | This data type defines how to randomized the "shape" of the amplitude levels of the various
@@ -256,14 +298,36 @@ instance Arbitrary FDSigShape where
     let elems a b = Boxed.fromList <$> arbitraryList (a, b)
     FDSigShape <$> elems 1 7 <*> elems 0 6
 
+-- | Produce a function of type @('ProcGen.Types.Frequency' -> 'ProcGen.Types.Amplitude')@ given a
+-- 'FDSigShape' data structure and a reference 'ProcGen.Types.Frequency'.
+fdSigShaper :: MonadRandom m => FDSigShape -> Base Frequency -> (Frequency -> m Amplitude)
+fdSigShaper (FDSigShape{sigShapeOvertones=over,sigShapeUndertones=under}) base freq =
+  if freq == base then pure 1.0 else 
+  if freq >  base then fdSigShapePiecewise over base nyquist freq else
+    fdSigShapePiecewise under 15.0 base freq
+
+fdSigShapePiecewise
+  :: MonadRandom m
+  => Boxed.Vector FDSigShapeElem
+  -> Frequency -> Frequency
+  -> Frequency -> m Amplitude
+fdSigShapePiecewise vec lo hi = loop lo elems where
+  elems = Boxed.toList vec
+  scale = hi - lo
+  s     = sum $ sigShapeElemBandwidth <$> elems
+  loop lo elems freq = case elems of
+    []         -> pure 0.0
+    elem:elems -> let hi = scale * sigShapeElemBandwidth elem / s in
+      if lo <= freq && freq < hi then fdSigShapeElem elem lo freq else loop hi elems freq
+
 ----------------------------------------------------------------------------------------------------
 
 data FDSigShapeElem
   = FDSigShapeElem
-    { sigShapeBandwidth :: !Bandwidth
+    { sigShapeElemBandwidth :: !Bandwidth
       -- ^ What percentage of bandwidth along the audible frequency band does this particular
       -- primitive apply it's shape.
-    , sigShapePrimitive :: !FDSigShapePrimitive
+    , sigShapeElemPrimitive :: !FDSigShapePrimitive
       -- ^ The primitive function that generates the shape.
     }
   deriving (Eq)
@@ -273,8 +337,12 @@ instance Arbitrary FDSigShapeElem where
   arbitraryList (a, b) = do
     n <- onBeta5RandFloat (floatToIntRange a b)
     elems <- replicateM n arbitrary
-    let s = sum $ sigShapeBandwidth <$> elems
-    return $ (\ e -> e{ sigShapeBandwidth = sigShapeBandwidth e / s }) <$> elems
+    let s = sum $ sigShapeElemBandwidth <$> elems
+    return $ (\ e -> e{ sigShapeElemBandwidth = sigShapeElemBandwidth e / s }) <$> elems
+
+fdSigShapeElem :: MonadRandom m => FDSigShapeElem -> Frequency -> Frequency -> m Amplitude
+fdSigShapeElem elem lo freq = sigShapePrimitive (sigShapeElemPrimitive elem) $
+  (freq - lo) / sigShapeElemBandwidth elem
 
 ----------------------------------------------------------------------------------------------------
 
@@ -282,15 +350,15 @@ instance Arbitrary FDSigShapeElem where
 -- frequencies. One or more of these defines the shape of all amplitudes along the frequency
 -- distribution.
 data FDSigShapePrimitive
-  = FDSigShapeLiner
+  = FDSigShapeLinear
     -- ^ All frequencies draw a random amplitude between 0.0 and the reciporical of the reference
     -- frequency.
   | FDSigShapeUniformDist !Amplitude !Amplitude
     -- ^ All frequencies draw a random amplitude between @(aMin :: 'Amplitude')@ and
     -- @(aMax :: 'Amplitude').
-  | FDSigShapeNormal    !Bandwidth
+  | FDSigShapeNormal      !Bandwidth
     -- ^ Bell curve shape with a given bandwidth variance around the reference frequency.
-  | FDSigShapeTrinomial !ProcGenFloat !ProcGenFloat !ProcGenFloat !ProcGenFloat
+  | FDSigShapeBezier      !ProcGenFloat !ProcGenFloat !ProcGenFloat !ProcGenFloat
     -- ^ Quadratic curve shape with four parameters @(a :: 'ProcGenFloat')@, @(b ::
     -- 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of this
     -- curve is given by four points that construct a Bezier curve for the amplitude as a function
@@ -301,11 +369,18 @@ instance Arbitrary FDSigShapePrimitive where
   arbitrary = do
     n <- (`mod` (4 :: Word8)) <$> getRandom
     case n of
-      0 -> return FDSigShapeLiner
+      0 -> return FDSigShapeLinear
       1 -> FDSigShapeUniformDist <$> getRandom <*> getRandom
       2 -> FDSigShapeNormal      <$> getRandom
-      3 -> FDSigShapeTrinomial   <$> getRandom <*> getRandom <*> getRandom <*> getRandom
+      3 -> FDSigShapeBezier      <$> getRandom <*> getRandom <*> getRandom <*> getRandom
       _ -> error $ "Arbitrary FDSigShapePrimitive -- (constructor "++show n++")"
+
+sigShapePrimitive :: MonadRandom m => FDSigShapePrimitive -> Frequency -> m Amplitude
+sigShapePrimitive = \ case
+  FDSigShapeLinear            -> pure . clamp0_1
+  FDSigShapeUniformDist lo hi -> const $ onRandFloat $ clamp0_1 . (+ lo) . (* (hi - lo))
+  FDSigShapeNormal      band  -> pure . clamp0_1 . normal band
+  FDSigShapeBezier    a b c d -> pure . clamp0_1 . bezier3 a b c d
 
 ----------------------------------------------------------------------------------------------------
 
