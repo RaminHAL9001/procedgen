@@ -304,22 +304,22 @@ instance Arbitrary FDSigShape where
 fdSigShaper :: MonadRandom m => FDSigShape -> Base Frequency -> (Frequency -> m Amplitude)
 fdSigShaper (FDSigShape{sigShapeOvertones=over,sigShapeUndertones=under}) base freq =
   if freq == base then pure 1.0 else 
-  if freq >  base then fdSigShapePiecewise over base nyquist freq else
-    fdSigShapePiecewise under 15.0 base freq
+  if freq >  base then fdSigShapePiecewise over base base nyquist freq else
+    fdSigShapePiecewise under base 15.0 base freq
 
 fdSigShapePiecewise
   :: MonadRandom m
-  => Boxed.Vector FDSigShapeElem
+  => Boxed.Vector FDSigShapeElem -> Base Frequency
   -> Frequency -> Frequency
   -> Frequency -> m Amplitude
-fdSigShapePiecewise vec lo hi = loop lo elems where
+fdSigShapePiecewise vec base lo hi = loop lo elems where
   elems = Boxed.toList vec
   scale = hi - lo
   s     = sum $ sigShapeElemBandwidth <$> elems
   loop a elems freq = case elems of
     []         -> pure 0.0
     elem:elems -> let b = scale * sigShapeElemBandwidth elem / s in
-      if a <= freq && freq < b then fdSigShapeElem elem lo freq else loop b elems freq
+      if a <= freq && freq < b then fdSigShapeElem elem base lo freq else loop b elems freq
 
 ----------------------------------------------------------------------------------------------------
 
@@ -341,8 +341,14 @@ instance Arbitrary FDSigShapeElem where
     let s = sum $ sigShapeElemBandwidth <$> elems
     return $ (\ e -> e{ sigShapeElemBandwidth = sigShapeElemBandwidth e / s }) <$> elems
 
-fdSigShapeElem :: MonadRandom m => FDSigShapeElem -> Frequency -> Frequency -> m Amplitude
-fdSigShapeElem elem lo freq = sigShapePrimitive (sigShapeElemPrimitive elem) $
+fdSigShapeElem
+  :: MonadRandom m
+  => FDSigShapeElem
+  -> Base Frequency
+  -> Frequency
+  -> Frequency
+  -> m Amplitude
+fdSigShapeElem elem base lo freq = sigShapePrimitive (sigShapeElemPrimitive elem) base $
   (freq - lo) / sigShapeElemBandwidth elem
 
 ----------------------------------------------------------------------------------------------------
@@ -376,9 +382,14 @@ instance Arbitrary FDSigShapePrimitive where
       3 -> FDSigShapeBezier      <$> getRandom <*> getRandom <*> getRandom <*> getRandom
       _ -> error $ "Arbitrary FDSigShapePrimitive -- (constructor "++show n++")"
 
-sigShapePrimitive :: MonadRandom m => FDSigShapePrimitive -> Frequency -> m Amplitude
-sigShapePrimitive = \ case
-  FDSigShapeLinear            -> pure . clamp0_1
+sigShapePrimitive
+  :: MonadRandom m
+  => FDSigShapePrimitive
+  -> Base Frequency
+  -> Frequency
+  -> m Amplitude
+sigShapePrimitive prim base = case prim of
+  FDSigShapeLinear            -> \ freq -> pure $ 1 / (abs $ freq - base)
   FDSigShapeUniformDist lo hi -> const $ onRandFloat $ clamp0_1 . (+ lo) . (* (hi - lo))
   FDSigShapeNormal      band  -> pure . clamp0_1 . normal band
   FDSigShapeBezier    a b c d -> pure . clamp0_1 . bezier3 a b c d
