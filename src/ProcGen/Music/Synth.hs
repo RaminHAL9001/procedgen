@@ -225,7 +225,7 @@ fdSigDefElemRender (FDSigDefElem{sigShapeFreqSel=selFreq,sigShapeLevels=levels})
         phase <- lift randPhase
         decay <- lift $ onBeta5RandFloat id
         amp   <- lift $ fdSigShaper levels base freq
-        modify $ fdComponentInsert FDComponent
+        unless (amp == 0) $ modify $ fdComponentInsert FDComponent
           { fdFrequency  = freq
           , fdAmplitude  = amp
           , fdPhaseShift = phase
@@ -278,7 +278,8 @@ fdSigShapeFreqSelRender = \ case
   FDSigFreqSelRationals nums denoms -> \ base -> return $ do
     a <- realToFrac <$> Unboxed.toList nums
     b <- realToFrac <$> Unboxed.toList denoms
-    if a == b then [] else [a * base / b]
+    let freq = a * base / b
+    if a == b || freq < 15.0 || freq > nyquist then [] else [freq]
 
 ----------------------------------------------------------------------------------------------------
 
@@ -315,10 +316,10 @@ fdSigShapePiecewise vec lo hi = loop lo elems where
   elems = Boxed.toList vec
   scale = hi - lo
   s     = sum $ sigShapeElemBandwidth <$> elems
-  loop lo elems freq = case elems of
+  loop a elems freq = case elems of
     []         -> pure 0.0
-    elem:elems -> let hi = scale * sigShapeElemBandwidth elem / s in
-      if lo <= freq && freq < hi then fdSigShapeElem elem lo freq else loop hi elems freq
+    elem:elems -> let b = scale * sigShapeElemBandwidth elem / s in
+      if a <= freq && freq < b then fdSigShapeElem elem lo freq else loop b elems freq
 
 ----------------------------------------------------------------------------------------------------
 
