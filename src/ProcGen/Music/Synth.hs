@@ -315,23 +315,29 @@ fdSigShapePiecewise
 fdSigShapePiecewise vec base lo hi = loop lo elems where
   elems = Boxed.toList vec
   scale = hi - lo
-  s     = sum $ sigShapeElemBandwidth <$> elems
+  s     = sum $ sigShapeElemBandwidth <$> elems -- this should be equal to 1, but just in case
   loop a elems freq = case elems of
     []         -> pure 0.0
-    elem:elems -> let b = scale * sigShapeElemBandwidth elem / s in
-      if a <= freq && freq < b then fdSigShapeElem elem base lo freq else loop b elems freq
+    elem:elems ->
+      let band    = sigShapeElemBandwidth elem
+          percent = band / s
+          gap     = scale * percent
+          b       = a + gap
+      in  if a <= freq && freq < b
+           then fdSigShapeElem (elem{ sigShapeElemBandwidth = percent }) base lo gap freq
+           else loop b elems freq
 
 ----------------------------------------------------------------------------------------------------
 
 data FDSigShapeElem
   = FDSigShapeElem
-    { sigShapeElemBandwidth :: !Bandwidth
+    { sigShapeElemBandwidth :: !Percentage
       -- ^ What percentage of bandwidth along the audible frequency band does this particular
       -- primitive apply it's shape.
     , sigShapeElemPrimitive :: !FDSigShapePrimitive
       -- ^ The primitive function that generates the shape.
     }
-  deriving (Eq)
+  deriving (Eq, Show)
 
 instance Arbitrary FDSigShapeElem where
   arbitrary = FDSigShapeElem <$> onNormalRandFloat id <*> arbitrary
@@ -347,9 +353,10 @@ fdSigShapeElem
   -> Base Frequency
   -> Frequency
   -> Frequency
+  -> Bandwidth
   -> m Amplitude
-fdSigShapeElem elem base lo freq = sigShapePrimitive (sigShapeElemPrimitive elem) base $
-  (freq - lo) / sigShapeElemBandwidth elem
+fdSigShapeElem elem base lo gap freq =
+  sigShapePrimitive (sigShapeElemPrimitive elem) base ((freq - lo) / gap)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -370,7 +377,7 @@ data FDSigShapePrimitive
     -- 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of this
     -- curve is given by four points that construct a Bezier curve for the amplitude as a function
     -- of frequency.
-  deriving (Eq)
+  deriving (Eq, Show)
 
 instance Arbitrary FDSigShapePrimitive where
   arbitrary = do
@@ -382,6 +389,7 @@ instance Arbitrary FDSigShapePrimitive where
       3 -> FDSigShapeBezier      <$> getRandom <*> getRandom <*> getRandom <*> getRandom
       _ -> error $ "Arbitrary FDSigShapePrimitive -- (constructor "++show n++")"
 
+-- TODO: bug-fix on this function, test to make sure reasonable amplitudes are being returned.
 sigShapePrimitive
   :: MonadRandom m
   => FDSigShapePrimitive
