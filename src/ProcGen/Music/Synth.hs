@@ -1,7 +1,12 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
 module ProcGen.Music.Synth
-  ( FDSignalDefinition(..),
+  ( -- * Constructing Musical Instruments
+    InstrumentDefinition(..),
+    RationalInstrument(..), instrumentRange,
+    InstrumentRange(..), instrumentKeyRange, instrumentFreqRange, instrumentKeyRange1,
+    -- * Frequency Domain Function Construction
+    FDSignalDefinition(..),
     FDSigDefElem(..),
     FDSigShapeFreqSel(..),
     FDSigShape(..),
@@ -13,9 +18,11 @@ module ProcGen.Music.Synth
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
     randAmpPulseST, randAmpPulse,
+    -- * Time Domain Function Construction
     TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration,
     idct, idctST, idctRandAmpPulse, idctRandAmpPulseST,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
+    -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
     TDView(..), tdView, runTDView,
     --tdViewInitTime, tdViewAnimate, tdViewFrameCount, tdViewAtTime,
@@ -28,6 +35,7 @@ import           Happlets.Lib.Gtk
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Collapsible
+import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
 import           ProcGen.VectorBuilder
@@ -47,6 +55,86 @@ import           Linear.V2
 import qualified Graphics.Rendering.Cairo    as Cairo
 
 import           Text.Printf
+
+----------------------------------------------------------------------------------------------------
+
+-- | This data type defines a musical instrument. It contains tunable parameters which are basically
+-- fuzzy boolean values (0% == False, 100% == True, all values in between are valid) which can be
+-- used to construct a 'FDSignalDefinition' which defines the timber of the instrument.
+data InstrumentDefinition
+  = InstrumentDefinition
+    { isSustainedInstrument :: !Percentage
+      -- ^ If this is true, the instrument beahves more like a stringed or winded instrument which
+      -- produces a continuous sound as long as energy is applied to the instrument. If this is
+      -- false, the instrument behaves like a percussive instrument which produces a tone when
+      -- "struck" but the tone fades over time.
+    , isMelodicInstrument   :: !Percentage
+      -- ^ If this is false, the instrument sounds more lika a drum or cymbal random frequncies have
+      -- equal weight to melodic frequencies (frequencies which are rational multiples of the base
+      -- frequency). If this is true, the random frequncies have equal weight with the melodic
+      -- frequencies.
+    , rationalInstrument    :: !RationalInstrument
+      -- ^ Defines whehter frequencies which define this sound are more random or more rational.
+    }
+
+-- | Defines whether a sound is more random or more rational. A more random (irrational) sound has
+-- component frequencies determined at random. A more rational sound has frequencies determined as a
+-- rational number multiple of the base frequency.
+data RationalInstrument
+  = IrrationalInstrument
+      -- ^ This defines an instrument that generates a lot of noise when the sound is first
+      -- produced, like a violin played impoperly, or a snare drum, or a cymbal hit with a hard
+      -- stick.
+  | RationaInstrument
+    { noiseHalfLife         :: !HalfLife
+      -- ^ How long does the noisy initial portion of the sound last.
+    , lowerInstrumentRange  :: !InstrumentRange
+      -- ^ Defines the lower frequency range of this instrument
+    , upperInstrumentRange  :: !InstrumentRange
+      -- ^ Defines the upper frequency range of this instrument
+    }
+      -- ^ This defines an instrument that is more like a bell or a string hit with a soft object,
+      -- the instrument has no noisy components, the moment the sound is produced, it is sounding at
+      -- exactly the resonant frequency.
+
+-- | If the instrument is a 'RationalInstrument', return it's lower and upper 'InstrumentRange'
+-- components.
+instrumentRange :: RationalInstrument -> Maybe (InstrumentRange, InstrumentRange)
+instrumentRange = \ case
+  IrrationalInstrument -> Nothing
+  RationaInstrument{ lowerInstrumentRange=a, upperInstrumentRange=b } -> Just (a, b)
+
+data InstrumentRange
+  = BassRange     -- ^ octve #1 .. 2
+  | BaritoneRange -- ^        2 .. 4
+  | TenorRange    -- ^        3 .. 5
+  | AltoRange     -- ^        4 .. 6
+  | SopranoRange  -- ^        6 .. 7
+  deriving (Eq, Ord, Show, Read, Enum)
+
+-- | Convert the 'instrumentRange' of an 'InstrumentDefinition' to a lower and upper bound
+-- 'Frequency' for the range of frequencies that an instrument may produce.
+instrumentFreqRange :: InstrumentDefinition -> Maybe (Frequency, Frequency)
+instrumentFreqRange = fmap (keyboard88 *** keyboard88) . instrumentKeyRange
+
+-- | Convert the 'instrumentRange' of an 'InstrumentDefinition' to a lower and upper bound
+-- 'ProcGen.Music.KeyFreq88.keyboard88' key index value for the range of frequencies that an
+-- instrument may produce. Pianos encompass the entire range.
+instrumentKeyRange :: InstrumentDefinition -> Maybe (Int, Int)
+instrumentKeyRange def = do
+  ((a, b), (c, d)) <- (instrumentKeyRange1 *** instrumentKeyRange1)
+    <$> instrumentRange (rationalInstrument def)
+  return (min a $ min b $ min c d, max a $ max b $ max c d)
+
+-- | Take an 'InstrumentRange' component and return which 'ProcGen.Music.KeyFreq88.keyboard88' key
+-- indicies are the upper and lower bound for that 'InstrumentRange'.
+instrumentKeyRange1 :: InstrumentRange -> (Int, Int)
+instrumentKeyRange1 = \ case
+  BassRange     -> ( 0, 23)
+  BaritoneRange -> (18, 41)
+  TenorRange    -> (36, 59)
+  AltoRange     -> (54, 77)
+  SopranoRange  -> (72, 87)
 
 ----------------------------------------------------------------------------------------------------
 
