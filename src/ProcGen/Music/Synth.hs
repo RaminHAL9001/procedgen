@@ -1,11 +1,13 @@
+-- | This module defines the data types and functions for creating sound effects that can be used as
+-- musical instruments.
 module ProcGen.Music.Synth
-  ( FDComponent(..), emptyFDComponent,
-    FDComponentList, randFDComponents, fdComponentInsert,
-    FDSignalDefinition(..),
+  ( FDSignalDefinition(..),
     FDSigDefElem(..),
     FDSigShapeFreqSel(..),
     FDSigShape(..),
     FDSigShapeElem(..), fdSignalRender,
+    FDComponent(..), emptyFDComponent,
+    FDComponentList, randFDComponents, fdComponentInsert,
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
