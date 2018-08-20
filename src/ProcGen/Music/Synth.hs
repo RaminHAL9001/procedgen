@@ -48,119 +48,6 @@ import           Text.Printf
 
 ----------------------------------------------------------------------------------------------------
 
--- | Used to count the number of component frequencies in an 'FDSignal'
-type ComponentCount = Int
-
--- | Used to select a single component frequency from an 'FDSignal'
-type ComponentIndex = Int
-
-data FDComponent
-  = FDComponent
-    { fdFrequency  :: !Frequency
-    , fdAmplitude  :: !Amplitude
-    , fdPhaseShift :: !PhaseShift
-    , fdDecayRate  :: !HalfLife
-    }
-  deriving (Eq, Ord)
-
-instance Show FDComponent where
-  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f)"
-    (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
-
-instance Collapsible Float FDComponent where
-  collapse =
-    buildRecord fdFrequency <>
-    buildRecord fdAmplitude <>
-    buildRecord fdPhaseShift <>
-    buildRecord fdDecayRate
-  uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
-
-emptyFDComponent :: FDComponent
-emptyFDComponent = FDComponent
-  { fdFrequency  = 0
-  , fdAmplitude  = 0
-  , fdPhaseShift = 0
-  , fdDecayRate  = 0
-  }
-
--- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
-nullFDComponent :: FDComponent -> Bool
-nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
-
--- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this component.
-fdComponentSampleAt :: FDComponent -> Moment -> Sample
-fdComponentSampleAt fd t =
-  let (FDComponent{fdFrequency=freq,fdPhaseShift=phase}) = fd
-  in  if freq > nyquist then 0 else
-        fdComponentAmplitudeAt fd t * sin (phase + 2.0 * pi * freq * t)
-
--- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
--- time.
-fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
-fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
-  let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
-
-randPhase :: MonadRandom m => m PhaseShift
-randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
-
-----------------------------------------------------------------------------------------------------
-
--- | A lazy functional data type isomorphic to 'FDSignal'.
-data FDComponentList
-  = FDComponentList
-    { theFDCompListLength :: !ComponentCount
-    , theFDCompListElems  :: [FDComponent]
-    }
-
-instance Show FDComponentList where
-  show (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
-    "num elems: " ++ show size ++ '\n' : unlines (show <$> elems)
-
-instance Semigroup FDComponentList where
-  (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
-       (FDComponentList{theFDCompListLength=b,theFDCompListElems=bElems})
-    = FDComponentList{ theFDCompListLength = a + b, theFDCompListElems = aElems ++ bElems }
-
-instance Monoid FDComponentList where
-  mempty = FDComponentList{ theFDCompListLength = 0, theFDCompListElems = [] }
-  mappend = (<>)
-
-randFDComponents :: Frequency -> TFRand FDComponentList
-randFDComponents base = do
-  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
-    dice <- getRandom :: TFRand Word8
-    if dice > 4 then return [] else do
-      amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
-      phase <- randPhase
-      decay <- onRandFloat (* 2)
-      return $ do
-        let freq = base * mul
-        guard $ freq < nyquist
-        guard $ amp  > 0.1
-        return $ (,) 1 $ FDComponent
-          { fdFrequency  = base * mul
-          , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
-          , fdPhaseShift = phase
-          , fdDecayRate  = decay
-          }
-  return FDComponentList
-    { theFDCompListLength = count + 1
-    , theFDCompListElems  = FDComponent
-        { fdFrequency  = base
-        , fdAmplitude  = 1.0
-        , fdPhaseShift = 0.0
-        , fdDecayRate  = 0.0
-        } : components
-    }
-
-fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
-fdComponentInsert c list = FDComponentList
-  { theFDCompListElems  = c : theFDCompListElems  list
-  , theFDCompListLength = 1 + theFDCompListLength list
-  }
-
-----------------------------------------------------------------------------------------------------
-
 -- | This is a randomizable data structure that can define various kinds of spectral "shapes" of a
 -- signal. These shapes can then be rendered to a 'FDSignal' using 'renderFDShape'.
 --
@@ -401,6 +288,119 @@ sigShapePrimitive prim base = case prim of
   FDSigShapeUniformDist lo hi -> const $ onRandFloat $ clamp0_1 . (+ lo) . (* (hi - lo))
   FDSigShapeNormal      band  -> pure . clamp0_1 . normal band
   FDSigShapeBezier    a b c d -> pure . clamp0_1 . bezier3 a b c d
+
+----------------------------------------------------------------------------------------------------
+
+-- | Used to count the number of component frequencies in an 'FDSignal'
+type ComponentCount = Int
+
+-- | Used to select a single component frequency from an 'FDSignal'
+type ComponentIndex = Int
+
+data FDComponent
+  = FDComponent
+    { fdFrequency  :: !Frequency
+    , fdAmplitude  :: !Amplitude
+    , fdPhaseShift :: !PhaseShift
+    , fdDecayRate  :: !HalfLife
+    }
+  deriving (Eq, Ord)
+
+instance Show FDComponent where
+  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f)"
+    (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
+
+instance Collapsible Float FDComponent where
+  collapse =
+    buildRecord fdFrequency <>
+    buildRecord fdAmplitude <>
+    buildRecord fdPhaseShift <>
+    buildRecord fdDecayRate
+  uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
+
+emptyFDComponent :: FDComponent
+emptyFDComponent = FDComponent
+  { fdFrequency  = 0
+  , fdAmplitude  = 0
+  , fdPhaseShift = 0
+  , fdDecayRate  = 0
+  }
+
+-- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
+nullFDComponent :: FDComponent -> Bool
+nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
+
+-- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this component.
+fdComponentSampleAt :: FDComponent -> Moment -> Sample
+fdComponentSampleAt fd t =
+  let (FDComponent{fdFrequency=freq,fdPhaseShift=phase}) = fd
+  in  if freq > nyquist then 0 else
+        fdComponentAmplitudeAt fd t * sin (phase + 2.0 * pi * freq * t)
+
+-- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
+-- time.
+fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
+fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
+  let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
+
+randPhase :: MonadRandom m => m PhaseShift
+randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
+
+----------------------------------------------------------------------------------------------------
+
+-- | A lazy functional data type isomorphic to 'FDSignal'.
+data FDComponentList
+  = FDComponentList
+    { theFDCompListLength :: !ComponentCount
+    , theFDCompListElems  :: [FDComponent]
+    }
+
+instance Show FDComponentList where
+  show (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
+    "num elems: " ++ show size ++ '\n' : unlines (show <$> elems)
+
+instance Semigroup FDComponentList where
+  (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
+       (FDComponentList{theFDCompListLength=b,theFDCompListElems=bElems})
+    = FDComponentList{ theFDCompListLength = a + b, theFDCompListElems = aElems ++ bElems }
+
+instance Monoid FDComponentList where
+  mempty = FDComponentList{ theFDCompListLength = 0, theFDCompListElems = [] }
+  mappend = (<>)
+
+randFDComponents :: Frequency -> TFRand FDComponentList
+randFDComponents base = do
+  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
+    dice <- getRandom :: TFRand Word8
+    if dice > 4 then return [] else do
+      amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
+      phase <- randPhase
+      decay <- onRandFloat (* 2)
+      return $ do
+        let freq = base * mul
+        guard $ freq < nyquist
+        guard $ amp  > 0.1
+        return $ (,) 1 $ FDComponent
+          { fdFrequency  = base * mul
+          , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
+          , fdPhaseShift = phase
+          , fdDecayRate  = decay
+          }
+  return FDComponentList
+    { theFDCompListLength = count + 1
+    , theFDCompListElems  = FDComponent
+        { fdFrequency  = base
+        , fdAmplitude  = 1.0
+        , fdPhaseShift = 0.0
+        , fdDecayRate  = 0.0
+        } : components
+    }
+
+fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
+fdComponentInsert c list = FDComponentList
+  { theFDCompListElems  = c : theFDCompListElems  list
+  , theFDCompListLength = 1 + theFDCompListLength list
+  }
 
 ----------------------------------------------------------------------------------------------------
 
