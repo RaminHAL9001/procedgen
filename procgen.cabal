@@ -130,6 +130,7 @@ Test-suite procgen-live {
     ProcGen.Plot.Examples
     ProcGen.Properties
     ProcGen.ReaderLogic
+    ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.WaveFile
     ProcGen.Music.Synth
