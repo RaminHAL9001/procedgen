@@ -14,6 +14,14 @@ import           Happlets.Provider
 
 ----------------------------------------------------------------------------------------------------
 
+data FuzzyParam
+  = Not_at_all
+  | A_little
+  | Moderately
+  | A_lot
+  | Completely
+  deriving (Eq, Ord, Show, Read, Enum)
+
 type SampleCount = Int
 type SampleIndex = Int
 
