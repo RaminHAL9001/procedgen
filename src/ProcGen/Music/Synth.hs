@@ -102,8 +102,10 @@ data FDComponent
   deriving (Eq, Ord)
 
 instance Show FDComponent where
-  show fd = printf "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f)"
+  show fd = printf
+    "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f noise=%+.4f undrtone=%+.4f undrphse=%.4f)"
     (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
+    (fdNoiseLevel fd) (fdUndertone fd) (fdUnderphase fd)
 
 instance Collapsible Float FDComponent where
   collapse =
