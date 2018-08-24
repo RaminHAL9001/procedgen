@@ -1,16 +1,9 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
 module ProcGen.Music.Synth
-  ( -- * Constructing Musical Instruments
-    InstrumentDefinition(..),
-    RationalInstrument(..), instrumentRange,
-    InstrumentRange(..), instrumentKeyRange, instrumentFreqRange, instrumentKeyRange1,
-    -- * Frequency Domain Function Construction
-    FDSignalDefinition(..),
-    FDSigDefElem(..),
-    FDSigShapeFreqSel(..),
-    FDSigShape(..),
-    FDSigShapeElem(..), fdSignalRender,
+  ( -- * A language for defining musical sounds
+    Synth(..), SynthState(..), SynthElement(..), runSynth,
+    -- * Signals as frequency domain functions
     FDComponent(..), emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
@@ -20,7 +13,7 @@ module ProcGen.Music.Synth
     randAmpPulseST, randAmpPulse,
     -- * Time Domain Function Construction
     TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration,
-    idct, idctST, idctRandAmpPulse, idctRandAmpPulseST,
+    idct, idctIO, idctST, idctRandAmpPulse, idctRandAmpPulseST,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
@@ -35,7 +28,6 @@ import           Happlets.Lib.Gtk
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Collapsible
-import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
 import           ProcGen.VectorBuilder
@@ -43,9 +35,9 @@ import           ProcGen.VectorBuilder
 import           Control.Arrow
 import           Control.Monad.ST
 
-import           Data.Bits
 import           Data.Semigroup
-import qualified Data.Vector                 as Boxed
+import qualified Data.Text                   as Strict
+--import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
@@ -58,326 +50,28 @@ import           Text.Printf
 
 ----------------------------------------------------------------------------------------------------
 
--- | This data type defines a musical instrument. It contains tunable parameters which are basically
--- fuzzy boolean values (0% == False, 100% == True, all values in between are valid) which can be
--- used to construct a 'FDSignalDefinition' which defines the timber of the instrument.
-data InstrumentDefinition
-  = InstrumentDefinition
-    { isSustainedInstrument :: !Percentage
-      -- ^ If this is true, the instrument beahves more like a stringed or winded instrument which
-      -- produces a continuous sound as long as energy is applied to the instrument. If this is
-      -- false, the instrument behaves like a percussive instrument which produces a tone when
-      -- "struck" but the tone fades over time.
-    , isMelodicInstrument   :: !Percentage
-      -- ^ If this is false, the instrument sounds more lika a drum or cymbal random frequncies have
-      -- equal weight to melodic frequencies (frequencies which are rational multiples of the base
-      -- frequency). If this is true, the random frequncies have equal weight with the melodic
-      -- frequencies.
-    , rationalInstrument    :: !RationalInstrument
-      -- ^ Defines whehter frequencies which define this sound are more random or more rational.
+newtype Synth a = Synth { unwrapSynth :: StateT SynthState IO a }
+  deriving (Functor, Applicative, Monad, MonadIO)
+
+instance MonadState SynthState Synth where { state = Synth . state; }
+instance Semigroup a => Semigroup (Synth a) where { a <> b = (<>) <$> a <*> b; }
+instance Monoid a => Monoid (Synth a) where
+  mappend a b = mappend <$> a <*> b
+  mempty = pure mempty
+
+newtype SynthState = SynthState { workingFDSignals :: [SynthElement]}
+
+-- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
+-- be used to display it in a GUI.
+data SynthElement
+  = SynthElement
+    { theSynthElemName   :: Strict.Text
+    , theSynthElemColor  :: Color
+    , theSynthElemSignal :: FDSignal
     }
 
--- | Defines whether a sound is more random or more rational. A more random (irrational) sound has
--- component frequencies determined at random. A more rational sound has frequencies determined as a
--- rational number multiple of the base frequency.
-data RationalInstrument
-  = IrrationalInstrument
-      -- ^ This defines an instrument that generates a lot of noise when the sound is first
-      -- produced, like a violin played impoperly, or a snare drum, or a cymbal hit with a hard
-      -- stick.
-  | RationaInstrument
-    { noiseHalfLife         :: !HalfLife
-      -- ^ How long does the noisy initial portion of the sound last.
-    , lowerInstrumentRange  :: !InstrumentRange
-      -- ^ Defines the lower frequency range of this instrument
-    , upperInstrumentRange  :: !InstrumentRange
-      -- ^ Defines the upper frequency range of this instrument
-    }
-      -- ^ This defines an instrument that is more like a bell or a string hit with a soft object,
-      -- the instrument has no noisy components, the moment the sound is produced, it is sounding at
-      -- exactly the resonant frequency.
-
--- | If the instrument is a 'RationalInstrument', return it's lower and upper 'InstrumentRange'
--- components.
-instrumentRange :: RationalInstrument -> Maybe (InstrumentRange, InstrumentRange)
-instrumentRange = \ case
-  IrrationalInstrument -> Nothing
-  RationaInstrument{ lowerInstrumentRange=a, upperInstrumentRange=b } -> Just (a, b)
-
-data InstrumentRange
-  = BassRange     -- ^ octve #1 .. 2
-  | BaritoneRange -- ^        2 .. 4
-  | TenorRange    -- ^        3 .. 5
-  | AltoRange     -- ^        4 .. 6
-  | SopranoRange  -- ^        6 .. 7
-  deriving (Eq, Ord, Show, Read, Enum)
-
--- | Convert the 'instrumentRange' of an 'InstrumentDefinition' to a lower and upper bound
--- 'Frequency' for the range of frequencies that an instrument may produce.
-instrumentFreqRange :: InstrumentDefinition -> Maybe (Frequency, Frequency)
-instrumentFreqRange = fmap (keyboard88 *** keyboard88) . instrumentKeyRange
-
--- | Convert the 'instrumentRange' of an 'InstrumentDefinition' to a lower and upper bound
--- 'ProcGen.Music.KeyFreq88.keyboard88' key index value for the range of frequencies that an
--- instrument may produce. Pianos encompass the entire range.
-instrumentKeyRange :: InstrumentDefinition -> Maybe (Int, Int)
-instrumentKeyRange def = do
-  ((a, b), (c, d)) <- (instrumentKeyRange1 *** instrumentKeyRange1)
-    <$> instrumentRange (rationalInstrument def)
-  return (min a $ min b $ min c d, max a $ max b $ max c d)
-
--- | Take an 'InstrumentRange' component and return which 'ProcGen.Music.KeyFreq88.keyboard88' key
--- indicies are the upper and lower bound for that 'InstrumentRange'.
-instrumentKeyRange1 :: InstrumentRange -> (Int, Int)
-instrumentKeyRange1 = \ case
-  BassRange     -> ( 0, 23)
-  BaritoneRange -> (18, 41)
-  TenorRange    -> (36, 59)
-  AltoRange     -> (54, 77)
-  SopranoRange  -> (72, 87)
-
-----------------------------------------------------------------------------------------------------
-
--- | This is a randomizable data structure that can define various kinds of spectral "shapes" of a
--- signal. These shapes can then be rendered to a 'FDSignal' using 'renderFDShape'.
---
--- When rendering a shape, there is always a reference frequency which always begins at t0 at 100%
--- amplitude. All other components have random amplitudes, but the randomization is "shaped" by this
--- data type.
---
--- The 'FDSigDef' is composed of a few fundamental elements that can be superimposed to
--- construct the final 'FDSignal' rendering.
---
--- The 'FDSigDef' data itself does not contain a reference frequency, rather when rendering
--- to a 'FDSignal' a reference frequency is specified and is applied to every rendering function
--- that generates the 'FDComponent's.
-newtype FDSignalDefinition
-  = FDSignalDefinition{ unwrapFDSignalDefinition :: Boxed.Vector FDSigDefElem }
-  deriving (Eq)
-
-instance Arbitrary FDSignalDefinition where
-  arbitrary = FDSignalDefinition . Boxed.fromList <$> arbitraryList (1, 11)
-
-type FDSignalRenderer m a = StateT FDComponentList m a
-type Base freq = freq
-
--- | Within a random monad render as 'FDSignalDefinition' to a 'FDSignal'.
-fdSignalRender :: MonadRandom m => FDSignalDefinition -> Base Frequency -> m FDSignal
-fdSignalRender def base = flip evalStateT (mempty :: FDComponentList) $ do
-  forM_ (Boxed.toList $ unwrapFDSignalDefinition def) $ flip fdSigDefElemRender base
-  phase <- randPhase
-  modify $ fdComponentInsert FDComponent
-    { fdFrequency  = base
-    , fdAmplitude  = 1.0
-    , fdPhaseShift = phase
-    , fdDecayRate  = 0.0
-    }
-  gets fdSignal
-
-----------------------------------------------------------------------------------------------------
-
--- | A 'FDSigShape' is constructed from one or more elements, where each element is a fundamental
--- probability distribution (uniform, normal, quadratic) with it's own frequency and amplitude
--- distribution characteristics.
-data FDSigDefElem
-  = FDSigDefElem
-    { sigShapeFreqSel :: !FDSigShapeFreqSel
-      -- ^ Select the frequencies for this element.
-    , sigShapeLevels  :: !FDSigShape
-      -- ^ Shape the amplitude of the selected frequencies using a function that determines what
-      -- shape of the frequency domain levels will look like when rendered.
-    }
-  deriving (Eq)
-
-instance Arbitrary FDSigDefElem where
-  arbitrary = FDSigDefElem <$> arbitrary <*> arbitrary
-  arbitraryList (lo, hi) = do
-    nelems <- onBeta5RandFloat (floatToIntRange lo hi)
-    replicateM nelems arbitrary
-
-fdSigDefElemRender :: MonadRandom m => FDSigDefElem -> Base Frequency -> FDSignalRenderer m ()
-fdSigDefElemRender (FDSigDefElem{sigShapeFreqSel=selFreq,sigShapeLevels=levels}) base =
-  fdSigShapeFreqSelRender selFreq base >>= mapM_
-    (\ freq -> do
-        phase <- lift randPhase
-        decay <- lift $ onBeta5RandFloat id
-        amp   <- lift $ fdSigShaper levels base freq
-        unless (amp == 0) $ modify $ fdComponentInsert FDComponent
-          { fdFrequency  = freq
-          , fdAmplitude  = amp
-          , fdPhaseShift = phase
-          , fdDecayRate  = decay
-          }
-    )
-
-----------------------------------------------------------------------------------------------------
-
--- | A frequency selector, which can limit frequencies that can be randomly selected. A "rational"
--- selector allows only rational-numbered multiples of the base frequency to be selected.
-data FDSigShapeFreqSel
-  = FDSigFreqSelArbitrary !Word8 !Word8
-    -- ^ select more than or equal to @(lo :: Int)@ and less than or equal to @(hi :: Int)@
-    -- frequencies, but the frequencies are selected using an normal distribution centered around
-    -- the base frequency.
-  | FDSigFreqSelRationals
-    { sigFreqSelNumerators   :: !(Unboxed.Vector Word16)
-    , sigFreqSelDenominators :: !(Unboxed.Vector Word16)
-    } -- ^ compose a list of rationals consisting of all given numerators divided by all given
-      -- denominators, these rationals will be multiplied by the reference frequency to generate the
-      -- frequencies for this shape element.
-  deriving (Eq)
-
-instance Arbitrary FDSigShapeFreqSel where
-  arbitrary = do
-    unrestricted <- ((< 128) :: Word8 -> Bool) <$> getRandom
-    if unrestricted
-     then do
-      let word8 max = onBeta5RandFloat (floatToIntRange 1 max)
-      a <- word8 63
-      b <- word8 255
-      return $ FDSigFreqSelArbitrary (min a b) (max a b)
-     else do
-      let factors = liftM (Unboxed.fromList . concat) $ forM [2,3,5,7] $ \ p -> do
-            w <- getRandom
-            let exps = testBit (w :: Word8) `filter` [0..4]
-            return $ (p ^) <$> exps
-      FDSigFreqSelRationals <$> factors <*> factors
-
-fdSigShapeFreqSelRender
-  :: MonadRandom m
-  => FDSigShapeFreqSel
-  -> Base Frequency
-  -> m [Frequency]
-fdSigShapeFreqSelRender = \ case
-  FDSigFreqSelArbitrary   lo     hi -> \ base -> do
-    n <- getRandomR (lo, hi)
-    replicateM (fromIntegral n) $ onNormalRandFloat $ (* base) . (* 2)
-  FDSigFreqSelRationals nums denoms -> \ base -> return $ do
-    a <- realToFrac <$> Unboxed.toList nums
-    b <- realToFrac <$> Unboxed.toList denoms
-    let freq = a * base / b
-    if a == b || freq < 15.0 || freq > nyquist then [] else [freq]
-
-----------------------------------------------------------------------------------------------------
-
--- | This data type defines how to randomized the "shape" of the amplitude levels of the various
--- frequencies distributed across the audible spectrum.
-data FDSigShape
-  = FDSigShape
-  { sigShapeOvertones  :: !(Boxed.Vector FDSigShapeElem)
-    -- ^ Describes the frequencies higher the reference frequency.
-  , sigShapeUndertones :: !(Boxed.Vector FDSigShapeElem)
-    -- ^ Describes the freqeuncies lower than the reference frequency.
-  }
-  deriving (Eq)
-
-instance Arbitrary FDSigShape where
-  arbitrary = do
-    let elems a b = Boxed.fromList <$> arbitraryList (a, b)
-    FDSigShape <$> elems 1 7 <*> elems 0 6
-
--- | Produce a function of type @('ProcGen.Types.Frequency' -> 'ProcGen.Types.Amplitude')@ given a
--- 'FDSigShape' data structure and a reference 'ProcGen.Types.Frequency'.
-fdSigShaper :: MonadRandom m => FDSigShape -> Base Frequency -> (Frequency -> m Amplitude)
-fdSigShaper (FDSigShape{sigShapeOvertones=over,sigShapeUndertones=under}) base freq =
-  if freq == base then pure 1.0 else 
-  if freq >  base then fdSigShapePiecewise over base base nyquist freq else
-    fdSigShapePiecewise under base 15.0 base freq
-
-fdSigShapePiecewise
-  :: MonadRandom m
-  => Boxed.Vector FDSigShapeElem -> Base Frequency
-  -> Frequency -> Frequency
-  -> Frequency -> m Amplitude
-fdSigShapePiecewise vec base lo hi = loop lo elems where
-  elems = Boxed.toList vec
-  scale = hi - lo
-  s     = sum $ sigShapeElemBandwidth <$> elems -- this should be equal to 1, but just in case
-  loop a elems freq = case elems of
-    []         -> pure 0.0
-    elem:elems ->
-      let band    = sigShapeElemBandwidth elem
-          percent = band / s
-          gap     = scale * percent
-          b       = a + gap
-      in  if a <= freq && freq < b
-           then fdSigShapeElem (elem{ sigShapeElemBandwidth = percent }) base lo gap freq
-           else loop b elems freq
-
-----------------------------------------------------------------------------------------------------
-
-data FDSigShapeElem
-  = FDSigShapeElem
-    { sigShapeElemBandwidth :: !Percentage
-      -- ^ What percentage of bandwidth along the audible frequency band does this particular
-      -- primitive apply it's shape.
-    , sigShapeElemPrimitive :: !FDSigShapePrimitive
-      -- ^ The primitive function that generates the shape.
-    }
-  deriving (Eq, Show)
-
-instance Arbitrary FDSigShapeElem where
-  arbitrary = FDSigShapeElem <$> onNormalRandFloat id <*> arbitrary
-  arbitraryList (a, b) = do
-    n <- onBeta5RandFloat (floatToIntRange a b)
-    elems <- replicateM n arbitrary
-    let s = sum $ sigShapeElemBandwidth <$> elems
-    return $ (\ e -> e{ sigShapeElemBandwidth = sigShapeElemBandwidth e / s }) <$> elems
-
-fdSigShapeElem
-  :: MonadRandom m
-  => FDSigShapeElem
-  -> Base Frequency
-  -> Frequency
-  -> Frequency
-  -> Bandwidth
-  -> m Amplitude
-fdSigShapeElem elem base lo gap freq =
-  sigShapePrimitive (sigShapeElemPrimitive elem) base ((freq - lo) / gap)
-
-----------------------------------------------------------------------------------------------------
-
--- | This data type contains a few functions for shaping the amplitude levels of a set of
--- frequencies. One or more of these defines the shape of all amplitudes along the frequency
--- distribution.
-data FDSigShapePrimitive
-  = FDSigShapeLinear
-    -- ^ All frequencies draw a random amplitude between 0.0 and the reciporical of the reference
-    -- frequency.
-  | FDSigShapeUniformDist !Amplitude !Amplitude
-    -- ^ All frequencies draw a random amplitude between @(aMin :: 'Amplitude')@ and
-    -- @(aMax :: 'Amplitude').
-  | FDSigShapeNormal      !Bandwidth
-    -- ^ Bell curve shape with a given bandwidth variance around the reference frequency.
-  | FDSigShapeBezier      !ProcGenFloat !ProcGenFloat !ProcGenFloat !ProcGenFloat
-    -- ^ Quadratic curve shape with four parameters @(a :: 'ProcGenFloat')@, @(b ::
-    -- 'ProcGenFloat')@, @(c :: 'ProcGenFloat')@, @(d :: 'ProcGenFloat'), and the shape of this
-    -- curve is given by four points that construct a Bezier curve for the amplitude as a function
-    -- of frequency.
-  deriving (Eq, Show)
-
-instance Arbitrary FDSigShapePrimitive where
-  arbitrary = do
-    n <- (`mod` (4 :: Word8)) <$> getRandom
-    case n of
-      0 -> return FDSigShapeLinear
-      1 -> FDSigShapeUniformDist <$> getRandom <*> getRandom
-      2 -> FDSigShapeNormal      <$> getRandom
-      3 -> FDSigShapeBezier      <$> getRandom <*> getRandom <*> getRandom <*> getRandom
-      _ -> error $ "Arbitrary FDSigShapePrimitive -- (constructor "++show n++")"
-
--- TODO: bug-fix on this function, test to make sure reasonable amplitudes are being returned.
-sigShapePrimitive
-  :: MonadRandom m
-  => FDSigShapePrimitive
-  -> Base Frequency
-  -> Frequency
-  -> m Amplitude
-sigShapePrimitive prim base = case prim of
-  FDSigShapeLinear            -> \ freq -> pure $ 1 / (abs $ freq - base)
-  FDSigShapeUniformDist lo hi -> const $ onRandFloat $ clamp0_1 . (+ lo) . (* (hi - lo))
-  FDSigShapeNormal      band  -> pure . clamp0_1 . normal band
-  FDSigShapeBezier    a b c d -> pure . clamp0_1 . bezier3 a b c d
+runSynth :: Synth a -> SynthState -> IO (a, SynthState)
+runSynth (Synth f) = runStateT f
 
 ----------------------------------------------------------------------------------------------------
 
@@ -389,10 +83,21 @@ type ComponentIndex = Int
 
 data FDComponent
   = FDComponent
-    { fdFrequency  :: !Frequency
-    , fdAmplitude  :: !Amplitude
-    , fdPhaseShift :: !PhaseShift
-    , fdDecayRate  :: !HalfLife
+    { fdFrequency  :: !Frequency  -- ^ must be between 15.0 and 22100.0 Hz
+    , fdAmplitude  :: !Amplitude 
+    , fdPhaseShift :: !PhaseShift -- ^ must be between 0 and 1, automatically scaled to 2*pi
+    , fdDecayRate  :: !HalfLife   -- ^ set to zero for no decay
+    , fdNoiseLevel :: !Amplitude
+      -- ^ how much noise to apply, as a measure of variance in the 'fdAmplitude'. A value of @1.0@
+      -- means the amplitude of each cycle varies is multiplied by a random number between @0.0@ to
+      -- @1.0@. A value of @0.5@ means the amplitude of each cycle is mulitplied by a random number
+      -- between @0.5@ (half volume) and @1.0@ (full volume).
+    , fdUndertone  :: !Frequency
+      -- ^ set whehther the amplitude is also oscillating, must be between 0.0 and 7.5 Hz, zero
+      -- indicates no oscillation. Also if the 'fdDecayRate' has a half life less than the period of
+      -- the 'fdUndertone', the 'fdUndertone' is ignored.
+    , fdUnderphase :: !PhaseShift
+      -- ^ the phase shift for the 'fdUndertone'
     }
   deriving (Eq, Ord)
 
@@ -402,10 +107,13 @@ instance Show FDComponent where
 
 instance Collapsible Float FDComponent where
   collapse =
-    buildRecord fdFrequency <>
-    buildRecord fdAmplitude <>
+    buildRecord fdFrequency  <>
+    buildRecord fdAmplitude  <>
     buildRecord fdPhaseShift <>
-    buildRecord fdDecayRate
+    buildRecord fdDecayRate  <>
+    buildRecord fdNoiseLevel <>
+    buildRecord fdUndertone  <>
+    buildRecord fdUnderphase
   uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
 
 emptyFDComponent :: FDComponent
@@ -414,6 +122,9 @@ emptyFDComponent = FDComponent
   , fdAmplitude  = 0
   , fdPhaseShift = 0
   , fdDecayRate  = 0
+  , fdNoiseLevel = 0
+  , fdUndertone  = 0
+  , fdUnderphase = 0
   }
 
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
@@ -466,6 +177,9 @@ randFDComponents base = do
       amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
       phase <- randPhase
       decay <- onRandFloat (* 2)
+      noise <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
+      under <- onRandFloat (* 7.5)
+      undph <- randPhase
       return $ do
         let freq = base * mul
         guard $ freq < nyquist
@@ -475,6 +189,9 @@ randFDComponents base = do
           , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
           , fdPhaseShift = phase
           , fdDecayRate  = decay
+          , fdNoiseLevel = noise
+          , fdUndertone  = under
+          , fdUnderphase = undph
           }
   return FDComponentList
     { theFDCompListLength = count + 1
@@ -483,6 +200,9 @@ randFDComponents base = do
         , fdAmplitude  = 1.0
         , fdPhaseShift = 0.0
         , fdDecayRate  = 0.0
+        , fdNoiseLevel = 1.0
+        , fdUndertone  = 0.0
+        , fdUnderphase = 0.0
         } : components
     }
 
@@ -563,11 +283,14 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
 listFDElems :: FDSignal -> [FDComponent]
 listFDElems (FDSignal{fdSignalVector=vec}) = loop $ Unboxed.toList vec where
   loop = \ case
-    freq:amp:phase:decay:ax -> FDComponent
+    freq:amp:phase:decay:noise:undfrq:undphs:ax -> FDComponent
       { fdFrequency  = freq
       , fdAmplitude  = amp
       , fdPhaseShift = phase
       , fdDecayRate  = decay
+      , fdNoiseLevel = noise
+      , fdUndertone  = undfrq
+      , fdUnderphase = undphs
       } : loop ax
     _ -> []
 
@@ -577,11 +300,14 @@ listFDAssocs = zip [0 ..] . listFDElems
 
 -- | Extract a copy of a single element at a given index.
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
-lookupFDComponent (FDSignal{fdSignalVector=vec}) = (* 4) >>> \ i -> FDComponent
+lookupFDComponent (FDSignal{fdSignalVector=vec}) = (* 7) >>> \ i -> FDComponent
   <$> (vec Unboxed.!? (i + 0))
   <*> (vec Unboxed.!? (i + 1))
   <*> (vec Unboxed.!? (i + 2))
   <*> (vec Unboxed.!? (i + 3))
+  <*> (vec Unboxed.!? (i + 4))
+  <*> (vec Unboxed.!? (i + 5))
+  <*> (vec Unboxed.!? (i + 6))
 
 -- | When generating a 'FDSignal' you need to generate components around a base frequency. This is a
 -- list of recommended component frequencies multipliers. Each of these numbers is a rational
@@ -664,6 +390,17 @@ idct dt fd = TDSignal
 -- cumulatively on 'Mutable.STVector's. WARNING: the results are not normalized, so you will almost
 -- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate
 -- @\ mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
+idctIO :: Mutable.IOVector Sample -> TimeWindow Moment -> FDSignal -> IO ()
+idctIO mvec win fd =
+  forM_ (twIndicies (Mutable.length mvec) win) $ \ i -> Mutable.write mvec i $! sum $ do
+    fd <- listFDElems fd
+    guard $ fdFrequency fd <= nyquist
+    [fdComponentSampleAt fd $ indexToTime i]
+
+-- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be use
+-- cumulatively on 'Mutable.STVector's. WARNING: the results are not normalized, so you will almost
+-- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate
+-- @\ mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
 idctST :: Mutable.STVector s Sample -> TimeWindow Moment -> FDSignal -> ST s ()
 idctST mvec win fd =
   forM_ (twIndicies (Mutable.length mvec) win) $ \ i -> Mutable.write mvec i $! sum $ do
@@ -736,7 +473,14 @@ randAmpPulse freq dur decay = do
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new size
         flip evalTFRandT gen $ randAmpPulseST mvec win FDComponent
-          { fdFrequency = freq, fdAmplitude = 1.0, fdPhaseShift = 0.0, fdDecayRate = decay }
+          { fdFrequency  = freq
+          , fdAmplitude  = 1.0
+          , fdPhaseShift = 0.0
+          , fdDecayRate  = decay
+          , fdNoiseLevel = 0.0
+          , fdUndertone  = 0.0
+          , fdUnderphase = 0.0
+          }
         minMaxVec mvec >>= normalize mvec
         return mvec
     }
