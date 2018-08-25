@@ -61,6 +61,7 @@ Library {
     ProcGen.Plot
     ProcGen.Plot.GUI
     ProcGen.Plot.Examples
+    ProcGen.PrimeNumbers
     ProcGen.Properties
     ProcGen.ReaderLogic
     ProcGen.Music.Composition
@@ -128,6 +129,7 @@ Test-suite procgen-live {
     ProcGen.Plot
     ProcGen.Plot.GUI
     ProcGen.Plot.Examples
+    ProcGen.PrimeNumbers
     ProcGen.Properties
     ProcGen.ReaderLogic
     ProcGen.Music.Composition
