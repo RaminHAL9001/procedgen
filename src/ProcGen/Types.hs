@@ -6,10 +6,9 @@ module ProcGen.Types
 import           ProcGen.PrimeNumbers
 
 import           Control.Monad
-import           Control.Monad.ST
 
 import           Data.Int
-import           Data.STRef
+import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
 
@@ -25,6 +24,8 @@ data FuzzyParam
   | A_lot
   | Completely
   deriving (Eq, Ord, Show, Read, Enum)
+
+----------------------------------------------------------------------------------------------------
 
 type SampleCount = Int
 type SampleIndex = Int
@@ -445,6 +446,25 @@ permute perm len list = if null list then [] else if len<=0 then list else
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A function with strict stateful minimum and maximum values.
+data MinMax i = MinMax{ minValue :: !i, maxValue :: !i }
+  deriving (Eq, Show, Read)
+
+instance Ord i => Semigroup (MinMax i) where
+  (MinMax a b) <> (MinMax c d) = MinMax (min a $ min b $ min c d) (max a $ max b $ max c d)
+
+instance (Ord i, Bounded i) => Monoid (MinMax i) where
+  mempty = MinMax{ minValue = maxBound, maxValue = minBound }
+  mappend = (<>)
+
+stepMinMax :: Ord i => MinMax i -> i -> MinMax i
+stepMinMax (MinMax lo hi) i = MinMax (min lo i) (max hi i)
+
+minMax :: (Bounded i, Ord i) => [i] -> MinMax i
+minMax = foldl stepMinMax mempty
+
+----------------------------------------------------------------------------------------------------
+
 class (Eq n, Ord n, Num n) => HasTimeWindow a n | a -> n where
   timeWindow :: a -> TimeWindow n
 
@@ -516,4 +536,4 @@ twIterate = fmap timeIndex . twMoments
 -- vector. Pass the length of the vector as the first parameter.
 twIndicies :: Int -> TimeWindow Moment -> [Int]
 twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
-  [max 0 $ min len $ durationSampleCount t0 .. min len $ durationSampleCount end]
+  [max 0 $ min (len - 1) $ durationSampleCount t0 .. min (len - 1) $ durationSampleCount end]
