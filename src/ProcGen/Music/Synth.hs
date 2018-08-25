@@ -121,6 +121,8 @@ data FDComponent
       -- the 'fdUndertone', the 'fdUndertone' is ignored.
     , fdUnderphase :: !PhaseShift
       -- ^ the phase shift for the 'fdUndertone'
+    , fdUnderamp   :: !Amplitude
+      -- ^ the amplitude of the 'fdUndertone'
     }
   deriving (Eq, Ord)
 
@@ -138,7 +140,8 @@ instance Collapsible Float FDComponent where
     buildRecord fdDecayRate  <>
     buildRecord fdNoiseLevel <>
     buildRecord fdUndertone  <>
-    buildRecord fdUnderphase
+    buildRecord fdUnderphase <>
+    buildRecord fdUnderamp
   uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
 
 emptyFDComponent :: FDComponent
@@ -150,6 +153,7 @@ emptyFDComponent = FDComponent
   , fdNoiseLevel = 0
   , fdUndertone  = 0
   , fdUnderphase = 0
+  , fdUnderamp   = 0
   }
 
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
@@ -171,8 +175,8 @@ fdComponentAmplitudeAt fd t =
   (if fdDecayRate fd <= 0.0 then id else
      flip (/) $ 1.0 + t / fdDecayRate fd
   ) .
-  (if fdUndertone fd <= 0.0 || fdUnderphase fd <= 0.0 then id else
-     (*) $ 1 + sin (fdUndertone fd * 2 * pi * t + fdUnderphase fd) / 2
+  (if fdUndertone fd <= 0.0 || fdUnderphase fd <= 0.0 || fdUnderamp fd <= 0.0 then id else
+     (*) $ fdUnderamp fd * (1 + sin (fdUndertone fd * 2 * pi * t + fdUnderphase fd) / 2)
   ) $
   (fdAmplitude fd)
 
@@ -206,12 +210,14 @@ randFDComponents base = do
   (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
     dice <- getRandom :: TFRand Word8
     if dice > 4 then return [] else do
-      amp   <- onRandFloat $ (* (3/4) ) . (+ (1/3))
-      phase <- randPhase
-      decay <- onRandFloat (* 2)
-      noise <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
-      under <- onRandFloat (* 7.5)
-      undph <- randPhase
+      amp     <- onRandFloat $ (* (3/4) ) . (+ (1/3))
+      phase   <- randPhase
+      ifUnder <- onRandFloat (\ i f -> if i < 0.2 then f else return 0.0)
+      decay   <- onRandFloat (* 2)
+      noise   <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
+      under   <- ifUnder $ onRandFloat (* 7.5)
+      undph   <- ifUnder $ randPhase
+      undamp  <- ifUnder $ onBeta5RandFloat (1 -)
       return $ do
         let freq = base * mul
         guard $ freq < nyquist
@@ -224,6 +230,7 @@ randFDComponents base = do
           , fdNoiseLevel = noise
           , fdUndertone  = under
           , fdUnderphase = undph
+          , fdUnderamp   = undamp
           }
   return FDComponentList
     { theFDCompListLength = count + 1
@@ -235,6 +242,7 @@ randFDComponents base = do
         , fdNoiseLevel = 1.0
         , fdUndertone  = 0.0
         , fdUnderphase = 0.0
+        , fdUnderamp   = 0.0
         } : components
     }
 
@@ -319,7 +327,7 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
 listFDElems :: FDSignal -> [FDComponent]
 listFDElems (FDSignal{fdSignalVector=vec}) = loop $ Unboxed.toList vec where
   loop = \ case
-    freq:amp:phase:decay:noise:undfrq:undphs:ax -> FDComponent
+    freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
       { fdFrequency  = freq
       , fdAmplitude  = amp
       , fdPhaseShift = phase
@@ -327,6 +335,7 @@ listFDElems (FDSignal{fdSignalVector=vec}) = loop $ Unboxed.toList vec where
       , fdNoiseLevel = noise
       , fdUndertone  = undfrq
       , fdUnderphase = undphs
+      , fdUnderamp   = undamp
       } : loop ax
     _ -> []
 
@@ -338,7 +347,7 @@ listFDAssocs = zip [0 ..] . listFDElems
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
 lookupFDComponent (FDSignal{fdSignalVector=vec}) i =
   let f n = vec Unboxed.!? (i + n)
-  in  FDComponent <$> f 0 <*> f 1 <*> f 2 <*> f 3 <*> f 4 <*> f 5 <*> f 6
+  in  FDComponent <$> f 0 <*> f 1 <*> f 2 <*> f 3 <*> f 4 <*> f 5 <*> f 6 <*> f 7
 
 -- | When generating a 'FDSignal' you need to generate components around a base frequency. This is a
 -- list of recommended component frequencies multipliers. Each of these numbers is a rational
