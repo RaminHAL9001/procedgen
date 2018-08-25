@@ -10,10 +10,10 @@ module ProcGen.Music.Synth
     fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
-    randAmpPulseST, randAmpPulse,
+    randAmpPulse, randAmpPulsePure,
     -- * Time Domain Function Construction
     TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration,
-    idct, bufferIDCT, idctRandAmpPulse, idctRandAmpPulseST,
+    pureIDCT, bufferIDCT, idctRandAmpPulsePure, idctRandAmpPulse,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
@@ -379,8 +379,8 @@ minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 
 -- | This function creates a 'TDSignal' by performing the __I__nverse __D__iscrete __C__osine
 -- __T__ransform on the given 'FDSignal'.
-idct :: Duration -> FDSignal -> TDSignal
-idct dt fd = TDSignal
+pureIDCT :: Duration -> FDSignal -> TDSignal
+pureIDCT dt fd = TDSignal
   { tdSamples = let n = durationSampleCount dt in Unboxed.create $
       if n <= 0 then Mutable.new 0 else do
         mvec <- Mutable.new $ n + 1
@@ -406,10 +406,11 @@ bufferIDCT mvec win fd =
 -- | Accumulates a signal into an 'Mutable.STVector' that consists of a single sine wave, but the
 -- amplitude of the wave is randomly modified for every cycle. This creates noise with a very narrow
 -- frequency spectrum.
-randAmpPulseST
-  :: Mutable.STVector s Sample
-  -> TimeWindow Moment -> FDComponent -> TFRandT (ST s) ()
-randAmpPulseST mvec win
+randAmpPulse
+  :: forall m . PrimMonad m
+  => Mutable.MVector (PrimState m) Sample
+  -> TimeWindow Moment -> FDComponent -> TFRandT m ()
+randAmpPulse mvec win
   fd@(FDComponent{fdFrequency=freq,fdAmplitude=amp0,fdPhaseShift=phase}) = do
     let ti = fst . timeIndex
     let size = ti (3 / freq) + 1
@@ -419,17 +420,17 @@ randAmpPulseST mvec win
     -- index. It is probably faster on most computer hardware to store these values to a table
     -- rather than compute them on the fly.
     if size > Mutable.length mvec then return () else do
-      table <- lift $ Mutable.new size
+      table <- lift (Mutable.new size)
       lift $ forM_ [0 .. size - 1] $ \ i ->
         Mutable.write table i $ sinePulse3 freq (0.0) phase $ indexToTime i
-      let loop amp i j =
+      let loop  amp i j =
             if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
               let decamp = amp0 * amp * fdComponentAmplitudeAt fd (indexToTime i)
               lift $ Mutable.write mvec i =<<
                 liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
               loop amp (i + 1) (j + 1)
       let pulses t = if t >= timeEnd win then return () else do
-            amp <- getRandom :: TFRandT (ST s) Float
+            amp <- getRandom :: TFRandT m Float
             let i = fst $ timeIndex t
             loop amp i 0
             pulses $! t + 2 / freq
@@ -437,37 +438,38 @@ randAmpPulseST mvec win
 
 -- | Renders a 'FDSignal' using 'randAmpPulseST', rather than a clean sine wave. This can be used to
 -- generate noise with very precise spectral characteristics.
-idctRandAmpPulseST
-  :: Mutable.STVector s Sample
-  -> TimeWindow Moment -> FDSignal -> TFRandT (ST s) ()
-idctRandAmpPulseST mvec win = mapM_ (randAmpPulseST mvec win) . listFDElems
+idctRandAmpPulse
+  :: PrimMonad m
+  => Mutable.MVector (PrimState m) Sample
+  -> TimeWindow Moment -> FDSignal -> TFRandT m ()
+idctRandAmpPulse mvec win = mapM_ (randAmpPulse mvec win) . listFDElems
 
 -- | Renders a 'FDSignal' using 'randAmpPulseST', rather than a clean sine wave. This can be used to
 -- generate noise with very precise spectral characteristics.
-idctRandAmpPulse :: Duration -> FDSignal -> IO TDSignal
-idctRandAmpPulse dur fd = do
+idctRandAmpPulsePure :: Duration -> FDSignal -> IO TDSignal
+idctRandAmpPulsePure dur fd = do
   gen <- initTFGen
   let size = durationSampleCount dur
   let win  = TimeWindow { timeStart = 0, timeEnd = dur }
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new $ size + 1
-        flip evalTFRandT gen $ idctRandAmpPulseST mvec win fd
+        flip evalTFRandT gen $ idctRandAmpPulse mvec win fd
         minMaxVec mvec >>= normalize mvec
         return mvec
     }
 
 -- | Uses the @IO@ monad to generate a random seed, then evaluates the 'randAmpPulseST' function to
 -- a pure function value.
-randAmpPulse :: Frequency -> Duration -> HalfLife -> IO TDSignal
-randAmpPulse freq dur decay = do
+randAmpPulsePure :: Frequency -> Duration -> HalfLife -> IO TDSignal
+randAmpPulsePure freq dur decay = do
   gen <- initTFGen
   let size = durationSampleCount dur
   let win  = TimeWindow{ timeStart = 0, timeEnd = dur } :: TimeWindow Moment
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new size
-        flip evalTFRandT gen $ randAmpPulseST mvec win FDComponent
+        flip evalTFRandT gen $ randAmpPulse mvec win FDComponent
           { fdFrequency  = freq
           , fdAmplitude  = 1.0
           , fdPhaseShift = 0.0
@@ -483,7 +485,7 @@ randAmpPulse freq dur decay = do
 -- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
 -- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
 randTDSignalIO :: Duration -> Frequency -> IO TDSignal
-randTDSignalIO dt = fmap (idct dt) . evalTFRandIO . randFDSignal
+randTDSignalIO dt = fmap (pureIDCT dt) . evalTFRandIO . randFDSignal
 
 -- | Create a RIFF-formatted WAV file at the given 'System.IO.FilePath' containing the 'TDSignal',
 -- with 'ProcGen.Types.Sample' values rounded-off to 16-bit signed integer values
