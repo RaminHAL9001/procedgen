@@ -460,13 +460,11 @@ minMaxVec vec = do
 -- function performs a simple linear transformation that normalizes all elements in the given
 -- 'Mutable.STVector'.
 normalize
-  :: (Eq elem, Num elem, Fractional elem, Mutable.Unbox elem, Show elem {- TODO: delete Show -})
+  :: (Eq elem, Num elem, Fractional elem, Mutable.Unbox elem)
   => Mutable.STVector s elem -> (elem, elem) -> ST s ()
 normalize vec (lo, hi) = do
   let offset = (hi + lo) / 2
   let scale  = (hi - lo) / 2
-  --traceM $ "normalize vector around bounds (" ++ show lo ++ ", " ++ show hi ++
-  --  "), offset = " ++ show offset ++ ", scale = " ++ show scale
   unless (scale == 0) $ forM_ [0 .. Mutable.length vec - 1] $ \ i ->
     Mutable.read vec i >>= Mutable.write vec i . (/ scale) . subtract offset
 
