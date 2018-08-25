@@ -56,6 +56,7 @@ Library {
   EXPOSED-MODULES:
     ProcGen
     ProcGen.Arbitrary
+    ProcGen.Buffer
     ProcGen.Collapsible
     ProcGen.GHCI
     ProcGen.Plot
@@ -124,6 +125,7 @@ Test-suite procgen-live {
   OTHER-MODULES:
     ProcGen
     ProcGen.Arbitrary
+    ProcGen.Buffer
     ProcGen.Collapsible
     ProcGen.GHCI
     ProcGen.Plot

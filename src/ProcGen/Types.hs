@@ -445,35 +445,6 @@ permute perm len list = if null list then [] else if len<=0 then list else
 
 ----------------------------------------------------------------------------------------------------
 
--- Miscelaneous utility functions
-
--- | Find the minimum and maximum element in an 'Mutable.STVector', evaluates to an error if the
--- vector is empty so this function is not total.
-minMaxVec :: (Mutable.Unbox elem, Ord elem) => Mutable.STVector s elem -> ST s (elem, elem)
-minMaxVec vec = do
-  let len = Mutable.length vec
-  if len == 0 then error $ "minMaxVec called on empty vector" else do
-    init <- Mutable.read vec 0
-    lo <- newSTRef init
-    hi <- newSTRef init
-    forM_ [1 .. len - 1] $ \ i ->
-      Mutable.read vec i >>= \ elem -> modifySTRef lo (min elem) >> modifySTRef hi (max elem)
-    liftM2 (,) (readSTRef lo) (readSTRef hi)
-
--- | Not to be confused with the Gaussian 'normal' function. Given a minimum and maximum value, this
--- function performs a simple linear transformation that normalizes all elements in the given
--- 'Mutable.STVector'.
-normalize
-  :: (Eq elem, Num elem, Fractional elem, Mutable.Unbox elem)
-  => Mutable.STVector s elem -> (elem, elem) -> ST s ()
-normalize vec (lo, hi) = do
-  let offset = (hi + lo) / 2
-  let scale  = (hi - lo) / 2
-  unless (scale == 0) $ forM_ [0 .. Mutable.length vec - 1] $ \ i ->
-    Mutable.read vec i >>= Mutable.write vec i . (/ scale) . subtract offset
-
-----------------------------------------------------------------------------------------------------
-
 class (Eq n, Ord n, Num n) => HasTimeWindow a n | a -> n where
   timeWindow :: a -> TimeWindow n
 
@@ -523,7 +494,10 @@ twParametric step (TimeWindow{ timeStart=t0, timeEnd=t1 }) = do
   [realToFrac i * step + t0 | i <- [0::Int .. floor ((t1 - t0) / step)]]
 
 -- | Similar to 'twParametric', except this function enumerate all time values in the given
--- 'TimeWindow' using the 'Prelude.pred' function in the 'Prelude.Enum' type class.
+-- 'TimeWindow' using the 'Prelude.succ' function in the 'Prelude.Enum' type class. The 'timeEnd'
+-- element is not included in the iteration.
+--
+-- Use this function when iterating over a buffer of 'Sample's.
 twEnum :: (Ord t, Enum t) => TimeWindow t -> [t]
 twEnum (TimeWindow{ timeStart=t0, timeEnd=t1 }) =
   if t0 <= t1 then [t0 .. pred t1] else [t1 .. pred t0]

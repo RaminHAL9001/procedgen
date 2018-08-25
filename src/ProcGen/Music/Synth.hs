@@ -13,7 +13,7 @@ module ProcGen.Music.Synth
     randAmpPulseST, randAmpPulse,
     -- * Time Domain Function Construction
     TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration,
-    idct, idctIO, idctST, idctRandAmpPulse, idctRandAmpPulseST,
+    idct, bufferIDCT, idctRandAmpPulse, idctRandAmpPulseST,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
@@ -27,6 +27,7 @@ import           Happlets.Lib.Gtk
 
 import           ProcGen.Types
 import           ProcGen.Arbitrary
+import           ProcGen.Buffer
 import           ProcGen.Collapsible
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
@@ -383,28 +384,20 @@ idct dt fd = TDSignal
   { tdSamples = let n = durationSampleCount dt in Unboxed.create $
       if n <= 0 then Mutable.new 0 else do
         mvec <- Mutable.new $ n + 1
-        idctST mvec (TimeWindow{ timeStart = 0, timeEnd = dt }) fd
+        bufferIDCT mvec (TimeWindow{ timeStart = 0, timeEnd = dt }) fd
         minMaxVec mvec >>= normalize mvec
         return mvec
   }
 
--- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be use
+-- | Perform the 'idct' function on a mutable buffer using either of the stateful monadic function
+-- types @IO@ or @'Control.Monad.ST.ST'@, that way numerous 'idct' operations can be use
 -- cumulatively on 'Mutable.STVector's. WARNING: the results are not normalized, so you will almost
--- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate
--- @\ mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
-idctIO :: Mutable.IOVector Sample -> TimeWindow Moment -> FDSignal -> IO ()
-idctIO mvec win fd =
-  forM_ (twIndicies (Mutable.length mvec) win) $ \ i -> Mutable.write mvec i $! sum $ do
-    fd <- listFDElems fd
-    guard $ fdFrequency fd <= nyquist
-    [fdComponentSampleAt fd $ indexToTime i]
-
--- | Perform the 'idct' function as a type of @'Control.Monad.ST.ST'@ function so that it can be use
--- cumulatively on 'Mutable.STVector's. WARNING: the results are not normalized, so you will almost
--- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate
--- @\ mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
-idctST :: Mutable.STVector s Sample -> TimeWindow Moment -> FDSignal -> ST s ()
-idctST mvec win fd =
+-- certainly end up with elements in the vector that are well above 1 or well below -1. Evaluate @\
+-- mvec -> 'minMaxVec' mvec >>= normalize 'mvec'@ before freezing the 'Mutable.STVector'.
+bufferIDCT
+  :: PrimMonad m
+  => Mutable.MVector (PrimState m) Sample -> TimeWindow Moment -> FDSignal -> m ()
+bufferIDCT mvec win fd =
   forM_ (twIndicies (Mutable.length mvec) win) $ \ i -> Mutable.write mvec i $! sum $ do
     fd <- listFDElems fd
     guard $ fdFrequency fd <= nyquist
