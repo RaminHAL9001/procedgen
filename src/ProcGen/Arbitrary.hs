@@ -7,10 +7,13 @@
 module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
+    Word256, TFRandSeed, tfGen,
     TFRandT(..), TFRand,  arbTFRand, seedIOArbTFRand,
-    evalTFRand, evalTFRandT, seedIOEvalTFRand, evalTFRandWithGen, evalTFRandTWithGen,
-     runTFRand,  runTFRandT,  seedIORunTFRand,  runTFRandWithGen,  runTFRandTWithGen,
-    System.Random.TF.Init.initTFGen, testDistributionFunction,
+    seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
+     seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT, runTFRand,  runTFRandT,
+    testDistributionFunction,
+    System.Random.TF.Init.initTFGen,
+    System.Random.TF.TFGen,
     module Control.Monad.Random.Class,
   ) where
 
@@ -167,6 +170,10 @@ word64MultWithCarry :: Word64 -> Word64 -> (Word64, Word64)
 word64MultWithCarry a b = word64SumWithCarry
   [(shift a $ 64 - i, shift a i) | i <- [0 .. 63], testBit b i]
 
+-- | Construct a 'TFGen' from a 'TFGenSeed'
+tfGen :: TFRandSeed -> TFGen
+tfGen (Word256 s3 s2 s1 s0) = seedTFGen (s3, s2, s1, s0)
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A simple default pure random number generator based on the Twofish pseudo-random number
@@ -218,19 +225,22 @@ instance (Floating n, Monad m) => Floating (TFRandT m n) where
 
 -- | Evaluate a 'TFRand' function using a Twofish pseudo-random seed composed of any four 64-bit
 -- unsigned integers. The pure random result is returned.
-evalTFRand :: TFRandSeed -> TFRand a -> a
-evalTFRand (Word256 s0 s1 s2 s3) f = evalTFRandWithGen f $ seedTFGen (s0,s1,s2,s3)
+seedEvalTFRand :: TFRandSeed -> TFRand a -> a
+seedEvalTFRand seed f = evalTFRand f (tfGen seed)
 
 -- | Evaluate the 'runTFRandSeed' function using entropy pulled from the operating system as a seed
 -- value. This will produce a different random result every time it is run.
 seedIOEvalTFRand :: TFRand a -> IO a
-seedIOEvalTFRand f = evalTFRandWithGen f <$> initTFGen
+seedIOEvalTFRand f = evalTFRand f <$> initTFGen
+
+seedIOEvalTFRandT :: (Monad m, MonadIO m) => TFRandT m a -> m a
+seedIOEvalTFRandT f = liftIO initTFGen >>= evalTFRandT f
 
 -- | Similar to 'evalTFRand', except instead of supplying just any 'TFRand' function for
 -- evaluation, use the 'arbitrary' function intance that has been defined for the the data type @a@
 -- to produce a result @a@.
 arbTFRand :: Arbitrary a => TFRandSeed -> a
-arbTFRand seed = evalTFRand seed arbitrary
+arbTFRand seed = evalTFRand arbitrary (tfGen seed)
 
 -- | Similar to 'evalTFRand', except instead of supplying just any 'TFRand' function for
 -- evaluation, use the 'arbitrary' function intance that has been defined for the the data type @a@
@@ -242,39 +252,39 @@ seedIOArbTFRand = seedIOEvalTFRand arbitrary
 -- useful unless you choose to use the 'System.Random.split' function to evaluate a nested 'TFRand'
 -- function within another 'TFRand' function. If you simply want to generate a random value, it is
 -- better to use 'runTFRandSeed' or 'runTFRandIO'.
-evalTFRandWithGen :: TFRand a -> TFGen -> a
-evalTFRandWithGen (TFRandT f) = evalRand f
+evalTFRand :: TFRand a -> TFGen -> a
+evalTFRand (TFRandT f) = evalRand f
 
 -- | Like 'evalTFRand' but does not disgard the Twofish random generator, allowing you to re-use it
 -- elsewhere.
-runTFRandWithGen :: TFRand a -> TFGen -> (a, TFGen)
-runTFRandWithGen (TFRandT f) = runRand f
+runTFRand :: TFRand a -> TFGen -> (a, TFGen)
+runTFRand (TFRandT f) = runRand f
 
 -- | Evaluate a 'TFRandT' and discard the generator that initialized it.
-evalTFRandTWithGen :: Monad m => TFRandT m a -> TFGen -> m a
-evalTFRandTWithGen (TFRandT f) = evalRandT f
+evalTFRandT :: Monad m => TFRandT m a -> TFGen -> m a
+evalTFRandT (TFRandT f) = evalRandT f
 
 -- | Evaluate a 'TFRandT'.
-runTFRandTWithGen :: Monad m => TFRandT m a -> TFGen -> m (a, TFGen)
-runTFRandTWithGen (TFRandT f) = runRandT f
+runTFRandT :: Monad m => TFRandT m a -> TFGen -> m (a, TFGen)
+runTFRandT (TFRandT f) = runRandT f
 
 -- | Produce a 'TFGen' in the @IO@ monad and then use it to evaluate the 'TFRandT' function.
-evalTFRandT :: (Monad m, MonadIO m) => TFRandT m a -> m a
-evalTFRandT = liftM fst . seedIORunTFRandT
+seedEvalTFRandT :: Monad m => TFRandSeed -> TFRandT m a -> m a
+seedEvalTFRandT seed = liftM fst . flip runTFRandT (tfGen seed)
 
 -- | Produce a 'TFGen' in the @IO@ monad and then use it to evaluate the 'TFRandT' function,
 -- returning the generator for later use.
 seedIORunTFRandT :: (Monad m, MonadIO m) => TFRandT m a -> m (a, TFGen)
-seedIORunTFRandT f = liftIO initTFGen >>= runTFRandTWithGen f
+seedIORunTFRandT f = liftIO initTFGen >>= runTFRandT f
 
 seedIORunTFRand :: TFRand a -> IO (a, TFGen)
-seedIORunTFRand f = runTFRandWithGen f <$> initTFGen
+seedIORunTFRand f = runTFRand f <$> initTFGen
 
-runTFRand :: TFRandSeed -> TFRand a -> (a, TFGen)
-runTFRand (Word256 s3 s2 s1 s0) f = runTFRandWithGen f $ seedTFGen (s3, s2, s1, s0)
+seedRunTFRand :: TFRandSeed -> TFRand a -> (a, TFGen)
+seedRunTFRand = flip runTFRand . tfGen
 
-runTFRandT :: Monad m => TFRandSeed -> TFRandT m a -> m (a, TFGen)
-runTFRandT (Word256 s3 s2 s1 s0) f = runTFRandTWithGen f $ seedTFGen (s3, s2, s1, s0)
+seedRunTFRandT :: Monad m => TFRandSeed -> TFRandT m a -> m (a, TFGen)
+seedRunTFRandT = flip runTFRandT . tfGen
 
 ----------------------------------------------------------------------------------------------------
 
@@ -300,7 +310,7 @@ testDistributionFunction size count table = do
         e <- (1 +) <$> liftIO (Mutable.read mvec i)
         liftIO $ Mutable.write mvec i (e + 1)
         (loop $! max e maxval) $! count - 1
-  (maxval, _) <- initTFGen >>= runTFRandTWithGen (loop 0 count)
+  (maxval, _) <- initTFGen >>= runTFRandT (loop 0 count)
   normIOtoST mvec (realToFrac maxval) 0 (Mutable.new (Mutable.length mvec))
 
 -- not for export
