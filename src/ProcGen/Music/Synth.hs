@@ -144,8 +144,9 @@ fdComponentSampleAt fd t =
 -- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
 -- time.
 fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
-fdComponentAmplitudeAt (FDComponent{fdDecayRate=hl,fdAmplitude=amp}) t = amp *
-  let thl = if hl <= 0.0 then 1.0 else t / hl + 1.0 in 1.0 / thl
+fdComponentAmplitudeAt fd t = 
+  let thl = if fdDecayRate fd <= 0.0 then 1.0 else t / fdDecayRate fd + 1.0
+  in  fdAmplitude fd / thl
 
 randPhase :: MonadRandom m => m PhaseShift
 randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
@@ -410,31 +411,30 @@ randAmpPulse
   :: forall m . PrimMonad m
   => Mutable.MVector (PrimState m) Sample
   -> TimeWindow Moment -> FDComponent -> TFRandT m ()
-randAmpPulse mvec win
-  fd@(FDComponent{fdFrequency=freq,fdAmplitude=amp0,fdPhaseShift=phase}) = do
-    let ti = fst . timeIndex
-    let size = ti (3 / freq) + 1
-    -- A table of values is used here because we are not simply summing sine waves, we are creating
-    -- a sine wave with a sigmoidal fade-in and fade-out, which requires two Float32
-    -- multiplications, two calls to 'exp', two calls to 'recip', and one calls to 'sin' for each
-    -- index. It is probably faster on most computer hardware to store these values to a table
-    -- rather than compute them on the fly.
-    if size > Mutable.length mvec then return () else do
-      table <- lift (Mutable.new size)
-      lift $ forM_ [0 .. size - 1] $ \ i ->
-        Mutable.write table i $ sinePulse3 freq (0.0) phase $ indexToTime i
-      let loop  amp i j =
-            if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
-              let decamp = amp0 * amp * fdComponentAmplitudeAt fd (indexToTime i)
-              lift $ Mutable.write mvec i =<<
-                liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
-              loop amp (i + 1) (j + 1)
-      let pulses t = if t >= timeEnd win then return () else do
-            amp <- getRandom :: TFRandT m Float
-            let i = fst $ timeIndex t
-            loop amp i 0
-            pulses $! t + 2 / freq
-      pulses 0.0
+randAmpPulse mvec win fd = do
+  let ti = fst . timeIndex
+  let size = ti (3 / fdFrequency fd) + 1
+  -- A table of values is used here because we are not simply summing sine waves, we are creating
+  -- a sine wave with a sigmoidal fade-in and fade-out, which requires two Float32
+  -- multiplications, two calls to 'exp', two calls to 'recip', and one calls to 'sin' for each
+  -- index. It is probably faster on most computer hardware to store these values to a table
+  -- rather than compute them on the fly.
+  if size > Mutable.length mvec then return () else do
+    table <- lift (Mutable.new size)
+    lift $ forM_ [0 .. size - 1] $ \ i ->
+      Mutable.write table i $ sinePulse3 (fdFrequency fd) (0.0) (fdPhaseShift fd) $ indexToTime i
+    let loop  amp i j =
+          if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
+            let decamp = fdAmplitude fd * amp * fdComponentAmplitudeAt fd (indexToTime i)
+            lift $ Mutable.write mvec i =<<
+              liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
+            loop amp (i + 1) (j + 1)
+    let pulses t = if t >= timeEnd win then return () else do
+          amp <- getRandom :: TFRandT m Float
+          let i = fst $ timeIndex t
+          loop amp i 0
+          pulses $! t + 2 / fdFrequency fd
+    pulses 0.0
 
 -- | Renders a 'FDSignal' using 'randAmpPulseST', rather than a clean sine wave. This can be used to
 -- generate noise with very precise spectral characteristics.
