@@ -335,7 +335,7 @@ randFDSignal :: Frequency -> TFRand FDSignal
 randFDSignal = fmap fdSignal . randFDComponents
 
 randFDSignalIO :: Frequency -> IO FDSignal
-randFDSignalIO = evalTFRandIO . randFDSignal
+randFDSignalIO = seedIOEvalTFRand . randFDSignal
 
 ----------------------------------------------------------------------------------------------------
 
@@ -454,7 +454,7 @@ idctRandAmpPulsePure dur fd = do
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new $ size + 1
-        flip evalTFRandT gen $ idctRandAmpPulse mvec win fd
+        flip evalTFRandTWithGen gen $ idctRandAmpPulse mvec win fd
         minMaxVec mvec >>= normalize mvec
         return mvec
     }
@@ -469,7 +469,7 @@ randAmpPulsePure freq dur decay = do
   return TDSignal
     { tdSamples = Unboxed.create $ do
         mvec <- Mutable.new size
-        flip evalTFRandT gen $ randAmpPulse mvec win FDComponent
+        flip evalTFRandTWithGen gen $ randAmpPulse mvec win FDComponent
           { fdFrequency  = freq
           , fdAmplitude  = 1.0
           , fdPhaseShift = 0.0
@@ -485,7 +485,7 @@ randAmpPulsePure freq dur decay = do
 -- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
 -- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
 randTDSignalIO :: Duration -> Frequency -> IO TDSignal
-randTDSignalIO dt = fmap (pureIDCT dt) . evalTFRandIO . randFDSignal
+randTDSignalIO dt = fmap (pureIDCT dt) . seedIOEvalTFRand . randFDSignal
 
 -- | Create a RIFF-formatted WAV file at the given 'System.IO.FilePath' containing the 'TDSignal',
 -- with 'ProcGen.Types.Sample' values rounded-off to 16-bit signed integer values
