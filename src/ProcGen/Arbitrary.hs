@@ -15,6 +15,7 @@ module ProcGen.Arbitrary
 
 import           ProcGen.Types
 
+import           Control.Arrow
 import           Control.Exception (evaluate)
 import           Control.Monad
 import           Control.Monad.ST
@@ -22,6 +23,8 @@ import           Control.Monad.Trans
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
+import           Data.Bits
+import           Data.Ratio ((%))
 import           Data.Semigroup
 import           Data.Functor.Identity
 import qualified Data.Vector.Unboxed              as Unboxed
@@ -86,6 +89,85 @@ onNormalRandFloat = onBiasedRandFloat inverseNormalTable
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A twofish random number seed stored as a single data type.
+type TFRandSeed = Word256
+
+data Word256 = Word256 !Word64 !Word64 !Word64 !Word64
+  deriving (Eq, Ord)
+
+instance Num Word256 where
+  (+) a b = listToTFRandSeed $ snd $ foldl
+    (\ (prevCarry, stk) (carry, a) -> (carry, (if prevCarry == 0 then 0 else a+1) : stk))
+    (0, [])
+    (uncurry word64AddWithCarry <$> zip (tfRandSeedToList a) (tfRandSeedToList b))
+  (*) a b = sum $ do
+    let toDigits (Word256 s3 s2 s1 s0) =
+          [ (s3, \ (_ , s3) -> Word256 s3  0  0  0)
+          , (s2, \ (s3, s2) -> Word256 s3 s2  0  0)
+          , (s1, \ (s2, s1) -> Word256  0 s2 s1  0)
+          , (s0, \ (s1, s0) -> Word256  0  0 s1 s0)
+          ]
+    ((a, _), (b, constr)) <- (,) <$> toDigits a <*> toDigits b
+    [constr $ word64MultWithCarry a b]
+  negate = \ case
+    (Word256  0  0  0  0) -> Word256 0 0 0 0
+    (Word256 s3 s2 s1 s0) -> 1 +
+      Word256 (complement s3) (complement s2) (complement s1) (complement s0)
+  abs = id
+  signum = \ case { (Word256 0 0 0 0) -> 0; _ -> 1; }
+  fromInteger =
+    let divisor = 1 + toInteger (maxBound :: Word64)
+        loop n_0 = let (n_1, remainder) = divMod n_0 divisor in fromInteger remainder : loop n_1
+    in  listToTFRandSeed . loop
+
+instance Enum Word256 where
+  succ = (+ 1)
+  pred = subtract 1
+  toEnum = fromIntegral
+  fromEnum = fromIntegral
+  enumFrom = iterate succ
+  enumFromThen a b  = iterate (+ (b - a)) a
+
+instance Real Word256 where
+  toRational a = toInteger a % 1
+
+instance Integral Word256 where
+  quotRem a b = fromInteger *** fromInteger $ quotRem (toInteger a) (toInteger b)
+  toInteger (Word256 s3 s2 s1 s0) =
+    let f s n = toInteger s * 2^(64*n :: Int) in f s3 3 + f s2 2 + f s1 1 + f s0 0
+
+instance Bounded Word256 where
+  minBound = Word256 0 0 0 0
+  maxBound = Word256 maxBound maxBound maxBound maxBound
+
+tfRandSeedToList :: Word256 -> [Word64]
+tfRandSeedToList (Word256 s3 s2 s1 s0) = [s0, s1, s2, s3]
+
+listToTFRandSeed :: [Word64] -> Word256
+listToTFRandSeed = \ case
+  [] -> Word256 0 0 0 0
+  [s3] -> Word256 0 0 0 s3
+  [s3,s2] -> Word256 0 0 s2 s3
+  [s3,s2,s1] -> Word256 0 s1 s2 s3
+  s3:s2:s1:s0:_ -> Word256 s0 s1 s2 s3
+
+word64AddWithCarry :: Word64 -> Word64 -> (Word64, Word64)
+word64AddWithCarry a b = let top = (/= 0) . (.&.) (shift 1 63) in
+  (if top a && top b then 1 else 0, a + b)
+
+word64SumWithCarry :: [(Word64, Word64)] -> (Word64, Word64)
+word64SumWithCarry = foldl
+  (\ (accHI, accLO_0) (hi, lo) ->
+     let (carry, accLO) = word64AddWithCarry accLO_0 lo
+     in (accHI + hi + carry, accLO)
+  ) (0, 0)
+
+word64MultWithCarry :: Word64 -> Word64 -> (Word64, Word64)
+word64MultWithCarry a b = word64SumWithCarry
+  [(shift a $ 64 - i, shift a i) | i <- [0 .. 63], testBit b i]
+
+----------------------------------------------------------------------------------------------------
+
 -- | A simple default pure random number generator based on the Twofish pseudo-random number
 -- generator provided by the 'System.Random.TF.Gen'. This function type instantiates the
 -- 'Control.Monad.Random.Class.MonadRandom' class so that you can use this to evaluate an instance
@@ -135,8 +217,8 @@ instance (Floating n, Monad m) => Floating (TFRandT m n) where
 
 -- | Evaluate a 'TFRand' function using a Twofish pseudo-random seed composed of any four 64-bit
 -- unsigned integers. The pure random result is returned.
-evalTFRandSeed :: Word64 -> Word64 -> Word64 -> Word64 -> TFRand a -> a
-evalTFRandSeed s0 s1 s2 s3 f = evalTFRand f $ seedTFGen (s0,s1,s2,s3)
+evalTFRandSeed :: TFRandSeed -> TFRand a -> a
+evalTFRandSeed (Word256 s0 s1 s2 s3) f = evalTFRand f $ seedTFGen (s0,s1,s2,s3)
 
 -- | Evaluate the 'runTFRandSeed' function using entropy pulled from the operating system as a seed
 -- value. This will produce a different random result every time it is run.
@@ -147,7 +229,7 @@ evalTFRandIO f = evalTFRand f <$> initTFGen
 -- evaluation, use the 'arbitrary' function intance that has been defined for the the data type @a@
 -- to produce a result @a@.
 arbTFRandSeed :: Arbitrary a => Word64 -> Word64 -> Word64 -> Word64 -> a
-arbTFRandSeed s0 s1 s2 s3 = evalTFRandSeed s0 s1 s2 s3 arbitrary
+arbTFRandSeed s3 s2 s1 s0 = evalTFRandSeed (Word256 s3 s2 s1 s0) arbitrary
 
 -- | Similar to 'evalTFRandSeed', except instead of supplying just any 'TFRand' function for
 -- evaluation, use the 'arbitrary' function intance that has been defined for the the data type @a@
