@@ -3,49 +3,104 @@
 module ProcGen.Buffer
   ( module ProcGen.Buffer
   , module Control.Monad.Primitive
+  , module Control.Monad.State
   ) where
 
 import           ProcGen.Types
 
 import           Control.Monad
 import           Control.Monad.Primitive
+import           Control.Monad.State
 
-import           Data.Primitive.MutVar
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 
 ----------------------------------------------------------------------------------------------------
 
--- | Create a new buffer large enough to store 'ProcGen.Types.Duration' seconds worth of
--- 'ProcGen.Types.Sample's. Note that the return type of this function is polymorphic and can be
--- unified with either a type of 'Mutable.STVector' or an 'Mutable.IOVector'.
-newBuffer :: PrimMonad m => Duration -> m (Mutable.MVector (PrimState m) Sample)
-newBuffer = Mutable.new . (+ 1) . durationSampleCount
-
 -- | Find the minimum and maximum element in a mutable 'Mutable.MVector', evaluates to an error if
 -- the vector is empty so this function is not total.
-minMaxVec
+minMaxBuffer
   :: forall m elem . (Mutable.Unbox elem, Ord elem, PrimMonad m)
-  => Mutable.MVector (PrimState m) elem -> m (elem, elem)
-minMaxVec vec = do
+  => Mutable.MVector (PrimState m) elem -> m (MinMax elem)
+minMaxBuffer vec = do
   if Mutable.length vec == 0 then error $ "minMaxVec called on empty vector" else do
     init <- Mutable.read vec 0
-    lo <- newMutVar init
-    hi <- newMutVar init
-    forM_ [1 .. Mutable.length vec - 1] $ \ i ->
-      Mutable.read vec i >>= \ elem -> modifyMutVar lo (min elem) >> modifyMutVar hi (max elem)
-    liftM2 (,) (readMutVar lo) (readMutVar hi)
+    foldBuffer vec (TimeWindow 0 $ Mutable.length vec) (MinMax init init) $
+      const $ modify . flip stepMinMax
 
--- | Not to be confused with the Gaussian 'normal' function. Given a minimum and maximum value, this
--- function performs a simple linear transformation that normalizes all elements in the given
--- 'Mutable.STVector'.
-normalize
-  :: (Eq elem, Num elem, Fractional elem, Mutable.Unbox elem, PrimMonad m)
-  => Mutable.MVector (PrimState m) elem -> (elem, elem) -> m ()
-normalize vec (lo, hi) = do
+-- | Not to be confused with the Gaussian 'ProcGen.Types.normal' function. Given a minimum and
+-- maximum value, this function performs a simple linear transformation that normalizes all elements
+-- in the given mutable 'Mutable.MVector' buffer.
+normalizeBuffer
+  :: (Eq elem, Ord elem, Num elem, Fractional elem, Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem -> MinMax elem -> m ()
+normalizeBuffer vec (MinMax lo hi) = do
   let offset = (hi + lo) / 2
   let scale  = (hi - lo) / 2
-  unless (scale == 0) $ forM_ [0 .. Mutable.length vec - 1] $ \ i ->
-    Mutable.read vec i >>= Mutable.write vec i . (/ scale) . subtract offset
+  unless (scale == 0) $
+    mapBuffer vec (TimeWindow 0 $ Mutable.length vec) $ const $ pure . (/ scale) . subtract offset
+
+----------------------------------------------------------------------------------------------------
+
+-- | Apply a function to all elements in the buffer along the indicies given by the
+-- 'ProcGen.Types.TimeWindow' with a function over each index. The elements or only read, no
+-- elements are written to the buffer.
+foldBuffer
+  :: (Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem
+  -> TimeWindow Int
+  -> fold
+  -> (Int -> elem -> StateT fold m ())
+  -> m fold
+foldBuffer buf win fold f = flip execStateT fold $ forM_ (twEnum win) $ \ i ->
+  lift (Mutable.read buf i) >>= f i
+
+-- | Update a sequence of elements in a buffer along the indicies given by the
+-- 'ProcGen.Types.TimeWindow' with a function over each index and element.
+mapBuffer
+  :: (Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem
+  -> TimeWindow Int
+  -> (Int -> elem -> m elem)
+  -> m ()
+mapBuffer buf win f = foldMapBuffer buf win () $ \ i -> lift . f i
+
+-- | Like 'mapBuffer' but never reads elements from the buffer before applying the function. The
+-- function is applied to all indicies given by the 'ProcGen.Types.TimeWindow' and each result is
+-- written to the element in the buffer at each index.
+writeBuffer
+  :: (Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem
+  -> TimeWindow Int
+  -> (Int -> m elem)
+  -> m ()
+writeBuffer buf win f = foldWriteBuffer buf win () (lift . f)
+
+-- | Apply a function to all elements in the buffer along indicies given by the
+-- 'ProcGen.Types.TimeWindow' with a function over each index. The elements are not read, only
+-- written.
+foldWriteBuffer
+  :: (Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem
+  -> TimeWindow Int
+  -> fold
+  -> (Int -> StateT fold m elem)
+  -> m fold
+foldWriteBuffer buf win fold f = flip execStateT fold $ forM_ (twEnum win) $ \ i ->
+  f i >>= lift . Mutable.write buf i
+
+-- | Apply a function to all elements in the buffer along indicies given by the
+-- 'ProcGen.Types.TimeWindow' with a function over each index-element association. A state monad
+-- transformer function is used as the function to read and apply elements, that way you can perform
+-- some stateful tracking statistics on the elements applied.
+foldMapBuffer
+  :: (Mutable.Unbox elem, PrimMonad m)
+  => Mutable.MVector (PrimState m) elem
+  -> TimeWindow Int
+  -> fold -- ^ a value to fold as functions are applied
+  -> (Int -> elem -> StateT fold m elem)
+  -> m fold
+foldMapBuffer buf win fold f = flip execStateT fold $ forM_ (twEnum win) $ \ i ->
+  lift (Mutable.read buf i) >>= f i >>= lift . Mutable.write buf i
 
 ----------------------------------------------------------------------------------------------------
 
