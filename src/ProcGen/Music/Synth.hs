@@ -2,7 +2,7 @@
 -- musical instruments.
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..), runSynth,
+    Synth(..), SynthState(..), SynthElement(..), initSynth, runSynth,
     -- * Buffering
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
@@ -62,7 +62,11 @@ instance Monoid a => Monoid (Synth a) where
   mappend a b = mappend <$> a <*> b
   mempty = pure mempty
 
-newtype SynthState = SynthState { workingFDSignals :: [SynthElement]}
+data SynthState
+  = SynthState
+    { theSynthFDSignals :: [SynthElement]
+    , theSynthTFGen     :: TFGen
+    }
 
 -- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
 -- be used to display it in a GUI.
@@ -72,6 +76,15 @@ data SynthElement
     , theSynthElemColor  :: Color
     , theSynthElemSignal :: FDSignal
     }
+
+instance BufferIDCT SynthElement where
+  bufferIDCT mvec win = bufferIDCT mvec win . theSynthElemSignal
+
+instance BufferIDCT SynthState where
+  bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthFDSignals
+
+initSynth :: IO SynthState
+initSynth = SynthState [] <$> initTFGen
 
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
