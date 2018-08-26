@@ -100,10 +100,10 @@ data Word256 = Word256 !Word64 !Word64 !Word64 !Word64
   deriving (Eq, Ord)
 
 instance Num Word256 where
-  (+) a b = listToTFRandSeed $ snd $ foldl
+  (+) a b = listToWord256 $ snd $ foldl
     (\ (prevCarry, stk) (carry, a) -> (carry, (if prevCarry == 0 then 0 else a+1) : stk))
     (0, [])
-    (uncurry word64AddWithCarry <$> zip (tfRandSeedToList a) (tfRandSeedToList b))
+    (uncurry word64AddWithCarry <$> zip (word256toList a) (word256toList b))
   (*) a b = sum $ do
     let toDigits (Word256 s3 s2 s1 s0) =
           [ (s3, \ (_ , s3) -> Word256 s3  0  0  0)
@@ -114,7 +114,7 @@ instance Num Word256 where
     ((a, _), (b, constr)) <- (,) <$> toDigits a <*> toDigits b
     [constr $ word64MultWithCarry a b]
   negate = \ case
-    (Word256  0  0  0  0) -> Word256 0 0 0 0
+    (Word256  0  0  0  0) -> zeroBits
     (Word256 s3 s2 s1 s0) -> 1 +
       Word256 (complement s3) (complement s2) (complement s1) (complement s0)
   abs = id
@@ -122,7 +122,7 @@ instance Num Word256 where
   fromInteger =
     let divisor = 1 + toInteger (maxBound :: Word64)
         loop n_0 = let (n_1, remainder) = divMod n_0 divisor in fromInteger remainder : loop n_1
-    in  listToTFRandSeed . loop
+    in  listToWord256 . loop
 
 instance Enum Word256 where
   succ = (+ 1)
@@ -137,23 +137,78 @@ instance Real Word256 where
 
 instance Integral Word256 where
   quotRem a b = fromInteger *** fromInteger $ quotRem (toInteger a) (toInteger b)
-  toInteger (Word256 s3 s2 s1 s0) =
-    let f s n = toInteger s * 2^(64*n :: Int) in f s3 3 + f s2 2 + f s1 1 + f s0 0
+  toInteger (Word256 s3 s2 s1 s0) = let b = 2^(64::Int) in
+    ((toInteger s3 * b + toInteger s2) * b + toInteger s1) * b + toInteger s0
 
 instance Bounded Word256 where
-  minBound = Word256 0 0 0 0
+  minBound = zeroBits
   maxBound = Word256 maxBound maxBound maxBound maxBound
 
-tfRandSeedToList :: Word256 -> [Word64]
-tfRandSeedToList (Word256 s3 s2 s1 s0) = [s0, s1, s2, s3]
+instance Bits Word256 where
+  isSigned     = const False
+  bitSize      = const 256
+  bitSizeMaybe = const (Just 256)
+  popCount (Word256 s3 s2 s1 s0) =
+    let f off s next = let n = popCount s in if n > 0 then n + off else next
+    in  f 192 s3 $ f 128 s2 $ f 64 s1 $ popCount s0
+  zeroBits = Word256 0 0 0 0
+  (.|.) = word256BinOp (.|.)
+  (.&.) = word256BinOp (.|.)
+  xor   = word256BinOp xor
+  complement = word256FMap complement
+  rotate        w i = listToWord256 $ word64ShiftList (mod i 256) $ cycle $ word256toList w
+  shift         w i = if abs i >= 256 then zeroBits else
+    listToWord256 $ word64ShiftList i $ word256toList w
+  bit             = word256Bit zeroBits        setBit zeroBits
+  setBit        w = word256Bit        w        setBit        w
+  clearBit      w = word256Bit        w      clearBit        w
+  complementBit w = word256Bit        w complementBit        w
+  testBit (Word256 s3 s2 s1 s0) i = case div i 64 of
+    0 -> testBit s0 i
+    1 -> testBit s1 i
+    2 -> testBit s2 i
+    3 -> testBit s3 i
+    _ -> zeroBits
 
-listToTFRandSeed :: [Word64] -> Word256
-listToTFRandSeed = \ case
-  [] -> Word256 0 0 0 0
+word256FMap :: (Word64 -> Word64) -> Word256 -> Word256
+word256FMap f (Word256 s3 s2 s1 s0) = Word256 (f s3) (f s2) (f s1) (f s0)
+
+word256BinOp :: (Word64 -> Word64 -> Word64) -> Word256 -> Word256 -> Word256
+word256BinOp f (Word256 a3 a2 a1 a0) (Word256 b3 b2 b1 b0) =
+  Word256 (f a3 b3) (f a2 b2) (f a1 b1) (f a0 b0)
+
+word256Bit :: Word256 -> (Word64 -> Int -> Word64) -> Word256 -> Int -> Word256
+word256Bit deflt f (Word256 s3 s2 s1 s0) = \ case
+  i | i <  64 -> Word256 s3 s2 s1 (f s0 $ i -   0)
+  i | i < 128 -> Word256 s3 s2 (f s1 $ i -  64) s0
+  i | i < 192 -> Word256 s3 (f s2 $ i - 128) s1 s0
+  i | i < 256 -> Word256 (f s3 $ i - 192) s2 s1 s0
+  _           -> deflt
+
+word256toList :: Word256 -> [Word64]
+word256toList (Word256 s3 s2 s1 s0) = [s0, s1, s2, s3]
+
+listToWord256 :: [Word64] -> Word256
+listToWord256 = \ case
+  [] -> zeroBits
   [s3] -> Word256 0 0 0 s3
   [s3,s2] -> Word256 0 0 s2 s3
   [s3,s2,s1] -> Word256 0 s1 s2 s3
   s3:s2:s1:s0:_ -> Word256 s0 s1 s2 s3
+
+word64ShiftList :: Int -> [Word64] -> [Word64]
+word64ShiftList i = \ case
+  []   -> []
+  a:ax ->
+    let (d, r) = divMod i 64
+        loop prev (next, a) = \ case
+          []   -> [a .|. prev, next]
+          b:ax -> (a .|. prev) : loop next (word64ShiftWithCarry b r) ax
+    in (if d < 0 then drop (abs d) else ((replicate d 0) ++)) $ loop 0 (word64ShiftWithCarry a r) ax
+
+word64ShiftWithCarry :: Word64 -> Int -> (Word64, Word64)
+word64ShiftWithCarry w i = if i == 0 then (0, w) else
+  if i < 0 then (shift w i, shift w (64 + i)) else (shift w (64 - i), shift w i)
 
 word64AddWithCarry :: Word64 -> Word64 -> (Word64, Word64)
 word64AddWithCarry a b = let top = (/= 0) . (.&.) (shift 1 63) in
