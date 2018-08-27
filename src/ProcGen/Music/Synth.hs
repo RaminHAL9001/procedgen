@@ -2,7 +2,9 @@
 -- musical instruments.
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..), FDSignalShape(..),
+    Synth(..), SynthState(..), SynthElement(..),
+    FDSignalShape(..), applyFDSignalShape, fdShapeBase,
+    fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
     initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency,
     resizeSynthBuffer, resetSynthBuffer,
     fractions,
@@ -137,8 +139,8 @@ resizeSynthBuffer tw = do
   case compare newlen $ Mutable.length oldbuf of
     EQ -> return ()
     GT -> liftIO (Mutable.grow oldbuf newlen) >>= assign synthBuffer
-    LT -> liftIO (Mutable.clone $ Mutable.slice (timeStart iw) (timeEnd iw) oldbuf) >>=
-      assign synthBuffer
+    LT -> assign synthBuffer =<<
+      liftIO (Mutable.clone $ Mutable.slice (timeStart iw) (timeEnd iw) oldbuf)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -161,7 +163,31 @@ data FDSignalShape
       -- between 'theFDShapeBase' and 'theFDShapeUpperLimit'.
     }
 
+fdShapeBase :: Lens' FDSignalShape Frequency
+fdShapeBase = lens theFDShapeBase $ \ a b -> a{ theFDShapeBase = b }
 
+fdShapeLowerLimit :: Lens' FDSignalShape Frequency
+fdShapeLowerLimit = lens theFDShapeLowerLimit $ \ a b -> a{ theFDShapeLowerLimit = b }
+
+fdShapeUpperLimit :: Lens' FDSignalShape Frequency
+fdShapeUpperLimit = lens theFDShapeUpperLimit $ \ a b -> a{ theFDShapeUpperLimit = b }
+
+fdShapeLoEnvelope :: Lens' FDSignalShape Envelope
+fdShapeLoEnvelope = lens theFDShapeLoEnvelope $ \ a b -> a{ theFDShapeLoEnvelope = b }
+
+fdShapeHiEnvelope :: Lens' FDSignalShape Envelope
+fdShapeHiEnvelope = lens theFDShapeHiEnvelope $ \ a b -> a{ theFDShapeHiEnvelope = b }
+
+-- | Given a 'Frequency', return an amplitude for that frequency that fits the 'FDSignalShape'.
+applyFDSignalShape :: FDSignalShape -> Frequency -> Amplitude
+applyFDSignalShape sh freq =
+  if sh ^. fdShapeLowerLimit <= freq || freq <= sh ^. fdShapeUpperLimit then 0.0 else
+    case compare freq $ sh ^. fdShapeBase of
+      EQ -> 1.0
+      LT -> freq & (sh ^. fdShapeLoEnvelope)
+        (TimeWindow{ timeStart = sh ^. fdShapeLowerLimit, timeEnd = sh ^. fdShapeBase })
+      GT -> freq & (sh ^. fdShapeHiEnvelope)
+        (TimeWindow{ timeStart = sh ^. fdShapeBase, timeEnd = sh ^. fdShapeUpperLimit })
 
 ----------------------------------------------------------------------------------------------------
 
