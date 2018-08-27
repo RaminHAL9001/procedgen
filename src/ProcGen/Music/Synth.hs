@@ -242,6 +242,15 @@ synthPushNewElem label color strike comps = synthElements %= (:) SynthElement
   , theSynthElemSignal   = fdSignal comps
   }
 
+-- | Evaluate a mapping function on the top-most 'SynthElement in the stack. This function does
+-- nothing if the 'SynthElement' stack is empty.
+synthOnTopElem :: (FDComponent -> Synth FDComponent) -> Synth ()
+synthOnTopElem f = use synthElements >>= \ case
+  []         -> return ()
+  elem:elems -> do
+    comps <- flip forEachFDComponent f $ elem ^. fdCompListElems
+    synthElements .= (elem & fdCompListElems .~ comps) : elems
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A data type for declaring the shape of an 'FDSignal'.
