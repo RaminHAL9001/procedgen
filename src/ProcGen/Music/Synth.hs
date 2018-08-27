@@ -2,7 +2,9 @@
 -- musical instruments.
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..), initSynth, runSynth,
+    Synth(..), SynthState(..), SynthElement(..),
+    initSynth, runSynth, synthElements, synthTFGen, synthFrequency,
+    fractions,
     -- * Buffering
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
@@ -40,7 +42,6 @@ import           Control.Monad.ST
 
 import           Data.Semigroup
 import qualified Data.Text                   as Strict
---import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
@@ -64,8 +65,10 @@ instance Monoid a => Monoid (Synth a) where
 
 data SynthState
   = SynthState
-    { theSynthFDSignals :: [SynthElement]
+    { theSynthElements  :: [SynthElement]
+      -- ^ Elements to be used to render a 'TDSignal'.
     , theSynthTFGen     :: TFGen
+    , theSynthFrequency :: Frequency
     }
 
 -- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
@@ -81,13 +84,39 @@ instance BufferIDCT SynthElement where
   bufferIDCT mvec win = bufferIDCT mvec win . theSynthElemSignal
 
 instance BufferIDCT SynthState where
-  bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthFDSignals
+  bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthElements
+
+synthElements :: Lens' SynthState [SynthElement]
+synthElements = lens theSynthElements $ \ a b -> a{ theSynthElements = b }
+
+synthTFGen :: Lens' SynthState TFGen
+synthTFGen = lens theSynthTFGen $ \ a b -> a{ theSynthTFGen = b }
+
+synthFrequency :: Lens' SynthState Frequency
+synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
 
 initSynth :: IO SynthState
-initSynth = SynthState [] <$> initTFGen
+initSynth = SynthState [] <$> initTFGen <*> pure 256.0
 
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
+
+-- | Select the Nth prime number from the 'ProcGen.PrimeNumbers.all16BitPrimes' table.
+primeFunc :: Int -> ProcGenFloat
+primeFunc = realToFrac . (all16BitPrimes Unboxed.!)
+
+-- | This function generates a list of prime fractions, where the numerator and denominator are both
+-- prime numbers, from a selection of primes passed as parameters to this function. To select a
+-- prime number, simply pass an 'Prelude.Int' and it will be selected from a table of primes, where
+-- the integer @0@ selects the first prime number @2@, the integer @1@ selects the next prime number
+-- 3 and so on. Pass two selections of primes, one for the numerators of the generated fractions,
+-- and one for the denominators. Pass a filter function to filter out numerator/denominator pairs to
+-- limit the selection of primes, for example passing @(Prelude.<)@ will select all pairs where the
+-- numerator is less than the denominator, therefore the list of generated fractions will all be
+-- less than 1 and greater than zero.
+fractions :: (Int -> Int -> Bool) -> [Int] -> [Int] -> [ProcGenFloat]
+fractions filt nums denoms =
+  [primeFunc num / primeFunc denom | denom <- denoms, num <- nums, num /= denom, filt num denom]
 
 ----------------------------------------------------------------------------------------------------
 
