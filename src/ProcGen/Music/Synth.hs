@@ -103,13 +103,13 @@ data SynthElement
       -- ^ A textual label that can be used to manipulate this element when it is in a list.
     , theSynthElemColor    :: !Color
       -- ^ When rendering this element, what color should be used to draw it?
-    , theSynthElemSignal   :: !FDSignal
-      -- ^ The 'FDSignal' content of this element.
     , theSynthElemIsStrike :: !Bool
       -- ^ Strike elements are always rendered first and are always rendered with a brief
       -- envelope. A strike is the sound made when an instrument is struck, either with an implement
       -- like a finger, a stick, a pick, or a bow, or with air in the case of woodwind and brass
       -- instruments.
+    , theSynthElemSignal   :: !FDSignal
+      -- ^ The 'FDSignal' content of this element.
     }
 
 instance BufferIDCT SynthElement where
@@ -224,6 +224,21 @@ synthApplyShape :: [FDComponent] -> Synth [FDComponent]
 synthApplyShape = mapM $ \ comp -> do
   shape <- use synthFDShape
   pure comp{ fdAmplitude = applyFDSignalShape shape $ fdFrequency comp}
+
+-- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
+-- 'SynthElement' on the stack of elements.
+synthPushNewElem
+  :: Strict.Text -- ^ a label by which you can refer to this component later.
+  -> Color       -- ^ the color to use when drawing an image of this element in the GUI.
+  -> Bool        -- ^ whether this element is a strike element.
+  -> [FDComponent]
+  -> Synth ()
+synthPushNewElem label color strike comps = synthElements %= (:) SynthElement
+  { theSynthElemLabel    = label
+  , theSynthElemColor    = color
+  , theSynthElemIsStrike = strike
+  , theSynthElemSignal   = fdSignal $ FDComponentList (length comps) comps
+  }
 
 ----------------------------------------------------------------------------------------------------
 
