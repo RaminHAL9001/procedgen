@@ -7,7 +7,7 @@ module ProcGen.Music.Synth
     fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
     initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
     resizeSynthBuffer, resetSynthBuffer,
-    fractions,
+    smallFractions, bigFractions, allFractions,
     -- * Buffering
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
@@ -113,7 +113,7 @@ synthBuffer :: Lens' SynthState (Mutable.IOVector Sample)
 synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
 
 initSynth :: IO SynthState
-initSynth = SynthState [] 256.0 fdSignalShapeFlat <$> newSampleBuffer 4.0 <*> initTFGen
+initSynth = SynthState [] 256.0 (fdSignalShapeFlat 1.0) <$> newSampleBuffer 4.0 <*> initTFGen
 
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
@@ -126,14 +126,33 @@ primeFunc = realToFrac . (all16BitPrimes Unboxed.!)
 -- prime numbers, from a selection of primes passed as parameters to this function. To select a
 -- prime number, simply pass an 'Prelude.Int' and it will be selected from a table of primes, where
 -- the integer @0@ selects the first prime number @2@, the integer @1@ selects the next prime number
--- 3 and so on. Pass two selections of primes, one for the numerators of the generated fractions,
--- and one for the denominators. Pass a filter function to filter out numerator/denominator pairs to
--- limit the selection of primes, for example passing @(Prelude.<)@ will select all pairs where the
--- numerator is less than the denominator, therefore the list of generated fractions will all be
--- less than 1 and greater than zero.
+-- 3 and so on.
+--
+-- Pass two selections of primes as a list of 'Prelude.Int's, one for the numerators of the
+-- generated fractions, and one for the denominators. As the first parameter to this function, pass
+-- a filter function of type @('Prelude.Int' -> 'Prelude.Int' -> 'Prelude.Bool') to filter out
+-- numerator/denominator pairs to limit the selection of primes. Passing @('Prelude.==')@ as the
+-- filter will result in an empty list, since fractions where the numerator and denominator are
+-- equivalent produce a fraction with a value of 1.0, and values of 1.0 are filtered out on the
+-- final pass.
 fractions :: (Int -> Int -> Bool) -> [Int] -> [Int] -> [ProcGenFloat]
 fractions filt nums denoms =
   [primeFunc num / primeFunc denom | denom <- denoms, num <- nums, num /= denom, filt num denom]
+
+-- | Generate all possible pairs of integers and evaluate them as fractions. Fractions equal to 1.0
+-- are not returned. Only return fractions less than 1.0 and greater than 0.0.
+smallFractions :: [Int] -> [Int] -> [ProcGenFloat]
+smallFractions = fractions (<)
+
+-- | Generate all possible pairs of integers and evaluate them as fractions. Fractions equal to 1.0
+-- are not returned. Only return fractions greater than 1.0.
+bigFractions :: [Int] -> [Int] -> [ProcGenFloat]
+bigFractions = fractions (>)
+
+-- | Generate all possible pairs of integers and evaluate them as fractions. Fractions equal to 1.0
+-- are not returned. Only return fractions less than 1.0 and greater than 0.0
+allFractions :: [Int] -> [Int] -> [ProcGenFloat]
+allFractions = fractions (const $ const True)
 
 -- | Delete the current buffer and replace it with a new one of the given size.
 resetSynthBuffer :: Duration -> Synth ()
@@ -173,13 +192,13 @@ data FDSignalShape
     }
 
 -- | A default 'FDSignalShape' which always evaluates to 1.0.
-fdSignalShapeFlat :: FDSignalShape
-fdSignalShapeFlat = FDSignalShape
+fdSignalShapeFlat :: Amplitude -> FDSignalShape
+fdSignalShapeFlat a = FDSignalShape
   { theFDShapeBase       = 256.0
   , theFDShapeLowerLimit = 15.0
-  , theFDShapeLoEnvelope = const $ const 1.0
+  , theFDShapeLoEnvelope = const $ const a
   , theFDShapeUpperLimit = nyquist
-  , theFDShapeHiEnvelope = const $ const 1.0
+  , theFDShapeHiEnvelope = const $ const a
   }
 
 fdShapeBase :: Lens' FDSignalShape Frequency
