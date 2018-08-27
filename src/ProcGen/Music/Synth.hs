@@ -5,7 +5,7 @@ module ProcGen.Music.Synth
     Synth(..), SynthState(..), SynthElement(..),
     FDSignalShape(..), applyFDSignalShape, fdShapeBase,
     fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
-    initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency,
+    initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
     resizeSynthBuffer, resetSynthBuffer,
     fractions,
     -- * Buffering
@@ -70,9 +70,15 @@ data SynthState
   = SynthState
     { theSynthElements  :: [SynthElement]
       -- ^ Elements to be used to render a 'TDSignal'.
-    , theSynthTFGen     :: TFGen
-    , theSynthBuffer    :: Mutable.IOVector Sample
     , theSynthFrequency :: Frequency
+      -- ^ The frequency around which procedurally generated frequency domain components are centered.
+    , theSynthFDShape   :: FDSignalShape
+      -- ^ a function used to enforce a shape on procedurally generated frequency domain components.
+    , theSynthBuffer    :: Mutable.IOVector Sample
+      -- ^ a buffer used to render the frequency domain signal to a time domain signal. This buffer
+      -- begins with enough memory to store 4.0 seconds of sound, but can be changed with
+      -- 'resetSynthBuffer' and 'resizeSynthBuffer'.
+    , theSynthTFGen     :: TFGen
     }
 
 -- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
@@ -97,6 +103,9 @@ synthElements = lens theSynthElements $ \ a b -> a{ theSynthElements = b }
 synthTFGen :: Lens' SynthState TFGen
 synthTFGen = lens theSynthTFGen $ \ a b -> a{ theSynthTFGen = b }
 
+synthFDShape :: Lens' SynthState FDSignalShape
+synthFDShape = lens theSynthFDShape $ \ a b -> a{ theSynthFDShape = b }
+
 synthFrequency :: Lens' SynthState Frequency
 synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
 
@@ -104,7 +113,7 @@ synthBuffer :: Lens' SynthState (Mutable.IOVector Sample)
 synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
 
 initSynth :: IO SynthState
-initSynth = SynthState [] <$> initTFGen <*> newSampleBuffer 4.0 <*> pure 256.0
+initSynth = SynthState [] 256.0 fdSignalShapeFlat <$> newSampleBuffer 4.0 <*> initTFGen
 
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
@@ -162,6 +171,16 @@ data FDSignalShape
       -- ^ Like 'theFDShapeLoEnvelope' but defines an envelope applied to the region of frequencies
       -- between 'theFDShapeBase' and 'theFDShapeUpperLimit'.
     }
+
+-- | A default 'FDSignalShape' which always evaluates to 1.0.
+fdSignalShapeFlat :: FDSignalShape
+fdSignalShapeFlat = FDSignalShape
+  { theFDShapeBase       = 256.0
+  , theFDShapeLowerLimit = 15.0
+  , theFDShapeLoEnvelope = const $ const 1.0
+  , theFDShapeUpperLimit = nyquist
+  , theFDShapeHiEnvelope = const $ const 1.0
+  }
 
 fdShapeBase :: Lens' FDSignalShape Frequency
 fdShapeBase = lens theFDShapeBase $ \ a b -> a{ theFDShapeBase = b }
