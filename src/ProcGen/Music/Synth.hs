@@ -135,6 +135,18 @@ synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
 synthBuffer :: Lens' SynthState (Mutable.IOVector Sample)
 synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
 
+synthElemLabel    :: Lens' SynthElement Strict.Text
+synthElemLabel = lens theSynthElemLabel $ \ a b -> a{ theSynthElemLabel = b }
+
+synthElemColor    :: Lens' SynthElement Color
+synthElemColor = lens theSynthElemColor $ \ a b -> a{ theSynthElemColor = b }
+
+synthElemIsStrike :: Lens' SynthElement Bool
+synthElemIsStrike = lens theSynthElemIsStrike $ \ a b -> a{ theSynthElemIsStrike = b }
+
+synthElemSignal   :: Lens' SynthElement FDSignal
+synthElemSignal = lens theSynthElemSignal $ \ a b -> a{ theSynthElemSignal = b }
+
 initSynth :: IO SynthState
 initSynth = SynthState [] 256.0 (fdSignalShapeFlat 1.0) <$> newSampleBuffer 4.0 <*> initTFGen
 
@@ -204,8 +216,8 @@ synthMultBaseFreq :: [ProcGenFloat] -> Synth FDComponentList
 synthMultBaseFreq fracs = do
   shape <- use synthFDShape
   base  <- use synthFrequency
-  liftM fdComponentList $ mapM (\ comp -> (\ phase -> comp{ fdPhaseShift = phase }) <$> randPhase)
-    [ emptyFDComponent{ fdFrequency = freq, fdAmplitude = applyFDSignalShape shape freq }
+  liftM fdComponentList $ mapM (\ comp -> (\ phase -> comp{ theFDPhaseShift = phase }) <$> randPhase)
+    [ emptyFDComponent{ theFDFrequency = freq, theFDAmplitude = applyFDSignalShape shape freq }
     | frac <- fracs, let freq = frac * base
     ]
 
@@ -216,7 +228,7 @@ synthRandomizeLevels a b comps = do
   let (lo, hi) = (min 1.0 $ min a b, max 0.0 $ max a b)
   let scale x = if a == b then return (x * a) else onRandFloat (\ c -> (c * (hi - lo) + lo) * x)
   forEachFDComponent comps $ \ comp ->
-    scale (fdAmplitude comp) >>= \ amp -> pure comp{ fdAmplitude = amp }
+    scale (theFDAmplitude comp) >>= \ amp -> pure comp{ theFDAmplitude = amp }
 
 -- | Generating frequencies within a 'Synth' type function will automatically apply levels according
 -- to the 'synthFDShape' function, however if you want to re-apply levels after some operation that
@@ -225,7 +237,7 @@ synthRandomizeLevels a b comps = do
 synthApplyShape :: FDComponentList -> Synth FDComponentList
 synthApplyShape = flip forEachFDComponent $ \ comp -> do
   shape <- use synthFDShape
-  pure comp{ fdAmplitude = applyFDSignalShape shape $ fdFrequency comp}
+  pure comp{ theFDAmplitude = applyFDSignalShape shape $ theFDFrequency comp}
 
 -- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
 -- 'SynthElement' on the stack of elements.
@@ -248,8 +260,8 @@ synthOnTopElem :: (FDComponent -> Synth FDComponent) -> Synth ()
 synthOnTopElem f = use synthElements >>= \ case
   []         -> return ()
   elem:elems -> do
-    comps <- flip forEachFDComponent f $ elem ^. fdCompListElems
-    synthElements .= (elem & fdCompListElems .~ comps) : elems
+    comps <- forEachFDComponent (elem ^. synthElemSignal . fdSignalComponents) f
+    synthElements .= (elem & synthElemSignal . fdSignalComponents .~ comps) : elems
 
 ----------------------------------------------------------------------------------------------------
 
@@ -338,79 +350,103 @@ type ComponentIndex = Int
 
 data FDComponent
   = FDComponent
-    { fdFrequency  :: !Frequency  -- ^ must be between 15.0 and 22100.0 Hz
-    , fdAmplitude  :: !Amplitude 
-    , fdPhaseShift :: !PhaseShift -- ^ must be between 0 and 1, automatically scaled to 2*pi
-    , fdDecayRate  :: !HalfLife   -- ^ set to zero for no decay
-    , fdNoiseLevel :: !Amplitude
+    { theFDFrequency  :: !Frequency  -- ^ must be between 15.0 and 22100.0 Hz
+    , theFDAmplitude  :: !Amplitude 
+    , theFDPhaseShift :: !PhaseShift -- ^ must be between 0 and 1, automatically scaled to 2*pi
+    , theFDDecayRate  :: !HalfLife   -- ^ set to zero for no decay
+    , theFDNoiseLevel :: !Amplitude
       -- ^ how much noise to apply, as a measure of variance in the 'fdAmplitude'. A value of @1.0@
       -- means the amplitude of each cycle varies is multiplied by a random number between @0.0@ to
       -- @1.0@. A value of @0.5@ means the amplitude of each cycle is mulitplied by a random number
       -- between @0.5@ (half volume) and @1.0@ (full volume).
-    , fdUndertone  :: !Frequency
+    , theFDUndertone  :: !Frequency
       -- ^ set whehther the amplitude is also oscillating, must be between 0.0 and 7.5 Hz, zero
       -- indicates no oscillation. Also if the 'fdDecayRate' has a half life less than the period of
       -- the 'fdUndertone', the 'fdUndertone' is ignored.
-    , fdUnderphase :: !PhaseShift
+    , theFDUnderphase :: !PhaseShift
       -- ^ the phase shift for the 'fdUndertone'
-    , fdUnderamp   :: !Amplitude
+    , theFDUnderamp   :: !Amplitude
       -- ^ the amplitude of the 'fdUndertone'
     }
   deriving (Eq, Ord)
 
+fdFrequency  :: Lens' FDComponent Frequency
+fdFrequency = lens theFDFrequency $ \ a b -> a{ theFDFrequency = b }
+
+fdAmplitude  :: Lens' FDComponent Amplitude
+fdAmplitude = lens theFDAmplitude $ \ a b -> a{ theFDAmplitude = b }
+
+fdPhaseShift :: Lens' FDComponent PhaseShift
+fdPhaseShift = lens theFDPhaseShift $ \ a b -> a{ theFDPhaseShift = b }
+
+fdDecayRate  :: Lens' FDComponent HalfLife
+fdDecayRate = lens theFDDecayRate $ \ a b -> a{ theFDDecayRate = b }
+
+fdNoiseLevel :: Lens' FDComponent Amplitude
+fdNoiseLevel = lens theFDNoiseLevel $ \ a b -> a{ theFDNoiseLevel = b }
+
+fdUndertone  :: Lens' FDComponent Frequency
+fdUndertone = lens theFDUndertone $ \ a b -> a{ theFDUndertone = b }
+
+fdUnderphase :: Lens' FDComponent PhaseShift
+fdUnderphase = lens theFDUnderphase $ \ a b -> a{ theFDUnderphase = b }
+
+fdUnderamp   :: Lens' FDComponent Amplitude
+fdUnderamp = lens theFDUnderamp $ \ a b -> a{ theFDUnderamp = b }
+
 instance Show FDComponent where
   show fd = printf
     "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f noise=%+.4f undrtone=%+.4f undrphse=%.4f)"
-    (fdFrequency fd) (fdAmplitude fd) (fdPhaseShift fd) (fdDecayRate fd)
-    (fdNoiseLevel fd) (fdUndertone fd) (fdUnderphase fd)
+    (fd ^. fdFrequency) (fd ^. fdAmplitude) (fd ^. fdPhaseShift) (fd ^. fdDecayRate)
+    (fd ^. fdNoiseLevel) (fd ^. fdUndertone) (fd ^. fdUnderphase)
 
 instance Collapsible Float FDComponent where
   collapse =
-    buildRecord fdFrequency  <>
-    buildRecord fdAmplitude  <>
-    buildRecord fdPhaseShift <>
-    buildRecord fdDecayRate  <>
-    buildRecord fdNoiseLevel <>
-    buildRecord fdUndertone  <>
-    buildRecord fdUnderphase <>
-    buildRecord fdUnderamp
+    buildRecord theFDFrequency  <>
+    buildRecord theFDAmplitude  <>
+    buildRecord theFDPhaseShift <>
+    buildRecord theFDDecayRate  <>
+    buildRecord theFDNoiseLevel <>
+    buildRecord theFDUndertone  <>
+    buildRecord theFDUnderphase <>
+    buildRecord theFDUnderamp
   uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
 
 emptyFDComponent :: FDComponent
 emptyFDComponent = FDComponent
-  { fdFrequency  = 0
-  , fdAmplitude  = 0
-  , fdPhaseShift = 0
-  , fdDecayRate  = 0
-  , fdNoiseLevel = 0
-  , fdUndertone  = 0
-  , fdUnderphase = 0
-  , fdUnderamp   = 0
+  { theFDFrequency  = 0
+  , theFDAmplitude  = 0
+  , theFDPhaseShift = 0
+  , theFDDecayRate  = 0
+  , theFDNoiseLevel = 0
+  , theFDUndertone  = 0
+  , theFDUnderphase = 0
+  , theFDUnderamp   = 0
   }
 
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
 nullFDComponent :: FDComponent -> Bool
-nullFDComponent fd = fdFrequency fd == 0 || fdAmplitude fd == 0
+nullFDComponent fd = fd ^. fdFrequency == 0 || fd ^. fdAmplitude == 0
 
 -- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this
 -- component. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent',
 -- because this is a pure function that has no access to a random number generator.
 fdComponentSampleAt :: FDComponent -> Moment -> Sample
-fdComponentSampleAt fd t = if fdFrequency fd > nyquist then 0 else
-  fdComponentAmplitudeAt fd t * sin (fdPhaseShift fd + 2.0 * pi * fdFrequency fd * t)
+fdComponentSampleAt fd t = if fd ^. fdFrequency > nyquist then 0 else
+  fdComponentAmplitudeAt fd t * sin ((fd ^. fdPhaseShift) + 2.0 * pi * (fd ^. fdFrequency) * t)
 
 -- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
 -- time. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent', because
 -- this is a pure function that has no access to a random number generator.
 fdComponentAmplitudeAt :: FDComponent -> Moment -> Sample
 fdComponentAmplitudeAt fd t =
-  (if fdDecayRate fd <= 0.0 then id else
-     flip (/) $ 1.0 + t / fdDecayRate fd
+  (if fd ^. fdDecayRate <= 0.0 then id else
+     flip (/) $ 1.0 + t / (fd ^. fdDecayRate)
   ) .
-  (if fdUndertone fd <= 0.0 || fdUnderphase fd <= 0.0 || fdUnderamp fd <= 0.0 then id else
-     (*) $ fdUnderamp fd * (1 + sin (fdUndertone fd * 2 * pi * t + fdUnderphase fd) / 2)
+  (if fd^.fdUndertone <= 0.0 || fd^.fdUnderphase <= 0.0 || fd^.fdUnderamp <= 0.0 then id else
+     (*) $ (fd^.fdUnderamp) * (1 + sin ((fd^.fdUndertone) * 2 * pi * t + (fd^.fdUnderphase)) / 2)
   ) $
-  (fdAmplitude fd)
+  (fd ^. fdAmplitude)
 
 randPhase :: MonadRandom m => m PhaseShift
 randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
@@ -472,26 +508,26 @@ randFDComponents base = do
         guard $ freq < nyquist
         guard $ amp  > 0.1
         return $ (,) 1 $ FDComponent
-          { fdFrequency  = base * mul
-          , fdAmplitude  = if mul > 1 then amp / mul else amp * mul
-          , fdPhaseShift = phase
-          , fdDecayRate  = decay
-          , fdNoiseLevel = noise
-          , fdUndertone  = under
-          , fdUnderphase = undph
-          , fdUnderamp   = undamp
+          { theFDFrequency  = base * mul
+          , theFDAmplitude  = if mul > 1 then amp / mul else amp * mul
+          , theFDPhaseShift = phase
+          , theFDDecayRate  = decay
+          , theFDNoiseLevel = noise
+          , theFDUndertone  = under
+          , theFDUnderphase = undph
+          , theFDUnderamp   = undamp
           }
   return FDComponentList
     { theFDCompListLength = count + 1
     , theFDCompListElems  = FDComponent
-        { fdFrequency  = base
-        , fdAmplitude  = 1.0
-        , fdPhaseShift = 0.0
-        , fdDecayRate  = 0.0
-        , fdNoiseLevel = 1.0
-        , fdUndertone  = 0.0
-        , fdUnderphase = 0.0
-        , fdUnderamp   = 0.0
+        { theFDFrequency  = base
+        , theFDAmplitude  = 1.0
+        , theFDPhaseShift = 0.0
+        , theFDDecayRate  = 0.0
+        , theFDNoiseLevel = 1.0
+        , theFDUndertone  = 0.0
+        , theFDUnderphase = 0.0
+        , theFDUnderamp   = 0.0
         } : components
     }
 
@@ -522,7 +558,7 @@ instance Show FDSignal where
 
 instance BufferIDCT FDSignal where
   bufferIDCT mvec win = let lim f = 15.0 <= f && f <= nyquist in
-    mapM_ (bufferIDCT mvec win) . filter (lim . fdFrequency) . listFDElems
+    mapM_ (bufferIDCT mvec win) . filter (lim . theFDFrequency) . theFDCompListElems . listFDElems
 
 -- | Construct an empty 'FDSignal'.
 emptyFDSignal :: FDSignal
@@ -537,6 +573,9 @@ emptyFDSignal = FDSignal
 -- | Returns 'Prelude.True' if the 'FDSignal' contains no 'FDComponents'.
 nullFDSignal :: FDSignal -> Bool
 nullFDSignal = (<= 0) . fdSize
+
+fdSignalComponents :: Iso' FDSignal FDComponentList
+fdSignalComponents = iso listFDElems fdSignal
 
 -- | Create a new 'FDSignal'. Provide the number of components so that the amount of space to
 -- allocate for the array does not need to be computed by counting components. Then provide a list
@@ -558,8 +597,8 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
                   wr phasi fdPhaseShift
                   wr decai fdDecayRate
                   modify $ \ st -> st
-                    { fdMinFreq = min (fdMinFreq st) (fdFrequency comp)
-                    , fdMaxFreq = max (fdMaxFreq st) (fdFrequency comp)
+                    { fdMinFreq = min (fdMinFreq st) (comp ^. fdFrequency)
+                    , fdMaxFreq = max (fdMaxFreq st) (comp ^. fdFrequency)
                     }
                   loop (i + 4) elems
           loop 0 (c0 : elems)
@@ -573,20 +612,23 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
         }
 
 -- | Extract a copy of every element triple from the 'FDSignal' as a list.
-listFDElems :: FDSignal -> [FDComponent]
-listFDElems (FDSignal{fdSignalVector=vec}) = loop $ Unboxed.toList vec where
-  loop = \ case
-    freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
-      { fdFrequency  = freq
-      , fdAmplitude  = amp
-      , fdPhaseShift = phase
-      , fdDecayRate  = decay
-      , fdNoiseLevel = noise
-      , fdUndertone  = undfrq
-      , fdUnderphase = undphs
-      , fdUnderamp   = undamp
-      } : loop ax
-    _ -> []
+listFDElems :: FDSignal -> FDComponentList
+listFDElems (FDSignal{fdSignalVector=vec}) = FDComponentList
+  { theFDCompListElems  = loop $ Unboxed.toList vec
+  , theFDCompListLength = Unboxed.length vec `div` 8
+  } where
+      loop = \ case
+        freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
+          { fdFrequency  = freq
+          , fdAmplitude  = amp
+          , fdPhaseShift = phase
+          , fdDecayRate  = decay
+          , fdNoiseLevel = noise
+          , fdUndertone  = undfrq
+          , fdUnderphase = undphs
+          , fdUnderamp   = undamp
+          } : loop ax
+        _ -> []
 
 -- | Similar to 'listFDElems', but includes the integer index associated with each element.
 listFDAssocs :: FDSignal -> [(ComponentIndex, FDComponent)]
