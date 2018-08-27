@@ -2,8 +2,9 @@
 -- musical instruments.
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..),
-    initSynth, runSynth, synthElements, synthTFGen, synthFrequency,
+    Synth(..), SynthState(..), SynthElement(..), FDSignalShape(..),
+    initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency,
+    resizeSynthBuffer, resetSynthBuffer,
     fractions,
     -- * Buffering
     BufferIDCT(..), newSampleBuffer,
@@ -68,6 +69,7 @@ data SynthState
     { theSynthElements  :: [SynthElement]
       -- ^ Elements to be used to render a 'TDSignal'.
     , theSynthTFGen     :: TFGen
+    , theSynthBuffer    :: Mutable.IOVector Sample
     , theSynthFrequency :: Frequency
     }
 
@@ -86,6 +88,7 @@ instance BufferIDCT SynthElement where
 instance BufferIDCT SynthState where
   bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthElements
 
+-- | The elements we are working with.
 synthElements :: Lens' SynthState [SynthElement]
 synthElements = lens theSynthElements $ \ a b -> a{ theSynthElements = b }
 
@@ -95,8 +98,11 @@ synthTFGen = lens theSynthTFGen $ \ a b -> a{ theSynthTFGen = b }
 synthFrequency :: Lens' SynthState Frequency
 synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
 
+synthBuffer :: Lens' SynthState (Mutable.IOVector Sample)
+synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
+
 initSynth :: IO SynthState
-initSynth = SynthState [] <$> initTFGen <*> pure 256.0
+initSynth = SynthState [] <$> initTFGen <*> newSampleBuffer 4.0 <*> pure 256.0
 
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
@@ -117,6 +123,45 @@ primeFunc = realToFrac . (all16BitPrimes Unboxed.!)
 fractions :: (Int -> Int -> Bool) -> [Int] -> [Int] -> [ProcGenFloat]
 fractions filt nums denoms =
   [primeFunc num / primeFunc denom | denom <- denoms, num <- nums, num /= denom, filt num denom]
+
+-- | Delete the current buffer and replace it with a new one of the given size.
+resetSynthBuffer :: Duration -> Synth ()
+resetSynthBuffer = liftIO . newSampleBuffer >=> assign synthBuffer
+
+-- | Resize the current buffer, copy the signal within to the resized buffer.
+resizeSynthBuffer :: TimeWindow Moment -> Synth ()
+resizeSynthBuffer tw = do
+  oldbuf <- gets theSynthBuffer
+  let iw     = durationSampleCount <$> tw
+  let newlen = timeEnd iw - timeStart iw + 1
+  case compare newlen $ Mutable.length oldbuf of
+    EQ -> return ()
+    GT -> liftIO (Mutable.grow oldbuf newlen) >>= assign synthBuffer
+    LT -> liftIO (Mutable.clone $ Mutable.slice (timeStart iw) (timeEnd iw) oldbuf) >>=
+      assign synthBuffer
+
+----------------------------------------------------------------------------------------------------
+
+-- | A data type for declaring the shape of an 'FDSignal'.
+data FDSignalShape
+  = FDSignalShape
+    { theFDShapeBase       :: Frequency
+      -- ^ The base frequency, which splits the audible spectrum into "lower" and "upper" bands.
+    , theFDShapeLowerLimit :: Frequency
+      -- ^ The lowest audible frequency of the shape
+    , theFDShapeLoEnvelope :: Envelope
+      -- ^ The envelope that defines the shape of the 'FDSignal' to be produced by this
+      -- structure. The 'ProcGen.Types.Envelope' function is expected to be defined only on the
+      -- range between and including 0.0 and 1.0, and will be transformed to fit in the region of
+      -- frequencies between 'theFDShapeLowerLimit' and 'theFDShapeBase'.
+    , theFDShapeUpperLimit :: Frequency
+      -- ^ Like 'theFDShapeLowerLimit' but defines a point above 'theFDShapeBase' frequency.
+    , theFDShapeHiEnvelope :: Envelope
+      -- ^ Like 'theFDShapeLoEnvelope' but defines an envelope applied to the region of frequencies
+      -- between 'theFDShapeBase' and 'theFDShapeUpperLimit'.
+    }
+
+
 
 ----------------------------------------------------------------------------------------------------
 
