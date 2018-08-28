@@ -1,9 +1,15 @@
 module ProcGen.Music.KeyFreq88
-  ( OctaveIntervalIndex, ToneShift(..), ToneIndex(..), UniqueToneIndex(..),
+  (-- * Tonics
+    ToneIndex(..), ToneShift(..), UniqueToneIndex(..), OctaveIntervalIndex,
     packW8, unpackW8, toneToUnique, uniqueToTone, toneShift, toneName, uniqueToneIndex,
     isUniqueToneIndex,
+    -- * The 88-Key Piano Keyboard
     KeyIndex, keyIndexToInt,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
+    -- * Chords
+    KeySignature(..), keySignature, keySigFreqTable,
+    NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
+    Chord, triad, seventh, nameToChord, chordToInts
   )
   where
 
@@ -12,6 +18,7 @@ import           ProcGen.Types
 import           Control.Arrow
                 
 import           Data.Char
+import           Data.List                      (nub, sort)
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
                 
@@ -182,7 +189,7 @@ the88Keys = Unboxed.fromList $ keyFreq <$> [0..87]
 
 -- | Lookup a 'ProcGen.Types.Frequency' for the given 'KeyIndex'.
 keyboard88 :: Int -> Frequency
-keyboard88 i = the88Keys Unboxed.! fromIntegral i
+keyboard88 = (the88Keys Unboxed.!)
 
 concertA :: Frequency
 concertA = 440.0
@@ -205,3 +212,92 @@ keyFreq' :: Frequency -> Frequency
 keyFreq' f = k + d * log(f / concertA) / log 2 where
   k = fromIntegral concertAPianoKey
   d = fromIntegral keysPerOctave
+
+----------------------------------------------------------------------------------------------------
+
+data KeySignature = KeySignature !ToneIndex !Chord
+  deriving (Eq, Ord, Show, Read)
+
+-- | A constructor for a 'KeySignature', but unlike the capitalized data constructor, this function
+-- takes a 'NamedChord' rather than a 'Chord'.
+keySignature :: ToneIndex -> NamedChord -> KeySignature
+keySignature i = KeySignature i . nameToChord
+
+-- | Compute a 'KeySignature' frequency table, that is a table of all frequencies that are members
+-- of this 'KeySignature'. A procedurally generated song will randomly select frequencies from a
+-- table for the key signature. It is best to memoize these tables whenever possible.
+keySigFreqTable :: KeySignature -> Unboxed.Vector Frequency
+keySigFreqTable (KeySignature tonic chord) = let offset = fromEnum (toneToUnique tonic) in
+  Unboxed.fromList [keyboard88 $ key + offset | (KeyIndex key) <- chordToInts chord]
+
+----------------------------------------------------------------------------------------------------
+
+-- | Common names for chords. These are atomic symbols which instantiate the 'Prelude.Enum' type
+-- class, but you can convert these to 'Chord' values using the 'nameToChord' function.
+data NamedChord
+  = Maj3 | Min3 | Dim3 | Sus3
+  | Maj7 | Min7 | Dim7
+  | HalfDim7 | DimMaj7 | MinMaj7 | AugMaj7 | AugMin7
+  | Alt7 | Dom7 | DomFlat7
+  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+
+major7ths :: [NamedChord]
+major7ths = [Maj7, DimMaj7, MinMaj7, AugMaj7]
+
+minor7ths :: [NamedChord]
+minor7ths = [Min7, MinMaj7, AugMin7]
+
+augmented7ths :: [NamedChord]
+augmented7ths = [AugMaj7, AugMin7]
+
+diminished7ths :: [NamedChord]
+diminished7ths = [Dim7, DimMaj7, HalfDim7]
+
+dominant7ths :: [NamedChord]
+dominant7ths = [Dom7, DomFlat7]
+
+----------------------------------------------------------------------------------------------------
+
+-- | These are chords which determine the key of a chord progression. Whether a chord is 'major' or
+-- 'minor' depends on the integer values set in these constructors. The 'KeySignature' of the chord
+-- independent of this chord value.
+data Chord
+  = Triad   !Int !Int
+  | Seventh !Int !Int !Int
+  deriving (Eq, Ord, Read, Show)
+
+-- | A 'Triad' has 3 notes, the first note (tonic) is always 0, the next two are the number of
+-- steps on a piano keyboard (counting both black and white keys) away from the tonic are the
+-- next two notes.
+triad :: Int -> Int -> Chord
+triad a b = Triad (a `mod` 12) (b `mod` 12)
+
+-- | Like 'triad' but takes an additional note.
+seventh :: Int -> Int -> Int -> Chord
+seventh a b c = Seventh (a `mod` 12) (b `mod` 12) (c `mod` 12)
+
+-- | Produce all key indicies for a 'Chord', which you will usually produce from a 'nameToChord',
+-- although you can invent your own 'Chord's which don't have an associated 'NamedChord'.
+chordToInts :: Chord -> [KeyIndex]
+chordToInts = (\ case { Triad a b -> [0, a, b]; Seventh a b c -> [0, a, b, c]; }) >>> \ keys ->
+  fmap KeyIndex $ sort $ nub $ takeWhile (< 88) [m*12 + k | m <- [0 .. 7], k <- keys]
+
+-- | Produce a 'Chord' from a 'NamedChord'. This function makes computing frequencies for
+-- 'KeySignatures' much easier.
+nameToChord :: NamedChord -> Chord
+nameToChord = \ case
+   Maj3     -> Triad 4 7 -- C  E  G
+   Min3     -> Triad 3 7 -- C  Eb G
+   Dim3     -> Triad 3 6 -- C  Eb Gb
+   Sus3     -> Triad 5 7 -- C  F  G
+   Maj7     -> Seventh 4 7 11 -- C  E  G  B
+   Min7     -> Seventh 3 7 10 -- C  Eb G  Bb
+   Dim7     -> Seventh 3 6  9 -- C  Eb Gb Bbb
+   HalfDim7 -> Seventh 3 6 10 -- C  Eb Gb Bb
+   DimMaj7  -> Seventh 3 6 11 -- C  Eb Gb B
+   MinMaj7  -> Seventh 3 7 11 -- C  Eb G  B
+   AugMaj7  -> Seventh 4 8 11 -- C  E  G# B
+   AugMin7  -> Seventh 4 8 10 -- C  E  G# Bb
+   Alt7     -> Seventh 4 8 10 -- C  E  G# Bb
+   Dom7     -> Seventh 4 7 10 -- C  E  G  Bb
+   DomFlat7 -> Seventh 5 7 11 -- C  E# G  B
