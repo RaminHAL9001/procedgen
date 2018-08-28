@@ -7,6 +7,7 @@
 module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
+    shuffleTake,
     Word256, TFRandSeed, tfGen,
     TFRandT(..), TFRand,  arbTFRand, seedIOArbTFRand,
     seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
@@ -90,6 +91,26 @@ onBeta5RandFloat = onBiasedRandFloat inverseBeta5Table
 -- @1/2@.
 onNormalRandFloat :: MonadRandom m => (ProcGenFloat -> b) -> m b
 onNormalRandFloat = onBiasedRandFloat inverseNormalTable
+
+-- | Take @n@ elements from a list, then shuffle these @n@ elements, and then draw @p@ elements from
+-- the 'Prelude.head' of the shuffled list. The value @n@ must be greater than @p@ or else the
+-- original list is returned.
+shuffleTake
+  :: MonadRandom m
+  => [elem]
+  -> Int -- ^ number of elements to take from the list before shuffling
+  -> Int -- ^ number of elements to take from the list after shuffling
+  -> m [elem]
+shuffleTake elems n p = if n < p then return elems else do
+  let loop p n stack elems = seq p $! seq n $! if p == 0 then return stack else do
+        n <- pure $! n - 1
+        p <- pure $! p - 1
+        i <- getRandomR (0, n)
+        (stack, elems) <- pure $ case splitAt i elems of
+          (_, [])         -> (stack, elems)
+          (keep, e:elems) -> (e:stack, keep ++ elems)
+        loop p n stack elems
+  loop p n [] $ take n elems
 
 ----------------------------------------------------------------------------------------------------
 
