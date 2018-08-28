@@ -552,36 +552,51 @@ fdComponentInsert c list = FDComponentList
 -- used to define a signal in terms of a frequency domain graph.
 data FDSignal
   = FDSignal
-    { fdMinFreq      :: !Frequency
-    , fdMaxFreq      :: !Frequency
-    , fdBaseFreq     :: !Frequency
-    , fdSize         :: !Int
-    , fdSignalVector :: !(Unboxed.Vector ProcGenFloat)
+    { theFDMinFreq      :: !Frequency
+    , theFDMaxFreq      :: !Frequency
+    , theFDBaseFreq     :: !Frequency
+    , theFDSize         :: !Int
+    , theFDSignalVector :: !(Unboxed.Vector ProcGenFloat)
     }
   deriving Eq
 
 instance Show FDSignal where
-  show fd = "size: "++show (fdSize fd)++"\nminFreq: "++show (fdMinFreq fd)++
-    "\nmaxFreq: "++show (fdMaxFreq fd)++"\nbaseFreq: "++show (fdBaseFreq fd)++"\n"++
+  show fd = "size: "++show (fd ^. fdSize)++"\nminFreq: "++show (fd ^. fdMinFreq)++
+    "\nmaxFreq: "++show (fd ^. fdMaxFreq)++"\nbaseFreq: "++show (fd ^. fdBaseFreq)++"\n"++
     unlines (listFDAssocs fd >>= \ (i, comp) -> [show i ++ ' ' : show comp])
 
 instance BufferIDCT FDSignal where
   bufferIDCT mvec win = let lim f = 15.0 <= f && f <= nyquist in
     mapM_ (bufferIDCT mvec win) . filter (lim . theFDFrequency) . theFDCompListElems . listFDElems
 
+fdMinFreq :: Lens' FDSignal Frequency
+fdMinFreq = lens theFDMinFreq $ \ a b -> a{ theFDMinFreq = b }
+
+fdMaxFreq :: Lens' FDSignal Frequency
+fdMaxFreq = lens theFDMaxFreq $ \ a b -> a{ theFDMaxFreq = b }
+
+fdBaseFreq :: Lens' FDSignal Frequency
+fdBaseFreq = lens theFDBaseFreq $ \ a b -> a{ theFDBaseFreq = b }
+
+fdSize :: Lens' FDSignal Int
+fdSize = lens theFDSize $ \ a b -> a{ theFDSize = b }
+
+fdSignalVector :: Lens' FDSignal (Unboxed.Vector ProcGenFloat)
+fdSignalVector = lens theFDSignalVector $ \ a b -> a{ theFDSignalVector = b }
+
 -- | Construct an empty 'FDSignal'.
 emptyFDSignal :: FDSignal
 emptyFDSignal = FDSignal
-  { fdMinFreq      = 0
-  , fdMaxFreq      = 0
-  , fdBaseFreq     = 0
-  , fdSize         = 0
-  , fdSignalVector = Unboxed.empty
+  { theFDMinFreq      = 0
+  , theFDMaxFreq      = 0
+  , theFDBaseFreq     = 0
+  , theFDSize         = 0
+  , theFDSignalVector = Unboxed.empty
   }
 
 -- | Returns 'Prelude.True' if the 'FDSignal' contains no 'FDComponents'.
 nullFDSignal :: FDSignal -> Bool
-nullFDSignal = (<= 0) . fdSize
+nullFDSignal = (<= 0) . theFDSize
 
 fdSignalComponents :: Iso' FDSignal FDComponentList
 fdSignalComponents = iso listFDElems fdSignal
@@ -592,10 +607,10 @@ fdSignalComponents = iso listFDElems fdSignal
 -- list given, with zero values filling out space not covered by the list, or elements from the list
 -- being dropped if there are mor than the given number of components.
 fdSignal :: FDComponentList -> FDSignal
-fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcomps) of
+fdSignal fdcomps = case filter (not . nullFDComponent) (fdcomps ^. fdDCompListElems) of
     []       -> emptyFDSignal
-    c0:elems -> let size = theFDCompListLength fdcomps in runST $ execStateT
-      (do let [freqi, ampi, phasi, decai, stepsize] = [0 .. 4]
+    c0:elems -> let size = fdcomps ^. fdCompListLength in runST $ execStateT
+      (do let [freqi, ampi, phasi, decai, nois, undt, undph, undam, stepsize] = [0 .. 8]
           mvec <- lift $ Mutable.new $ size * stepsize
           let loop i = \ case
                 []         -> return ()
@@ -605,24 +620,27 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
                   wr ampi  fdAmplitude
                   wr phasi fdPhaseShift
                   wr decai fdDecayRate
-                  modify $ \ st -> st
-                    { fdMinFreq = min (fdMinFreq st) (comp ^. fdFrequency)
-                    , fdMaxFreq = max (fdMaxFreq st) (comp ^. fdFrequency)
-                    }
-                  loop (i + 4) elems
+                  wr nois  fdNoiseLevel
+                  wr undt  fdUndertone
+                  wr undph fdUnderphase
+                  wr undam fdUnderamp
+                  fdMinFreq %= min (comp ^. fdFrequency)
+                  fdMaxFreq %= max (comp ^. fdFrequency)
+                  loop (i + stepsize) elems
           loop 0 (c0 : elems)
           vec <- Unboxed.freeze mvec
-          modify $ \ st -> st{ fdSignalVector = vec }
-      ) emptyFDSignal
-        { fdBaseFreq = c0 ^. fdFrequency
-        , fdMinFreq  = c0 ^. fdFrequency
-        , fdMaxFreq  = c0 ^. fdFrequency
-        , fdSize     = size
-        }
+          fdSignalVector .= vec
+      )
+      ( emptyFDSignal &~ do
+          fdBaseFreq .= c0 ^. fdFrequency
+          fdMinFreq  .= c0 ^. fdFrequency
+          fdMaxFreq  .= c0 ^. fdFrequency
+          fdSize     .= size
+      )
 
 -- | Extract a copy of every element triple from the 'FDSignal' as a list.
 listFDElems :: FDSignal -> FDComponentList
-listFDElems (FDSignal{fdSignalVector=vec}) = FDComponentList
+listFDElems (FDSignal{theFDSignalVector=vec}) = FDComponentList
   { theFDCompListElems  = loop $ Unboxed.toList vec
   , theFDCompListLength = Unboxed.length vec `div` 8
   } where
@@ -645,7 +663,7 @@ listFDAssocs = zip [0 ..] . theFDCompListElems . listFDElems
 
 -- | Extract a copy of a single element at a given index.
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
-lookupFDComponent (FDSignal{fdSignalVector=vec}) i =
+lookupFDComponent (FDSignal{theFDSignalVector=vec}) i =
   let f n = vec Unboxed.!? (i + n)
   in  FDComponent <$> f 0 <*> f 1 <*> f 2 <*> f 3 <*> f 4 <*> f 5 <*> f 6 <*> f 7
 
@@ -792,8 +810,8 @@ drawFDView :: FDView -> PixSize -> AnimationMoment -> CairoRender ()
 drawFDView fdView (V2 w h) dt = do
   cairoRender $ do
     let fd     = theFDViewSignal fdView
-    let lo     = log (fdMinFreq fd)
-    let xscale = realToFrac w / (log (fdMaxFreq fd) - lo)
+    let lo     = log (fd ^. fdMinFreq)
+    let xscale = realToFrac w / (log (fd ^. fdMaxFreq) - lo)
     h <- pure $ realToFrac h
     cairoClearCanvas  1.0  1.0  1.0  0.8
     forEachFDComponent_ (listFDElems fd) $ \ fd@FDComponent{theFDFrequency=freq} -> do
