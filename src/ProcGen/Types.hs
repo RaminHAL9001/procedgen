@@ -106,6 +106,10 @@ sampleRate = 44100.0
 nyquist :: Frequency
 nyquist = sampleRate / 2
 
+-- | The minimum bound for a 'Frequency' value, which is set (somewhat arbitrarily) to 15.0 Hz.
+minFrequency :: Frequency
+minFrequency = 15.0
+
 -- | This is the amount of time a single unit sample of a quantized time domain function that a PCM
 -- allows a PCM to reamin at a single value. This is also the reciporical of the @'sampleRate' ::
 -- 'Frequency'@.
