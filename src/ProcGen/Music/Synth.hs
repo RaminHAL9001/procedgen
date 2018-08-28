@@ -2,18 +2,20 @@
 -- musical instruments.
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..),
-    synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal, synthOnTopElem,
+    Synth(..), SynthState(..), SynthElement(..), initSynth, runSynth,
+    synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal,
+    synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
+    -- * Constructing Frequency Domain Components
+    synthMultBaseFreq, smallFractions, bigFractions, allFractions, fractions,
+    synthPushNewElem, synthOnTopElem,
+    -- * Shaping Frequency Component Levels
+    ApplyShapeTo(..), synthApplyShape, synthRandomizeLevels,
     FDSignalShape(..), applyFDSignalShape, fdShapeBase,
     fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
-    initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
-    resizeSynthBuffer, resetSynthBuffer, synthMultBaseFreq, synthRandomizeLevels, synthApplyShape,
-    synthPushNewElem,
-    smallFractions, bigFractions, allFractions, fractions,
     -- * Buffering
-    BufferIDCT(..), newSampleBuffer,
+    BufferIDCT(..), newSampleBuffer, resizeSynthBuffer, resetSynthBuffer,
     -- * Elements of frequency domain functions
-    FDComponent(..), emptyFDComponent,
+    FDComponent, emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
     fdSignalComponents, forEachFDComponent, forEachFDComponent_,
     fdComponentSampleAt, fdComponentAmplitudeAt,
@@ -232,14 +234,42 @@ synthRandomizeLevels a b comps = do
   forEachFDComponent comps $ \ comp ->
     scale (theFDAmplitude comp) >>= \ amp -> pure comp{ theFDAmplitude = amp }
 
--- | Generating frequencies within a 'Synth' type function will automatically apply levels according
--- to the 'synthFDShape' function, however if you want to re-apply levels after some operation that
--- might have altered them, or after changing the 'synthFDShape' function this function will do it
--- conveniently.
-synthApplyShape :: FDComponentList -> Synth FDComponentList
-synthApplyShape = flip forEachFDComponent $ \ comp -> do
-  shape <- use synthFDShape
-  pure comp{ theFDAmplitude = applyFDSignalShape shape $ theFDFrequency comp}
+-- | A data type specifically used by the 'synthApplyShape' function.
+data ApplyShapeTo
+  = ToAmplitude
+  | ToDecayRate
+  | ToNoiseLevel
+  | ToUndertone
+  | ToUnderamp
+  deriving (Eq, Ord, Show, Read, Enum)
+
+-- | This function maps over each 'FDComponent' and applies the 'fdFrequency' of each component to a
+-- 'FDSignalShape' function to produce a new 'ProcGen.Types.ProcGenFloat' value, then applies some
+-- noise, then writes or updates this new value into the field of 'FDComponent' according to which
+-- 'ApplyToShape' is given.
+synthApplyShape
+  :: ApplyShapeTo        -- ^ which field of the 'FDComponent' to modify
+  -> Synth FDSignalShape -- ^ the shape to use, usually @('Control.Lens.use' 'synthFDShape')@
+  -> NoiseLevel          -- ^ how much noise to apply to the shape, pass 0.0 for a perfect shape.
+  -> (ProcGenFloat -> ProcGenFloat -> ProcGenFloat)
+     -- ^ a function to apply the new value to the old value, usually pass @('Prelude.*')@ or
+     -- 'Prelude.const'. The new value is passed as the first (left-hand) parameter.
+  -> FDComponentList     -- ^ the list of elements to which changes should be applied.
+  -> Synth FDComponentList
+synthApplyShape applyTo getShape noiseLevel cross comps = do
+  shape <- getShape
+  noiseLevel <- pure $ max 0.0 $ min 1.0 $ abs noiseLevel
+  let getNoise = if noiseLevel == 0 then return 1.0 else onRandFloat $ (1.0 -) . (noiseLevel *)
+  forEachFDComponent comps $ \ comp -> do
+    let field = case applyTo of
+          ToAmplitude  -> fdAmplitude
+          ToDecayRate  -> fdDecayRate
+          ToNoiseLevel -> fdNoiseLevel
+          ToUnderamp   -> fdUnderamp
+          ToUndertone  -> fdUndertone
+    noise <- getNoise
+    pure $ comp & field %~ min 1.0 . max 0.0 . abs .
+      cross (noise * applyFDSignalShape shape (comp ^. fdFrequency))
 
 -- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
 -- 'SynthElement' on the stack of elements.
@@ -356,7 +386,7 @@ data FDComponent
     , theFDAmplitude  :: !Amplitude 
     , theFDPhaseShift :: !PhaseShift -- ^ must be between 0 and 1, automatically scaled to 2*pi
     , theFDDecayRate  :: !HalfLife   -- ^ set to zero for no decay
-    , theFDNoiseLevel :: !Amplitude
+    , theFDNoiseLevel :: !NoiseLevel
       -- ^ how much noise to apply, as a measure of variance in the 'fdAmplitude'. A value of @1.0@
       -- means the amplitude of each cycle varies is multiplied by a random number between @0.0@ to
       -- @1.0@. A value of @0.5@ means the amplitude of each cycle is mulitplied by a random number
@@ -384,7 +414,7 @@ fdPhaseShift = lens theFDPhaseShift $ \ a b -> a{ theFDPhaseShift = b }
 fdDecayRate  :: Lens' FDComponent HalfLife
 fdDecayRate = lens theFDDecayRate $ \ a b -> a{ theFDDecayRate = b }
 
-fdNoiseLevel :: Lens' FDComponent Amplitude
+fdNoiseLevel :: Lens' FDComponent NoiseLevel
 fdNoiseLevel = lens theFDNoiseLevel $ \ a b -> a{ theFDNoiseLevel = b }
 
 fdUndertone  :: Lens' FDComponent Frequency
@@ -458,30 +488,27 @@ randPhase = onRandFloat $ (* pi) . subtract 1 . (* 2)
 -- | A lazy functional data type isomorphic to 'FDSignal'.
 data FDComponentList
   = FDComponentList
-    { theFDCompListLength :: !ComponentCount
-    , theFDCompListElems  :: [FDComponent]
+    { fdCompListLength :: !ComponentCount
+    , fdCompListElems  :: [FDComponent]
     }
 
 instance Show FDComponentList where
-  show (FDComponentList{theFDCompListLength=size,theFDCompListElems=elems}) =
+  show (FDComponentList{fdCompListLength=size,fdCompListElems=elems}) =
     "num elems: " ++ show size ++ '\n' : unlines (show <$> elems)
 
 instance Semigroup FDComponentList where
-  (<>) (FDComponentList{theFDCompListLength=a,theFDCompListElems=aElems})
-       (FDComponentList{theFDCompListLength=b,theFDCompListElems=bElems})
-    = FDComponentList{ theFDCompListLength = a + b, theFDCompListElems = aElems ++ bElems }
+  (<>) (FDComponentList{fdCompListLength=a,fdCompListElems=aElems})
+       (FDComponentList{fdCompListLength=b,fdCompListElems=bElems})
+    = FDComponentList{ fdCompListLength = a + b, fdCompListElems = aElems ++ bElems }
 
 instance Monoid FDComponentList where
-  mempty = FDComponentList{ theFDCompListLength = 0, theFDCompListElems = [] }
+  mempty = FDComponentList{ fdCompListLength = 0, fdCompListElems = [] }
   mappend = (<>)
-
-fdCompListElems :: Lens' FDComponentList [FDComponent]
-fdCompListElems = lens theFDCompListElems $ \ a b -> a{ theFDCompListElems = b }
 
 fdComponentList :: [FDComponent] -> FDComponentList
 fdComponentList comps = FDComponentList
-  { theFDCompListLength = length comps
-  , theFDCompListElems  = comps
+  { fdCompListLength = length comps
+  , fdCompListElems  = comps
   }
 
 forEachFDComponent
@@ -490,14 +517,14 @@ forEachFDComponent
   -> (FDComponent -> m FDComponent)
   -> m FDComponentList
 forEachFDComponent comps =
-  liftM (\ c -> comps & fdCompListElems .~ c) . forM (comps ^. fdCompListElems)
+  liftM (\ c -> comps{ fdCompListElems = c }) . forM (fdCompListElems comps)
 
 forEachFDComponent_
   :: Monad m
   => FDComponentList
   -> (FDComponent -> m ())
   -> m ()
-forEachFDComponent_ = forM_ . theFDCompListElems
+forEachFDComponent_ = forM_ . fdCompListElems
 
 randFDComponents :: Frequency -> TFRand FDComponentList
 randFDComponents base = do
@@ -527,8 +554,8 @@ randFDComponents base = do
           , theFDUnderamp   = undamp
           }
   return FDComponentList
-    { theFDCompListLength = count + 1
-    , theFDCompListElems  = FDComponent
+    { fdCompListLength = count + 1
+    , fdCompListElems  = FDComponent
         { theFDFrequency  = base
         , theFDAmplitude  = 1.0
         , theFDPhaseShift = 0.0
@@ -542,8 +569,8 @@ randFDComponents base = do
 
 fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
 fdComponentInsert c list = FDComponentList
-  { theFDCompListElems  = c : theFDCompListElems  list
-  , theFDCompListLength = 1 + theFDCompListLength list
+  { fdCompListElems  = c : fdCompListElems  list
+  , fdCompListLength = 1 + fdCompListLength list
   }
 
 ----------------------------------------------------------------------------------------------------
@@ -567,7 +594,7 @@ instance Show FDSignal where
 
 instance BufferIDCT FDSignal where
   bufferIDCT mvec win = let lim f = 15.0 <= f && f <= nyquist in
-    mapM_ (bufferIDCT mvec win) . filter (lim . theFDFrequency) . theFDCompListElems . listFDElems
+    mapM_ (bufferIDCT mvec win) . filter (lim . theFDFrequency) . fdCompListElems . listFDElems
 
 fdMinFreq :: Lens' FDSignal Frequency
 fdMinFreq = lens theFDMinFreq $ \ a b -> a{ theFDMinFreq = b }
@@ -607,9 +634,9 @@ fdSignalComponents = iso listFDElems fdSignal
 -- list given, with zero values filling out space not covered by the list, or elements from the list
 -- being dropped if there are mor than the given number of components.
 fdSignal :: FDComponentList -> FDSignal
-fdSignal fdcomps = case filter (not . nullFDComponent) (fdcomps ^. fdDCompListElems) of
+fdSignal fdcomps = case filter (not . nullFDComponent) (fdCompListElems fdcomps) of
     []       -> emptyFDSignal
-    c0:elems -> let size = fdcomps ^. fdCompListLength in runST $ execStateT
+    c0:elems -> let size = fdCompListLength fdcomps in runST $ execStateT
       (do let [freqi, ampi, phasi, decai, nois, undt, undph, undam, stepsize] = [0 .. 8]
           mvec <- lift $ Mutable.new $ size * stepsize
           let loop i = \ case
@@ -641,8 +668,8 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (fdcomps ^. fdDCompListEl
 -- | Extract a copy of every element triple from the 'FDSignal' as a list.
 listFDElems :: FDSignal -> FDComponentList
 listFDElems (FDSignal{theFDSignalVector=vec}) = FDComponentList
-  { theFDCompListElems  = loop $ Unboxed.toList vec
-  , theFDCompListLength = Unboxed.length vec `div` 8
+  { fdCompListElems  = loop $ Unboxed.toList vec
+  , fdCompListLength = Unboxed.length vec `div` 8
   } where
       loop = \ case
         freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
@@ -659,7 +686,7 @@ listFDElems (FDSignal{theFDSignalVector=vec}) = FDComponentList
 
 -- | Similar to 'listFDElems', but includes the integer index associated with each element.
 listFDAssocs :: FDSignal -> [(ComponentIndex, FDComponent)]
-listFDAssocs = zip [0 ..] . theFDCompListElems . listFDElems
+listFDAssocs = zip [0 ..] . fdCompListElems . listFDElems
 
 -- | Extract a copy of a single element at a given index.
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
