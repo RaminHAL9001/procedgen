@@ -44,6 +44,7 @@ type Wavelength  = ProcGenFloat
 type PhaseShift  = ProcGenFloat
 type Probability = ProcGenFloat
 type HalfLife    = ProcGenFloat
+type NoiseLevel  = ProcGenFloat
 type Bandwidth   = ProcGenFloat
 type Percentage  = ProcGenFloat
 
