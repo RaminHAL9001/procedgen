@@ -3,6 +3,7 @@
 module ProcGen.Music.Synth
   ( -- * A language for defining musical sounds
     Synth(..), SynthState(..), SynthElement(..),
+    synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal, synthOnTopElem,
     FDSignalShape(..), applyFDSignalShape, fdShapeBase,
     fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
     initSynth, runSynth, synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
@@ -14,6 +15,7 @@ module ProcGen.Music.Synth
     -- * Elements of frequency domain functions
     FDComponent(..), emptyFDComponent,
     FDComponentList, randFDComponents, fdComponentInsert,
+    fdSignalComponents, forEachFDComponent, forEachFDComponent_,
     fdComponentSampleAt, fdComponentAmplitudeAt,
     -- * Signals as frequency domain functions
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
@@ -490,6 +492,13 @@ forEachFDComponent
 forEachFDComponent comps =
   liftM (\ c -> comps & fdCompListElems .~ c) . forM (comps ^. fdCompListElems)
 
+forEachFDComponent_
+  :: Monad m
+  => FDComponentList
+  -> (FDComponent -> m ())
+  -> m ()
+forEachFDComponent_ = forM_ . theFDCompListElems
+
 randFDComponents :: Frequency -> TFRand FDComponentList
 randFDComponents base = do
   (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
@@ -591,7 +600,7 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
           let loop i = \ case
                 []         -> return ()
                 comp:elems -> seq i $! do
-                  let wr off record = lift $ Mutable.write mvec (i + off) (record comp)
+                  let wr off record = lift $ Mutable.write mvec (i + off) (comp ^. record)
                   wr freqi fdFrequency
                   wr ampi  fdAmplitude
                   wr phasi fdPhaseShift
@@ -605,9 +614,9 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (theFDCompListElems fdcom
           vec <- Unboxed.freeze mvec
           modify $ \ st -> st{ fdSignalVector = vec }
       ) emptyFDSignal
-        { fdBaseFreq = fdFrequency c0
-        , fdMinFreq  = fdFrequency c0
-        , fdMaxFreq  = fdFrequency c0
+        { fdBaseFreq = c0 ^. fdFrequency
+        , fdMinFreq  = c0 ^. fdFrequency
+        , fdMaxFreq  = c0 ^. fdFrequency
         , fdSize     = size
         }
 
@@ -619,20 +628,20 @@ listFDElems (FDSignal{fdSignalVector=vec}) = FDComponentList
   } where
       loop = \ case
         freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
-          { fdFrequency  = freq
-          , fdAmplitude  = amp
-          , fdPhaseShift = phase
-          , fdDecayRate  = decay
-          , fdNoiseLevel = noise
-          , fdUndertone  = undfrq
-          , fdUnderphase = undphs
-          , fdUnderamp   = undamp
+          { theFDFrequency  = freq
+          , theFDAmplitude  = amp
+          , theFDPhaseShift = phase
+          , theFDDecayRate  = decay
+          , theFDNoiseLevel = noise
+          , theFDUndertone  = undfrq
+          , theFDUnderphase = undphs
+          , theFDUnderamp   = undamp
           } : loop ax
         _ -> []
 
 -- | Similar to 'listFDElems', but includes the integer index associated with each element.
 listFDAssocs :: FDSignal -> [(ComponentIndex, FDComponent)]
-listFDAssocs = zip [0 ..] . listFDElems
+listFDAssocs = zip [0 ..] . theFDCompListElems . listFDElems
 
 -- | Extract a copy of a single element at a given index.
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
@@ -677,9 +686,9 @@ pureIDCT gen dt fd = TDSignal
   }
 
 instance BufferIDCT FDComponent where
-  bufferIDCT mvec win fd = if fdNoiseLevel fd <= 0 then bufferIDCT mvec win fd else do
+  bufferIDCT mvec win fd = if fd ^. fdNoiseLevel <= 0 then bufferIDCT mvec win fd else do
     let ti = fst . timeIndex
-    let size = ti (3 / fdFrequency fd) + 1
+    let size = ti (3 / (fd ^. fdFrequency)) + 1
     -- A table of values is used here because we are not simply summing sine waves, we are creating
     -- a sine wave with a sigmoidal fade-in and fade-out, which requires two Float32
     -- multiplications, two calls to 'exp', two calls to 'recip', and one calls to 'sin' for each
@@ -687,11 +696,12 @@ instance BufferIDCT FDComponent where
     -- rather than compute them on the fly.
     if size > Mutable.length mvec then return () else do
       table <- lift (Mutable.new size)
-      lift $ forM_ [0 .. size - 1] $ \ i ->
-        Mutable.write table i $ sinePulse3 (fdFrequency fd) (0.0) (fdPhaseShift fd) $ indexToTime i
+      lift $ forM_ [0 .. size - 1] $ \ i -> Mutable.write table i
+        $ sinePulse3 (fd ^. fdFrequency) (0.0) (fd ^. fdPhaseShift)
+        $ indexToTime i
       let loop  amp i j =
             if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
-              let decamp = fdAmplitude fd * amp * fdComponentAmplitudeAt fd (indexToTime i)
+              let decamp = (fd ^. fdAmplitude) * amp * fdComponentAmplitudeAt fd (indexToTime i)
               lift $ Mutable.write mvec i =<<
                 liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
               loop amp (i + 1) (j + 1)
@@ -699,7 +709,7 @@ instance BufferIDCT FDComponent where
             amp <- getRandom
             let i = fst $ timeIndex t
             loop amp i 0
-            pulses $! t + 2 / fdFrequency fd
+            pulses $! t + 2 / (fd ^. fdFrequency)
       pulses 0.0
 
 ----------------------------------------------------------------------------------------------------
@@ -786,10 +796,10 @@ drawFDView fdView (V2 w h) dt = do
     let xscale = realToFrac w / (log (fdMaxFreq fd) - lo)
     h <- pure $ realToFrac h
     cairoClearCanvas  1.0  1.0  1.0  0.8
-    forM_ (listFDElems fd) $ \ fd@FDComponent{fdFrequency=freq} -> do
+    forEachFDComponent_ (listFDElems fd) $ \ fd@FDComponent{theFDFrequency=freq} -> do
       let x = realToFrac (round ((log freq - lo) * xscale) :: Int) + 0.5
       let y = realToFrac (1 - fdComponentAmplitudeAt fd (realToFrac dt)) * h + 0.5
-      cairoSetColor (if fdDecayRate fd == 0 then blue else red)
+      cairoSetColor (if fd ^. fdDecayRate == 0 then blue else red)
       Cairo.moveTo  x  (realToFrac h + 0.5)
       Cairo.lineTo  x  y
       Cairo.stroke
