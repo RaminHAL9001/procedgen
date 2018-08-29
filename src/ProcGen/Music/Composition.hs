@@ -36,7 +36,7 @@
 module ProcGen.Music.Composition where
 
 import           ProcGen.Types
-import           ProcGen.Music.KeyFreq88
+--import           ProcGen.Music.KeyFreq88
 
 import qualified Data.Map                  as Map
 import           Data.Semigroup
@@ -98,55 +98,41 @@ data Strength = Fortisimo | Forte | MezzoForte | MezzoMezzo | MezzoPiano | Piano
 ----------------------------------------------------------------------------------------------------
 
 -- | A data structure for sub-dividing a measure of time.
-data SubMeasure a
-  = M1 !a
-  | M2 !a !a
-  | M3 !a !a !a
-  | M4 !a !a !a !a
+data SubDiv leaf
+  = SubDivLeaf   !leaf
+  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
   deriving (Eq, Ord, Show, Read)
-
-subMeasureToList :: SubMeasure a -> (Duration, [(Moment, a)])
-subMeasureToList = fmap (zip [0.0, 1.0 ..]) . \ case
-  M1 a         -> (1, [a])
-  M2 a b       -> (2, [a, b])
-  M3 a b c     -> (3, [a, b, c])
-  M4 a b c d   -> (4, [a, b, c, d])
-
-flattenSubMeasure
-  :: (Moment -> Duration -> a -> [(Moment, Duration, b)])
-  -> Moment -> Duration -> SubMeasure a -> [(Moment, Duration, b)]
-flattenSubMeasure subdiv t0 dt0 measure = do
-  let (div, elems) = subMeasureToList measure
-  let dt = dt0 / div
-  (offset, elem) <- elems
-  subdiv (t0 + offset*dt) dt elem
 
 ----------------------------------------------------------------------------------------------------
 
-newtype Measure = Measure (SubMeasure (SubMeasure PlayedNote))
+data Measure leaf
+  = Measure
+    { playMetaOffset :: !Percentage
+      -- ^ Wait an amount of time, specified as a percentage of the measure play time, before
+      -- playing the notes defined in this measure.
+    , playMetaCutoff :: !Percentage
+      -- ^ Stop playing after some percentage of the measure play time after the 'playMetaOffset'
+      -- has begun, regardless of whether unplayed notes remain in this measure. For example, if the
+      -- play offset is 0.25 and you want to play only to the end of the measure and no more beyond
+      -- it, specify 0.75 for 'playMetaCutoff'. Basically, the 'playMetaOffset' and 'playMetaCutoff'
+      -- add together to specify the point in time after the start of the measure where the measure
+      -- starts and ends. If the sum of these two values is greater than 1.0, the notes will be
+      -- played beyond the end of the measure.
+    , playNoteTree   :: !(SubDiv leaf)
+    }
   deriving (Eq, Ord, Show, Read)
 
-subMeasures :: Measure -> SubMeasure (SubMeasure PlayedNote)
-subMeasures (Measure a) = a
-
-----------------------------------------------------------------------------------------------------
-
--- | A beat pattern is defined as a way to sub-divide a measure of time. The number of elements @N@
--- in the 'BeatPattern' defines the time signature of the song as @N/4@, so @N@ must be 2 or more,
--- and should probably be less than 10 for most songs.
-newtype BeatPattern = BeatPattern (Boxed.Vector Measure)
-  deriving (Eq, Ord, Show, Read)
-
--- | The number of time divisions in a bar, where a bar consists of @N@ 'Measure's where @N@ is the
--- top value of the time signature.
-beatTimeDiv :: BeatPattern -> Duration
-beatTimeDiv (BeatPattern vec) = realToFrac $ Boxed.length vec
-
-beatToMeasures :: BeatPattern -> [Measure]
-beatToMeasures (BeatPattern vec) = Boxed.toList vec
-
-beatToSubMeasures :: BeatPattern -> [SubMeasure (SubMeasure PlayedNote)]
-beatToSubMeasures = fmap subMeasures . beatToMeasures
+-- | A 'Measure' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
+-- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
+-- start time to the @('ProcGen.Types.Duration', leaf)@ pair.
+sequenceMeasure :: Moment -> Duration -> Measure a -> Map.Map Moment (Duration, a)
+sequenceMeasure t0 dt0 msur = loop Map.empty (t0 + playMetaOffset msur) dt0 (playNoteTree msur) where
+  loop :: Map.Map Moment (Duration, a) -> Moment -> Duration -> SubDiv a -> Map.Map Moment (Duration, a)
+  loop map t0 dt0 subdiv = if t0 >= playMetaCutoff msur then map else case subdiv of
+    SubDivLeaf  leaf -> Map.union map $ Map.singleton t0 (dt0, leaf)
+    SubDivBranch vec -> if Boxed.null vec then Map.empty else
+      let dt = dt0 / realToFrac (Boxed.length vec) in
+        foldl (\ map (t, a) -> loop map t dt a) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -164,13 +150,7 @@ instance Monoid RoleNotes where
 
 -- | Construct a 'RoleNotes' from a 'Beat'. Music is composed of 'BeatPattern's, but the actual
 -- notes played, the actual execution of the musical score, cannot be done without collapsing a
--- 'BeatPattern' into a simple temporal list of 'PlayedNotes'.
-roleNotes :: BeatPattern -> RoleNotes
-roleNotes beat = RoleNotes $ Map.fromList $ do
-  (t, measure) <- zip [0.0, 1.0 ..] (beatToSubMeasures beat)
-  (t, dt, note) <- flattenSubMeasure (flattenSubMeasure $ \ t dt note -> (t, dt, note)) t 1.0
-  [(t, note{ playedDuration = dt })]
-
-----------------------------------------------------------------------------------------------------
-
-
+-- 'BeatPattern' into a simple temporal list of 'PlayedNotes'. The input for this function comes
+-- from 'sequenceMeasure' where the type sequenced is of @('Measure' 'PlayedNote')@.
+roleNotes :: Map.Map Moment (Duration, PlayedNote) -> RoleNotes
+roleNotes = RoleNotes . fmap (\ (t, note) -> note{ playedDuration = t })
