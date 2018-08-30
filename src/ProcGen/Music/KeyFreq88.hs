@@ -4,12 +4,12 @@ module ProcGen.Music.KeyFreq88
     packW8, unpackW8, toneToUnique, uniqueToTone, toneShift, toneName, uniqueToneIndex,
     isUniqueToneIndex,
     -- * The 88-Key Piano Keyboard
-    KeyIndex, keyIndexToInt,
+    KeyIndex, keyIndex, keyIndexToInt,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
     -- * Chords
     KeySignature(..), keySignature, keySigFreqTable,
     NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
-    Chord, triad, seventh, nameToChord, chordToInts
+    Chord, triad, seventh, nameToChord, chordToKeys
   )
   where
 
@@ -181,15 +181,23 @@ toneName = (toneNameTable Unboxed.!) . fromEnum
 
 ----------------------------------------------------------------------------------------------------
 
-newtype KeyIndex = KeyIndex { keyIndexToInt :: Int }
+newtype KeyIndex = KeyIndex { keyIndexToInt :: Word8 }
   deriving (Eq, Ord, Show, Read)
 
+-- | Construct a 'KeyIndex', evaluates to an error value if the given
+-- number is less than zero or greater than 87.
+keyIndex :: Int -> KeyIndex
+keyIndex i = if 0 <= i && i < 88 then KeyIndex $ fromIntegral i else error $
+  "Keyboard88.keyIndex "++show i++" out of bounds: value must be between 0 and 87"
+
+-- | The table of key frequencies in an 88-key keyboard. The lowest
+-- value, A0 (27.5 Hz) is at @keyIndex 0@.
 the88Keys :: Unboxed.Vector Frequency
 the88Keys = Unboxed.fromList $ keyFreq <$> [0..87]
 
 -- | Lookup a 'ProcGen.Types.Frequency' for the given 'KeyIndex'.
-keyboard88 :: Int -> Frequency
-keyboard88 = (the88Keys Unboxed.!)
+keyboard88 :: KeyIndex -> Frequency
+keyboard88 (KeyIndex i) = the88Keys Unboxed.! fromIntegral i
 
 concertA :: Frequency
 concertA = 440.0
@@ -197,20 +205,20 @@ concertA = 440.0
 -- | In a 0-indexed array, concert A is the 48th key on the keyboard, obviously because the lowest
 -- key is A which is index 0, each octave is 12 keys, and concert A is 4 octaves from the lowest key
 -- on the keyboard.
-concertAPianoKey :: Int
-concertAPianoKey = 48
+concertAPianoKey :: KeyIndex
+concertAPianoKey = KeyIndex 48
 
 keysPerOctave :: Int
 keysPerOctave = 12
 
 keyFreq :: Frequency -> Frequency
 keyFreq i = concertA * 2.0**((i - k) / d) where
-  k = fromIntegral concertAPianoKey
+  k = fromIntegral $ keyIndexToInt concertAPianoKey
   d = fromIntegral keysPerOctave
 
 keyFreq' :: Frequency -> Frequency
 keyFreq' f = k + d * log(f / concertA) / log 2 where
-  k = fromIntegral concertAPianoKey
+  k = fromIntegral $ keyIndexToInt concertAPianoKey
   d = fromIntegral keysPerOctave
 
 ----------------------------------------------------------------------------------------------------
@@ -227,8 +235,9 @@ keySignature i = KeySignature i . nameToChord
 -- of this 'KeySignature'. A procedurally generated song will randomly select frequencies from a
 -- table for the key signature. It is best to memoize these tables whenever possible.
 keySigFreqTable :: KeySignature -> Unboxed.Vector Frequency
-keySigFreqTable (KeySignature tonic chord) = let offset = fromEnum (toneToUnique tonic) in
-  Unboxed.fromList [keyboard88 $ key + offset | (KeyIndex key) <- chordToInts chord]
+keySigFreqTable (KeySignature tonic chord) =
+  let offset = fromIntegral $ fromEnum $ toneToUnique tonic in Unboxed.fromList
+  [keyboard88 $ KeyIndex $ i + offset | (KeyIndex i) <- chordToKeys chord, i + offset < 88]
 
 ----------------------------------------------------------------------------------------------------
 
@@ -262,24 +271,24 @@ dominant7ths = [Dom7, DomFlat7]
 -- 'minor' depends on the integer values set in these constructors. The 'KeySignature' of the chord
 -- independent of this chord value.
 data Chord
-  = Triad   !Int !Int
-  | Seventh !Int !Int !Int
+  = Triad   !Word8 !Word8
+  | Seventh !Word8 !Word8 !Word8
   deriving (Eq, Ord, Read, Show)
 
 -- | A 'Triad' has 3 notes, the first note (tonic) is always 0, the next two are the number of
 -- steps on a piano keyboard (counting both black and white keys) away from the tonic are the
 -- next two notes.
-triad :: Int -> Int -> Chord
+triad :: Word8 -> Word8 -> Chord
 triad a b = Triad (a `mod` 12) (b `mod` 12)
 
 -- | Like 'triad' but takes an additional note.
-seventh :: Int -> Int -> Int -> Chord
+seventh :: Word8 -> Word8 -> Word8 -> Chord
 seventh a b c = Seventh (a `mod` 12) (b `mod` 12) (c `mod` 12)
 
 -- | Produce all key indicies for a 'Chord', which you will usually produce from a 'nameToChord',
 -- although you can invent your own 'Chord's which don't have an associated 'NamedChord'.
-chordToInts :: Chord -> [KeyIndex]
-chordToInts = (\ case { Triad a b -> [0, a, b]; Seventh a b c -> [0, a, b, c]; }) >>> \ keys ->
+chordToKeys :: Chord -> [KeyIndex]
+chordToKeys = (\ case { Triad a b -> [0, a, b]; Seventh a b c -> [0, a, b, c]; }) >>> \ keys ->
   fmap KeyIndex $ sort $ nub $ takeWhile (< 88) [m*12 + k | m <- [0 .. 7], k <- keys]
 
 -- | Produce a 'Chord' from a 'NamedChord'. This function makes computing frequencies for
