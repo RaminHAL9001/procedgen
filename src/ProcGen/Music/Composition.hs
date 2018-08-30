@@ -111,14 +111,6 @@ data Strength = Fortisimo | Forte | MezzoForte | MezzoMezzo | MezzoPiano | Piano
 
 ----------------------------------------------------------------------------------------------------
 
--- | A data structure for sub-dividing a measure of time.
-data SubDiv leaf
-  = SubDivLeaf   !leaf
-  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
-  deriving (Eq, Ord, Show, Read)
-
-----------------------------------------------------------------------------------------------------
-
 data Measure
   = Measure
     { playMetaOffset :: !Percentage
@@ -135,6 +127,12 @@ data Measure
     , playNoteTree   :: !(SubDiv PlayedNote)
     }
   deriving (Eq, Ord, Show)
+
+-- | A data structure for sub-dividing a measure of time.
+data SubDiv leaf
+  = SubDivLeaf   !leaf
+  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
+  deriving (Eq, Ord, Show, Read)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -158,9 +156,12 @@ roleNote t dt note = RoleNotes $ Map.singleton t note{ playedDuration=dt }
 -- start time to the @('ProcGen.Types.Duration', leaf)@ pair.
 sequenceMeasure :: Moment -> Duration -> Measure -> RoleNotes
 sequenceMeasure t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
-  loop :: Duration -> RoleNotes -> (Moment, SubDiv PlayedNote) -> RoleNotes
   loop dt0 map (t0, subdiv) = if t0 >= playMetaCutoff msur then map else case subdiv of
     SubDivLeaf  note -> map <> roleNote t0 dt0 note
     SubDivBranch vec -> if Boxed.null vec then mempty else
       let dt = dt0 / realToFrac (Boxed.length vec) in
       foldl (loop dt) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
+
+----------------------------------------------------------------------------------------------------
+
+
