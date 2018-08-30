@@ -62,36 +62,50 @@ data CommondChordProg
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A 'Composition' is constructed of a list of 'PlayedNote's each played at a point in time.
 data PlayedNote
-  = PlayedNote
+  = RestNote
     { playedDuration  :: !Duration
-    , playedStrength  :: !Strength
-    , playedTied      :: !TiedNote
-    , playedNoteValue :: !NoteValue
     }
-  deriving (Eq, Ord, Show, Read)
+    -- ^ indicates that nothing is played for the duration of the 'SubDiv'.
+  | TiedNote
+    { playedNoteID    :: !NoteReference
+      -- ^ This reference refers to the unique ID of this played note, not the note to which it is
+      -- tied. The 'PlayedNote' refers to this note's 'playedNoteID' in the 'playedTied' field if it
+      -- is tied.
+    , playedDuration  :: !Duration
+    }
+    -- ^ This must refer to a note that was played at an earlier point in the composition.
+  | PlayedNote
+    { playedNoteID    :: !NoteReference
+    , playedDuration  :: !Duration
+    , playedStrength  :: !Strength
+    , playedNoteValue :: !NoteValue
+    , playedTied      :: !NoteReference
+      -- ^ Set to 'untied' if this note is not tied. If not 'untied' (if it is tied) it must refer
+      -- to the 'playedNotID' of 'PlayedNote' defined with the 'TiedNote' constructor.
+    }
+  deriving (Eq, Ord, Show)
+
+-- | Every note in a 'Composition' has a unique index value or "reference". The 'Composition' keeps
+-- track of each unique note played in order to evaluate "tied notes" which are notes are held for
+-- an amount of time, sometimes sliding (gradually changing the sound'S base frequency) into another
+-- note. 
+newtype NoteReference = NoteReference Int deriving (Eq, Ord, Show)
+
+-- | A 'PlayedNote' that is not tied.
+untied :: NoteReference
+untied = NoteReference minBound
 
 -- | The value of the note played in a 'PlayedNote'.
 data NoteValue
-  = Rest
-    -- ^ If the note is preceeded by another tied note, sustain the note through this rest and the
-    -- next rest intervals.
-  | Single !Word8
-    -- ^ Play a single note. If the note is tied and followed by a 'Rest', the note is held through
-    -- a single rest interval. If the note is tied and followed by another note, the note is held
-    -- until the next note is played.
-  | Chord  !(Unboxed.Vector Word8) -- ^ Play a chord
-  | Trill  !(Unboxed.Vector Word8) -- ^ Play a chord trilled
+  = Single !Word8
+    -- ^ Play a single note, the 'Data.Wordl.Word8' value will be used as an index to a table
+    -- constructed by a 'keySigFreqTable' for whatever key signature a given measure is played in.
+  | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
   deriving (Eq, Ord, Show, Read)
 
--- | If a 'PlayedNote' is followed by a 'Rest' and the note is 'Tied', the note is held for the
--- duration of the rest. 'Legato' is the deafult state, the fade-out of a note played overlaps with
--- the next note played. 'Staccato' shortens note so the fade out completes before the next note is
--- played.
-data TiedNote = Legato | Staccato | Tied
-  deriving (Eq, Ord, Show, Read, Enum)
-
--- | How hard the note is played.
+-- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
 data Strength = Fortisimo | Forte | MezzoForte | MezzoMezzo | MezzoPiano | Piano | Pianismo
   deriving (Eq, Ord, Show, Read, Enum)
 
@@ -105,7 +119,7 @@ data SubDiv leaf
 
 ----------------------------------------------------------------------------------------------------
 
-data Measure leaf
+data Measure
   = Measure
     { playMetaOffset :: !Percentage
       -- ^ Wait an amount of time, specified as a percentage of the measure play time, before
@@ -118,21 +132,9 @@ data Measure leaf
       -- add together to specify the point in time after the start of the measure where the measure
       -- starts and ends. If the sum of these two values is greater than 1.0, the notes will be
       -- played beyond the end of the measure.
-    , playNoteTree   :: !(SubDiv leaf)
+    , playNoteTree   :: !(SubDiv PlayedNote)
     }
-  deriving (Eq, Ord, Show, Read)
-
--- | A 'Measure' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
--- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
--- start time to the @('ProcGen.Types.Duration', leaf)@ pair.
-sequenceMeasure :: Moment -> Duration -> Measure a -> Map.Map Moment (Duration, a)
-sequenceMeasure t0 dt0 msur = loop Map.empty (t0 + playMetaOffset msur) dt0 (playNoteTree msur) where
-  loop :: Map.Map Moment (Duration, a) -> Moment -> Duration -> SubDiv a -> Map.Map Moment (Duration, a)
-  loop map t0 dt0 subdiv = if t0 >= playMetaCutoff msur then map else case subdiv of
-    SubDivLeaf  leaf -> Map.union map $ Map.singleton t0 (dt0, leaf)
-    SubDivBranch vec -> if Boxed.null vec then Map.empty else
-      let dt = dt0 / realToFrac (Boxed.length vec) in
-        foldl (\ map (t, a) -> loop map t dt a) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
+  deriving (Eq, Ord, Show)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -148,9 +150,17 @@ instance Monoid RoleNotes where
   mempty = RoleNotes mempty
   mappend = (<>)
 
--- | Construct a 'RoleNotes' from a 'Beat'. Music is composed of 'BeatPattern's, but the actual
--- notes played, the actual execution of the musical score, cannot be done without collapsing a
--- 'BeatPattern' into a simple temporal list of 'PlayedNotes'. The input for this function comes
--- from 'sequenceMeasure' where the type sequenced is of @('Measure' 'PlayedNote')@.
-roleNotes :: Map.Map Moment (Duration, PlayedNote) -> RoleNotes
-roleNotes = RoleNotes . fmap (\ (t, note) -> note{ playedDuration = t })
+roleNote :: Moment -> Duration -> PlayedNote -> RoleNotes
+roleNote t dt note = RoleNotes $ Map.singleton t note{ playedDuration=dt }
+
+-- | A 'Measure' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
+-- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
+-- start time to the @('ProcGen.Types.Duration', leaf)@ pair.
+sequenceMeasure :: Moment -> Duration -> Measure -> RoleNotes
+sequenceMeasure t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
+  loop :: Duration -> RoleNotes -> (Moment, SubDiv PlayedNote) -> RoleNotes
+  loop dt0 map (t0, subdiv) = if t0 >= playMetaCutoff msur then map else case subdiv of
+    SubDivLeaf  note -> map <> roleNote t0 dt0 note
+    SubDivBranch vec -> if Boxed.null vec then mempty else
+      let dt = dt0 / realToFrac (Boxed.length vec) in
+      foldl (loop dt) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
