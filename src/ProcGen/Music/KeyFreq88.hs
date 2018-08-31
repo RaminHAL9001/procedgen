@@ -4,7 +4,7 @@ module ProcGen.Music.KeyFreq88
     packW8, unpackW8, toneToUnique, uniqueToTone, toneShift, toneName, uniqueToneIndex,
     isUniqueToneIndex,
     -- * The 88-Key Piano Keyboard
-    KeyIndex, keyIndex, keyIndexToInt,
+    KeyIndex, keyIndex, keyIndexToWord8,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
     -- * Chords
     KeySignature(..), keySignature, keySigFreqTable,
@@ -181,7 +181,7 @@ toneName = (toneNameTable Unboxed.!) . fromEnum
 
 ----------------------------------------------------------------------------------------------------
 
-newtype KeyIndex = KeyIndex { keyIndexToInt :: Word8 }
+newtype KeyIndex = KeyIndex { keyIndexToWord8 :: Word8 }
   deriving (Eq, Ord, Show, Read)
 
 -- | Construct a 'KeyIndex', evaluates to an error value if the given
@@ -213,12 +213,12 @@ keysPerOctave = 12
 
 keyFreq :: Frequency -> Frequency
 keyFreq i = concertA * 2.0**((i - k) / d) where
-  k = fromIntegral $ keyIndexToInt concertAPianoKey
+  k = fromIntegral $ keyIndexToWord8 concertAPianoKey
   d = fromIntegral keysPerOctave
 
 keyFreq' :: Frequency -> Frequency
 keyFreq' f = k + d * log(f / concertA) / log 2 where
-  k = fromIntegral $ keyIndexToInt concertAPianoKey
+  k = fromIntegral $ keyIndexToWord8 concertAPianoKey
   d = fromIntegral keysPerOctave
 
 ----------------------------------------------------------------------------------------------------
