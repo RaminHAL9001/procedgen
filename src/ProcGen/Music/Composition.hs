@@ -39,9 +39,11 @@ module ProcGen.Music.Composition
     Note(..), makeNote, NoteReference, untied, NoteValue(..), noteValue, Strength(..),
     -- * Arranging Notes
     Measure(..), makeMeasure,
-    SubDiv(..), RoleNotes(..), roleNote, sequenceMeasure, setNoteDurations,
+    SubDiv(..), PlayedRole(..), play1Note, sequenceMeasure, setNoteDurations,
     -- * Composing Music for a Single Role
-    RoleComposition, newRoleComposition, newRoleCompositionIO, newRoleCompositionPure, runComposeRoleIO,
+    RoleComposition, PureRoleComposition,
+    newRoleComposition, newRoleCompositionIO, newRoleCompositionPure,
+    runComposeRoleIO, freezeRoleComposition,
     measure, notes, rest, tie, addNote, play, playNotes, playTie, score,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
@@ -182,36 +184,36 @@ makeMeasure = Measure
 
 -- | The notes played by a single 'Role' at each point in time. The time the note played is defined
 -- by the index of the 'Map.Map', where each measure contains up to @measureTimeDiv@ elements.
-newtype RoleNotes leaf = RoleNotes (Map.Map Moment leaf)
+newtype PlayedRole leaf = PlayedRole (Map.Map Moment leaf)
   deriving (Eq, Functor)
 
-instance Semigroup (RoleNotes leaf) where
-  (RoleNotes a) <> (RoleNotes b) = RoleNotes (Map.union b a)
+instance Semigroup (PlayedRole leaf) where
+  (PlayedRole a) <> (PlayedRole b) = PlayedRole (Map.union b a)
 
-instance Monoid (RoleNotes leaf) where
-  mempty = RoleNotes mempty
+instance Monoid (PlayedRole leaf) where
+  mempty = PlayedRole mempty
   mappend = (<>)
 
-roleNote :: Moment -> Duration -> leaf -> RoleNotes (Duration, leaf)
-roleNote t dt = RoleNotes . Map.singleton t . (,) dt
+play1Note :: Moment -> Duration -> leaf -> PlayedRole (Duration, leaf)
+play1Note t dt = RoleNotes . Map.singleton t . (,) dt
 
 -- | A 'Measure' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
 -- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
--- 'Note', it is helpful to evaluate the resulting 'RoleNotes' with 'setNoteDurations'.
-sequenceMeasure :: Moment -> Duration -> Measure leaf -> RoleNotes (Duration, leaf)
+-- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
+sequenceMeasure :: Moment -> Duration -> Measure leaf -> PlayedRole (Duration, leaf)
 sequenceMeasure t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
   loop dt0 map (t0, subdiv) = if t0 >= playMetaCutoff msur then map else case subdiv of
-    SubDivLeaf  note -> map <> roleNote t0 dt0 note
+    SubDivLeaf  note -> map <> play1Note t0 dt0 note
     SubDivBranch vec -> if Boxed.null vec then mempty else
       let dt = dt0 / realToFrac (Boxed.length vec) in
       foldl (loop dt) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
 
--- | For a 'RoleNotes' containing a tuple @('Duration', 'Note')@ pair as what is constructed
+-- | For a 'PlayedRole' containing a tuple @('Duration', 'Note')@ pair as what is constructed
 -- by the 'sequenceMeasure' function, this sets the 'ProcGen.Types.Duration' value in the
 -- 'Prelude.fst' of the tuple as the 'playedDuration' of each 'Note' in the 'Prelude.snd' of
 -- the tuple.
-setNoteDurations :: RoleNotes (Duration, Note) -> RoleNotes (Interval Note)
+setNoteDurations :: PlayedRole (Duration, Note) -> PlayedRole (Interval Note)
 setNoteDurations = fmap $ uncurry Interval
 
 ----------------------------------------------------------------------------------------------------
@@ -234,14 +236,14 @@ data RoleComposition m
     , theRoleCompCurrentDiv   :: [NoteReference]
     }
 
----- | This data structure is constructed by evaluating 'runComposePure', it contains buffers of the
----- @('Composition' ('Control.Monad.ST.ST' s))@ in their frozen state.
---data PureRoleComposition
---  = PureRoleComposition
---    { pureRoleCompRandGen     :: !TFGen
---    , pureRoleCompNotes       :: !(Boxed.Vector Note)
---    , pureRoleCompMeasures    :: !(Boxed.Vector (Measure NoteReference))
---    }
+-- | This data structure is constructed by evaluating 'runComposePure', it contains buffers of the
+-- @('Composition' ('Control.Monad.ST.ST' s))@ in their frozen state.
+data PureRoleComposition
+  = PureRoleComposition
+    { pureRoleCompRandGen     :: !TFGen
+    , pureRoleCompNotes       :: !(Boxed.Vector Note)
+    , pureRoleCompMeasures    :: !(Boxed.Vector (Measure NoteReference))
+    }
 
 instance Monad m => MonadState (RoleComposition m) (ComposeRoleT m) where { state = ComposeRoleT . state; }
 
@@ -270,6 +272,18 @@ newRoleComposition gen = do
     , theRoleCompCurrentDiv   = []
     }
 
+-- | Once all the composition for a role is complete, freeze the buffers within it so a pure data
+-- type can be passed to '
+freezeRoleComposition :: PrimMonad m => RoleComposition m -> m PureRoleComposition
+freezeRoleComposition st = do
+  notes    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)
+  measures <- Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)
+  return PureRoleComposition
+    { pureRoleCompRandGen  = theRoleCompRandGen st
+    , pureRoleCompNotes    = notes
+    , pureRoleCompMeasures = measures
+    }
+
 -- | Initializes a 'Composition' state that can be used to evaluate 'runComposeIO'. This function
 -- uses 'System.Random.TF.Init.initTFGen' to initialize the random number generator, and allocates a
 -- mutable 'Mutable.IOVector' to buffer elements of a musical composition.
@@ -287,14 +301,13 @@ newRoleCompositionPure = newRoleComposition . tfGen
 runComposeRoleIO :: ComposeRoleT IO a -> IO (a, RoleComposition IO)
 runComposeRoleIO (ComposeRoleT f) = newRoleCompositionIO >>= runStateT f
 
--- | Calls 'newRoleCompositionPure' and evaluates a @('ComposeRoleT' (forall s . 'Control.Monad.ST.ST' s))@
--- function.
+---- | Calls 'newRoleCompositionPure' and evaluates a @('ComposeRoleT' (forall s . 'Control.Monad.ST.ST' s))@
+---- function.
 --runComposeRolePure :: TFRandSeed -> ComposeRoleT (ST s) a -> (a, PureRoleComposition)
 --runComposeRolePure seed (ComposeRoleT f) = runST $ do
---  rolecomp <- (newRoleCompositionPure seed :: ST s (RoleComposition (ST s)))
---  (a, st)  <- (runStateT f rolecomp :: ST s (a, RoleComposition (ST s)))
---  notes    <- (Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)) :: ST s (Boxed.Vector Note)
---  measures <- (Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)) :: ST s (Boxed.Vector (Measure NoteReference))
+--  (a, st)  <- newRoleCompositionPure seed >>= runStateT f
+--  notes    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)
+--  measures <- Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)
 --  ((return ( a
 --           , PureRoleComposition
 --             { pureRoleCompRandGen  = theRoleCompRandGen st
