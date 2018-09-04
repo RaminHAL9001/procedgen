@@ -59,8 +59,10 @@ import           Control.Monad.State
 import           Control.Monad.State.Class
 import           Control.Monad.ST
 
+import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
 import           Data.Semigroup
+import qualified Data.Text                 as Strict
 import qualified Data.Vector.Mutable       as Mutable
 import qualified Data.Vector.Unboxed       as Unboxed
 import qualified Data.Vector               as Boxed
@@ -219,19 +221,19 @@ setNoteDurations = fmap $ uncurry Interval
 ----------------------------------------------------------------------------------------------------
 
 -- | This function type allows you to construct a musical 'Composition'.
-newtype ComposeRoleT m a = ComposeRoleT (StateT (RoleComposition m) m a)
+newtype ComposeRoleT io a = ComposeRoleT (StateT (RoleComposition io) io a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
 -- | This is a data type for constructing a musical composition. It can be evaluated purely in the
 -- 'Control.Monad.ST.ST' monad, or in the 'IO' monad.
-data RoleComposition m
+data RoleComposition io
   = RoleComposition
     { theRoleCompRoleCount    :: !Int
-    , theRoleCompNotes        :: !(Mutable.MVector (PrimState m) Note)
+    , theRoleCompNotes        :: !(Mutable.MVector (PrimState io) Note)
     , theRoleCompRandGen      :: !TFGen
     , theRoleCompMeasureTime  :: !Duration
     , theRoleCompMeasureCount :: !Int
-    , theRoleCompMeasures     :: !(Mutable.MVector (PrimState m) (Measure NoteReference))
+    , theRoleCompMeasures     :: !(Mutable.MVector (PrimState io) (Measure NoteReference))
     , theRoleCompDivSize      :: !Int
     , theRoleCompCurrentDiv   :: [NoteReference]
     }
@@ -245,19 +247,19 @@ data PureRoleComposition
     , pureRoleCompMeasures    :: !(Boxed.Vector (Measure NoteReference))
     }
 
-instance Monad m => MonadState (RoleComposition m) (ComposeRoleT m) where { state = ComposeRoleT . state; }
+instance Monad io => MonadState (RoleComposition io) (ComposeRoleT io) where { state = ComposeRoleT . state; }
 
 instance MonadTrans ComposeRoleT where { lift = ComposeRoleT . lift; }
 
-instance (Semigroup a, Monad m) => Semigroup (ComposeRoleT m a) where { (<>) a b = (<>) <$> a <*> b; }
+instance (Semigroup a, Monad io) => Semigroup (ComposeRoleT io a) where { (<>) a b = (<>) <$> a <*> b; }
 
-instance (Monoid a, Monad m) => Monoid (ComposeRoleT m a) where
+instance (Monoid a, Monad io) => Monoid (ComposeRoleT io a) where
   mempty = pure mempty
   mappend a b = mappend <$> a <*> b
 
 -- | Construct a new composition in either the @IO@ or 'Control.Monad.ST.ST' monad. Generate a
 -- 'TFGen' with 'ProcGen.Arbitrary.initTGGen', or 'ProcGen.Arbitrary.tfGen'.
-newRoleComposition :: PrimMonad m => TFGen -> m (RoleComposition m)
+newRoleComposition :: PrimMonad io => TFGen -> io (RoleComposition io)
 newRoleComposition gen = do
   notes    <- Mutable.new 256
   measures <- Mutable.new 64
@@ -274,7 +276,7 @@ newRoleComposition gen = do
 
 -- | Once all the composition for a role is complete, freeze the buffers within it so a pure data
 -- type can be passed to '
-freezeRoleComposition :: PrimMonad m => RoleComposition m -> m PureRoleComposition
+freezeRoleComposition :: PrimMonad io => RoleComposition io -> io PureRoleComposition
 freezeRoleComposition st = do
   notes    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)
   measures <- Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)
@@ -317,35 +319,35 @@ runComposeRoleIO (ComposeRoleT f) = newRoleCompositionIO >>= runStateT f
 --           )) :: ST s (a, PureRoleComposition))
 
 -- not for export
-compositionNoteCount :: Lens' (RoleComposition m) Int
+compositionNoteCount :: Lens' (RoleComposition io) Int
 compositionNoteCount = lens theRoleCompRoleCount $ \ a b -> a{ theRoleCompRoleCount = b }
 
 -- not for export
-compositionNotes :: Lens' (RoleComposition m) (Mutable.MVector (PrimState m) Note)
+compositionNotes :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) Note)
 compositionNotes = lens theRoleCompNotes $ \ a b -> a{ theRoleCompNotes = b }
 
 -- not for export
-compositionRandGen :: Lens' (RoleComposition m) TFGen
+compositionRandGen :: Lens' (RoleComposition io) TFGen
 compositionRandGen = lens theRoleCompRandGen $ \ a b -> a{ theRoleCompRandGen = b }
 
 -- not for export
-compositionMeasureTime :: Lens' (RoleComposition m) Duration
+compositionMeasureTime :: Lens' (RoleComposition io) Duration
 compositionMeasureTime = lens theRoleCompMeasureTime $ \ a b -> a{ theRoleCompMeasureTime = b }
 
 -- not for export
-compositionMeasureCount :: Lens' (RoleComposition m) Int
+compositionMeasureCount :: Lens' (RoleComposition io) Int
 compositionMeasureCount = lens theRoleCompMeasureCount $ \ a b -> a{ theRoleCompMeasureCount = b }
 
 -- not for export
-compositionMeasures :: Lens' (RoleComposition m) (Mutable.MVector (PrimState m) (Measure NoteReference))
+compositionMeasures :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) (Measure NoteReference))
 compositionMeasures = lens theRoleCompMeasures $ \ a b -> a{ theRoleCompMeasures = b }
 
 -- not for export
-compositionDivSize :: Lens' (RoleComposition m) Int
+compositionDivSize :: Lens' (RoleComposition io) Int
 compositionDivSize = lens theRoleCompDivSize $ \ a b -> a{ theRoleCompDivSize = b }
 
 -- not for export
-compositionCurrentDiv :: Lens' (RoleComposition m) [NoteReference]
+compositionCurrentDiv :: Lens' (RoleComposition io) [NoteReference]
 compositionCurrentDiv = lens theRoleCompCurrentDiv $ \ a b -> a{ theRoleCompCurrentDiv = b }
 
 -- | Construct and return a 'Measure'.
@@ -359,7 +361,7 @@ compositionCurrentDiv = lens theRoleCompCurrentDiv $ \ a b -> a{ theRoleCompCurr
 --                  'measure' $ 'play' b >> play a
 --     'score' intro
 -- @
-measure :: Monad m => ComposeRoleT m () -> ComposeRoleT m (Measure NoteReference)
+measure :: Monad io => ComposeRoleT io () -> ComposeRoleT io (Measure NoteReference)
 measure compose = do
   oldlist <- use compositionCurrentDiv
   oldsize <- use compositionDivSize
@@ -402,7 +404,7 @@ incrementMutable vector nelems = do
   return (i, vec)
 
 -- | Register a pre-constructed note. 
-addNote :: PrimMonad m => Note -> ComposeRoleT m NoteReference
+addNote :: PrimMonad io => Note -> ComposeRoleT io NoteReference
 addNote note = do
   (i, vec) <- incrementMutable compositionNotes compositionNoteCount
   let noteID = NoteReference i
@@ -413,15 +415,15 @@ addNote note = do
 -- note yet. Instead a reference to a note is returned which you can play, and if necessary, you can
 -- tie it to other notes. To construct a note that you never intend to tie and just play it
 -- immediately, use 'playNote' instead.
-notes :: PrimMonad m => Strength -> [KeyIndex] -> ComposeRoleT m NoteReference
+notes :: PrimMonad io => Strength -> [KeyIndex] -> ComposeRoleT io NoteReference
 notes strength = addNote . makeNote untied strength
   
 -- | Construct a rest.
-rest :: PrimMonad m => ComposeRoleT m NoteReference
+rest :: PrimMonad io => ComposeRoleT io NoteReference
 rest = addNote RestNote
 
 -- | Construct a note tied to the given 'NoteReference'.
-tie :: PrimMonad m => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT m NoteReference
+tie :: PrimMonad io => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT io NoteReference
 tie strength ns noteID@(NoteReference i) = do
   tiedID <- addNote $ makeNote noteID strength ns
   vec <- use compositionNotes
@@ -438,17 +440,17 @@ tie strength ns noteID@(NoteReference i) = do
 
 -- | Record a 'NoteReference' into the current 'Measure'. Only notes that are played, and not merely
 -- constructed by 'notes' or 'addNotes', will be converted to sound in the synthesizer.
-play :: Monad m => NoteReference -> ComposeRoleT m ()
+play :: Monad io => NoteReference -> ComposeRoleT io ()
 play ref = compositionCurrentDiv %= (ref :) >> compositionDivSize  += 1
 
 -- | Construct a 'NoteReference' using 'notes' and immediately pass the reference to 'play' to have
 -- it recorded. 
-playNotes :: PrimMonad m => Strength -> [KeyIndex] -> ComposeRoleT m NoteReference
+playNotes :: PrimMonad io => Strength -> [KeyIndex] -> ComposeRoleT io NoteReference
 playNotes s n = notes s n >>= \ noteID -> play noteID >> return noteID
 
 -- | Construct a 'NoteReference' using 'tie' and immediately pass the referece to 'play' to have it
 -- recorded, then tie the note to a previouly 'play'ed 'NoteReference'.
-playTie :: PrimMonad m => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT m NoteReference
+playTie :: PrimMonad io => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT io NoteReference
 playTie s n k = tie s n k >>= \ noteID -> play noteID >> return noteID
 
 -- | Once the 'measure' function returns it constructs a 'Measure' but does not record it to the
@@ -456,11 +458,7 @@ playTie s n k = tie s n k >>= \ noteID -> play noteID >> return noteID
 -- can actually convert it to sound. Obviously you may 'score' the same 'Measure' as many times as
 -- you like, just be aware that people tend to find the same thing repeated again and again too many
 -- times to be boring.
-score :: PrimMonad m => Measure NoteReference -> ComposeRoleT m ()
+score :: PrimMonad io => Measure NoteReference -> ComposeRoleT io ()
 score mesr = do
   (i, vec) <- incrementMutable compositionMeasures compositionMeasureCount
   lift $ Mutable.write vec i mesr
-
-----------------------------------------------------------------------------------------------------
-
-
