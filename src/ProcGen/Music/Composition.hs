@@ -38,13 +38,13 @@ module ProcGen.Music.Composition
     -- * Individual Notes
     Note(..), makeNote, NoteReference, untied, NoteValue(..), noteValue, Strength(..),
     -- * Arranging Notes
-    Measure(..), makeMeasure,
-    SubDiv(..), PlayedRole(..), play1Note, sequenceMeasure, setNoteDurations,
+    Bar(..), makeBar,
+    SubDiv(..), PlayedRole(..), play1Note, sequenceBar, setNoteDurations,
     -- * Composing Music for a Single Role
     RoleComposition, PureRoleComposition,
     newRoleComposition, newRoleCompositionIO, newRoleCompositionPure,
     runComposeRoleIO, freezeRoleComposition,
-    measure, notes, rest, tie, addNote, play, playNotes, playTie, score,
+    bar, notes, rest, tie, addNote, play, playNotes, playTie, score,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -91,7 +91,7 @@ data CommonChordProg
 ----------------------------------------------------------------------------------------------------
 
 -- | A 'Note' with a 'ProcGen.Types.Duration'. Notes are associated with 'ProcGen.Types.Moment's
--- only in 'Map.Map' data structures within the 'Measure' data type.
+-- only in 'Map.Map' data structures within the 'Bar' data type.
 data Interval note = Interval !Duration !note
   deriving (Eq, Ord, Show)
 
@@ -135,7 +135,7 @@ untied = NoteReference minBound
 data NoteValue
   = Single !Word8
     -- ^ Play a single note, the 'Data.Wordl.Word8' value will be used as an index to a table
-    -- constructed by a 'keySigFreqTable' for whatever key signature a given measure is played in.
+    -- constructed by a 'keySigFreqTable' for whatever key signature a given bar is played in.
   | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
   deriving (Eq, Ord, Show, Read)
 
@@ -158,8 +158,8 @@ data SubDiv leaf
   | SubDivBranch !(Boxed.Vector (SubDiv leaf))
   deriving Functor
 
-data Measure leaf
-  = Measure
+data Bar leaf
+  = Bar
     { playMetaOffset :: !Percentage
       -- ^ Wait an amount of time, specified as a percentage of the measure play time, before
       -- playing the notes defined in this measure.
@@ -175,8 +175,8 @@ data Measure leaf
     }
   deriving Functor
 
-makeMeasure :: Measure leaf
-makeMeasure = Measure
+makeBar :: Bar leaf
+makeBar = Bar
   { playMetaOffset = 0.0
   , playMetaCutoff = 1.0
   , playNoteTree   = SubDivBranch Boxed.empty
@@ -199,12 +199,12 @@ instance Monoid (PlayedRole leaf) where
 play1Note :: Moment -> Duration -> leaf -> PlayedRole (Duration, leaf)
 play1Note t dt = RoleNotes . Map.singleton t . (,) dt
 
--- | A 'Measure' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
+-- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
 -- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
 -- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
-sequenceMeasure :: Moment -> Duration -> Measure leaf -> PlayedRole (Duration, leaf)
-sequenceMeasure t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
+sequenceBar :: Moment -> Duration -> Bar leaf -> PlayedRole (Duration, leaf)
+sequenceBar t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
   loop dt0 map (t0, subdiv) = if t0 >= playMetaCutoff msur then map else case subdiv of
     SubDivLeaf  note -> map <> play1Note t0 dt0 note
     SubDivBranch vec -> if Boxed.null vec then mempty else
@@ -212,7 +212,7 @@ sequenceMeasure t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNot
       foldl (loop dt) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
 
 -- | For a 'PlayedRole' containing a tuple @('Duration', 'Note')@ pair as what is constructed
--- by the 'sequenceMeasure' function, this sets the 'ProcGen.Types.Duration' value in the
+-- by the 'sequenceBar' function, this sets the 'ProcGen.Types.Duration' value in the
 -- 'Prelude.fst' of the tuple as the 'playedDuration' of each 'Note' in the 'Prelude.snd' of
 -- the tuple.
 setNoteDurations :: PlayedRole (Duration, Note) -> PlayedRole (Interval Note)
@@ -228,23 +228,23 @@ newtype ComposeRoleT io a = ComposeRoleT (StateT (RoleComposition io) io a)
 -- 'Control.Monad.ST.ST' monad, or in the 'IO' monad.
 data RoleComposition io
   = RoleComposition
-    { theRoleCompRoleCount    :: !Int
-    , theRoleCompNotes        :: !(Mutable.MVector (PrimState io) Note)
-    , theRoleCompRandGen      :: !TFGen
-    , theRoleCompMeasureTime  :: !Duration
-    , theRoleCompMeasureCount :: !Int
-    , theRoleCompMeasures     :: !(Mutable.MVector (PrimState io) (Measure NoteReference))
-    , theRoleCompDivSize      :: !Int
-    , theRoleCompCurrentDiv   :: [NoteReference]
+    { theRoleCompRoleCount  :: !Int
+    , theRoleCompNotes      :: !(Mutable.MVector (PrimState io) Note)
+    , theRoleCompRandGen    :: !TFGen
+    , theRoleCompBarTime    :: !Duration
+    , theRoleCompBarCount   :: !Int
+    , theRoleCompBars       :: !(Mutable.MVector (PrimState io) (Bar NoteReference))
+    , theRoleCompDivSize    :: !Int
+    , theRoleCompCurrentDiv :: [NoteReference]
     }
 
 -- | This data structure is constructed by evaluating 'runComposePure', it contains buffers of the
 -- @('Composition' ('Control.Monad.ST.ST' s))@ in their frozen state.
 data PureRoleComposition
   = PureRoleComposition
-    { pureRoleCompRandGen     :: !TFGen
-    , pureRoleCompNotes       :: !(Boxed.Vector Note)
-    , pureRoleCompMeasures    :: !(Boxed.Vector (Measure NoteReference))
+    { pureRoleCompRandGen :: !TFGen
+    , pureRoleCompNotes   :: !(Boxed.Vector Note)
+    , pureRoleCompBar     :: !(Boxed.Vector (Bar NoteReference))
     }
 
 instance Monad io => MonadState (RoleComposition io) (ComposeRoleT io) where { state = ComposeRoleT . state; }
@@ -261,29 +261,29 @@ instance (Monoid a, Monad io) => Monoid (ComposeRoleT io a) where
 -- 'TFGen' with 'ProcGen.Arbitrary.initTGGen', or 'ProcGen.Arbitrary.tfGen'.
 newRoleComposition :: PrimMonad io => TFGen -> io (RoleComposition io)
 newRoleComposition gen = do
-  notes    <- Mutable.new 256
-  measures <- Mutable.new 64
+  notes <- Mutable.new 256
+  bars  <- Mutable.new 64
   return RoleComposition
-    { theRoleCompRoleCount    = 0
-    , theRoleCompNotes        = notes
-    , theRoleCompRandGen      = gen
-    , theRoleCompMeasureTime  = 4.0
-    , theRoleCompMeasureCount = 0
-    , theRoleCompMeasures     = measures
-    , theRoleCompDivSize      = 0
-    , theRoleCompCurrentDiv   = []
+    { theRoleCompRoleCount  = 0
+    , theRoleCompNotes      = notes
+    , theRoleCompRandGen    = gen
+    , theRoleCompBarTime    = 4.0
+    , theRoleCompBarCount   = 0
+    , theRoleCompBars       = bars
+    , theRoleCompDivSize    = 0
+    , theRoleCompCurrentDiv = []
     }
 
 -- | Once all the composition for a role is complete, freeze the buffers within it so a pure data
 -- type can be passed to '
 freezeRoleComposition :: PrimMonad io => RoleComposition io -> io PureRoleComposition
 freezeRoleComposition st = do
-  notes    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)
-  measures <- Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)
+  notes <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount st) (theRoleCompNotes st)
+  bars  <- Boxed.freeze $! Mutable.slice 0 (theRoleCompBarCount  st) (theRoleCompBars  st)
   return PureRoleComposition
-    { pureRoleCompRandGen  = theRoleCompRandGen st
-    , pureRoleCompNotes    = notes
-    , pureRoleCompMeasures = measures
+    { pureRoleCompRandGen = theRoleCompRandGen st
+    , pureRoleCompNotes   = notes
+    , pureRoleCompBars    = bars
     }
 
 -- | Initializes a 'Composition' state that can be used to evaluate 'runComposeIO'. This function
@@ -307,14 +307,14 @@ runComposeRoleIO (ComposeRoleT f) = newRoleCompositionIO >>= runStateT f
 ---- function.
 --runComposeRolePure :: TFRandSeed -> ComposeRoleT (ST s) a -> (a, PureRoleComposition)
 --runComposeRolePure seed (ComposeRoleT f) = runST $ do
---  (a, st)  <- newRoleCompositionPure seed >>= runStateT f
---  notes    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount    st) (theRoleCompNotes    st)
---  measures <- Boxed.freeze $! Mutable.slice 0 (theRoleCompMeasureCount st) (theRoleCompMeasures st)
+--  (a, st) <- newRoleCompositionPure seed >>= runStateT f
+--  notes   <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount st) (theRoleCompNotes st)
+--  bars    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompBarCount  st) (theRoleCompBars  st)
 --  ((return ( a
 --           , PureRoleComposition
---             { pureRoleCompRandGen  = theRoleCompRandGen st
---             , pureRoleCompNotes    = notes
---             , pureRoleCompMeasures = measures
+--             { pureRoleCompRandGen = theRoleCompRandGen st
+--             , pureRoleCompNotes   = notes
+--             , pureRoleCompBars    = bars
 --             }
 --           )) :: ST s (a, PureRoleComposition))
 
@@ -331,16 +331,16 @@ compositionRandGen :: Lens' (RoleComposition io) TFGen
 compositionRandGen = lens theRoleCompRandGen $ \ a b -> a{ theRoleCompRandGen = b }
 
 -- not for export
-compositionMeasureTime :: Lens' (RoleComposition io) Duration
-compositionMeasureTime = lens theRoleCompMeasureTime $ \ a b -> a{ theRoleCompMeasureTime = b }
+compositionBarTime :: Lens' (RoleComposition io) Duration
+compositionBarTime = lens theRoleCompBarTime $ \ a b -> a{ theRoleCompBarTime = b }
 
 -- not for export
-compositionMeasureCount :: Lens' (RoleComposition io) Int
-compositionMeasureCount = lens theRoleCompMeasureCount $ \ a b -> a{ theRoleCompMeasureCount = b }
+compositionBarCount :: Lens' (RoleComposition io) Int
+compositionBarCount = lens theRoleCompBarCount $ \ a b -> a{ theRoleCompBarCount = b }
 
 -- not for export
-compositionMeasures :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) (Measure NoteReference))
-compositionMeasures = lens theRoleCompMeasures $ \ a b -> a{ theRoleCompMeasures = b }
+compositionBars :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) (Bar NoteReference))
+compositionBars = lens theRoleCompBars $ \ a b -> a{ theRoleCompBars = b }
 
 -- not for export
 compositionDivSize :: Lens' (RoleComposition io) Int
@@ -350,32 +350,32 @@ compositionDivSize = lens theRoleCompDivSize $ \ a b -> a{ theRoleCompDivSize = 
 compositionCurrentDiv :: Lens' (RoleComposition io) [NoteReference]
 compositionCurrentDiv = lens theRoleCompCurrentDiv $ \ a b -> a{ theRoleCompCurrentDiv = b }
 
--- | Construct and return a 'Measure'.
+-- | Construct and return a 'Bar'.
 --
 -- @
 -- 'runComposeIO' $ do
 --     a     <- 'notes' [1, 5, 8]
 --     b     <- 'chord' [0, 3, 4]
---     intro <- 'measure' $ do
---                  'measure' $ 'play' a >> 'rest'
---                  'measure' $ 'play' b >> play a
+--     intro <- 'bar' $ do
+--                  'bar' $ 'play' a >> 'rest'
+--                  'bar' $ 'play' b >> play a
 --     'score' intro
 -- @
-measure :: Monad io => ComposeRoleT io () -> ComposeRoleT io (Measure NoteReference)
-measure compose = do
+bar :: Monad io => ComposeRoleT io () -> ComposeRoleT io (Bar NoteReference)
+bar compose = do
   oldlist <- use compositionCurrentDiv
   oldsize <- use compositionDivSize
-  oldtime <- use compositionMeasureTime
-  compositionCurrentDiv  .= []
-  compositionDivSize     .= 0
-  compositionMeasureTime %= (/ 2.0)
+  oldtime <- use compositionBarTime
+  compositionCurrentDiv .= []
+  compositionDivSize    .= 0
+  compositionBarTime    %= (/ 2.0)
   compose
   newlist <- fmap SubDivLeaf <$> use compositionCurrentDiv
   newsize <- use compositionDivSize
-  compositionCurrentDiv  .= oldlist
-  compositionDivSize     .= oldsize
-  compositionMeasureTime .= oldtime
-  return makeMeasure
+  compositionCurrentDiv .= oldlist
+  compositionDivSize    .= oldsize
+  compositionBarTime    .= oldtime
+  return makeBar
     { playNoteTree = SubDivBranch $ Boxed.create $ do
         vec <- Mutable.new newsize
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) $ newsize - 1) newlist
@@ -438,7 +438,7 @@ tie strength ns noteID@(NoteReference i) = do
     Mutable.write vec i $ note{ playedTiedID = tiedID }
   return tiedID
 
--- | Record a 'NoteReference' into the current 'Measure'. Only notes that are played, and not merely
+-- | Record a 'NoteReference' into the current 'Bar'. Only notes that are played, and not merely
 -- constructed by 'notes' or 'addNotes', will be converted to sound in the synthesizer.
 play :: Monad io => NoteReference -> ComposeRoleT io ()
 play ref = compositionCurrentDiv %= (ref :) >> compositionDivSize  += 1
@@ -453,12 +453,12 @@ playNotes s n = notes s n >>= \ noteID -> play noteID >> return noteID
 playTie :: PrimMonad io => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT io NoteReference
 playTie s n k = tie s n k >>= \ noteID -> play noteID >> return noteID
 
--- | Once the 'measure' function returns it constructs a 'Measure' but does not record it to the
--- 'Composition'. This function records the 'Measure' into the 'Composition' so that the synthesizer
--- can actually convert it to sound. Obviously you may 'score' the same 'Measure' as many times as
+-- | Once the 'bar' function returns it constructs a 'Bar' but does not record it to the
+-- 'Composition'. This function records the 'Bar' into the 'Composition' so that the synthesizer
+-- can actually convert it to sound. Obviously you may 'score' the same 'Bar' as many times as
 -- you like, just be aware that people tend to find the same thing repeated again and again too many
 -- times to be boring.
-score :: PrimMonad io => Measure NoteReference -> ComposeRoleT io ()
+score :: PrimMonad io => Bar NoteReference -> ComposeRoleT io ()
 score mesr = do
-  (i, vec) <- incrementMutable compositionMeasures compositionMeasureCount
+  (i, vec) <- incrementMutable compositionBars compositionBarCount
   lift $ Mutable.write vec i mesr
