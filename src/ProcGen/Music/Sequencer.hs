@@ -10,16 +10,17 @@
 -- larger buffer, perhaps also applying post-processing effects (in future versions of this
 -- program).
 module ProcGen.Music.Sequencer
-  ( -- * Sequencer Evaluation
-    Sequencer, SequencerState, runSequencer, evalSynth, newTrack, deleteTrack, playToTrack,
+  ( -- * The Track Data Type
+    Track(..), trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
+    -- * Sequencer Evaluation
+    Sequencer, SequencerState, PlayToTrack(..),
+    runSequencer, evalSynth, 
     BufferSet(..), BufferInfo(..), addBuffer, deleteBuffer,
     -- * Defining Drum Sets
-    DrumID(..), drumBuffers, newDrum, getDrum,
+    DrumID(..), DrumInstrument, drumBuffers, newDrum, getDrum,
     -- * Defining Tonal Insruments
-    ToneInstrument, ToneID(..), ToneIndex(..), ToneTagSet, ToneTag(..), toneBuffers,
+    ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..), toneBuffers,
     newTone, getTone,
-    -- * Mixing Tracks
-    TrackSequence(..), sequenceToTrack,
   ) where
 
 import           ProcGen.Types
@@ -28,10 +29,14 @@ import           ProcGen.Music.Composition
 import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.Synth
 
+import           Control.Lens
 import           Control.Monad.State
 
+import           Data.List                  (nub)
 import qualified Data.Map                    as Map
+import           Data.String
 import qualified Data.Text                   as Strict
+import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as MUnboxed
 import qualified Data.Vector.Mutable         as MBoxed
@@ -39,12 +44,44 @@ import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
 
-newtype Sequencer a = Sequencer (StateT Sequencer IO a)
+newtype Track = Track (MUnboxed.IOVector Sample)
+
+trackTime :: Track -> Duration
+trackTime = sampleCountDuration . trackSampleCount
+
+trackSampleCount :: Track -> SampleCount
+trackSampleCount (Track vec) = MUnboxed.length vec
+
+newTrack :: MonadIO m => Duration -> m Track
+newTrack = liftM Track . liftIO . MUnboxed.new . durationSampleCount
+
+writeTrackFile :: FilePath -> Track -> IO ()
+writeTrackFile = error "TODO: ProcGen.Music.Sequencer.writeTrackFile"
+
+-- | Must be a .WAV file, 44100 hz 16 bit signed little endian single channel.
+readTrackFile :: FilePath -> Track -> IO ()
+readTrackFile = error "TODO: ProcGen.Music.Sequencer.readTrackFile"
+
+----------------------------------------------------------------------------------------------------
+
+newtype Sequencer a = Sequencer (StateT SequencerState IO a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
--- | Buffers are all contained in a single mutable vector. This is their unique address.
-newtype BufferID = BufferID Int
-  deriving (Eq, Ord, Show)
+data SequencerState
+  = SequencerState
+    { theSequencerGen         :: !TFGen
+    , theSequencerDrumKit     :: !DrumInstrument
+    , theSequencerInstruments :: !(Map.Map Strict.Text ToneInstrument)
+    }
+
+sequencerGen :: Lens' SequencerState TFGen
+sequencerGen = lens theSequencerGen $ \ a b -> a{ theSequencerGen = b }
+
+sequencerDrumKit :: Lens' SequencerState DrumInstrument
+sequencerDrumKit = lens theSequencerDrumKit $ \ a b -> a{ theSequencerDrumKit = b }
+
+sequencerInstrument :: Lens' SequencerState (Map.Map Strict.Text ToneInstrument)
+sequencerInstrument = lens theSequencerInstruments $ \ a b -> a{ theSequencerInstruments = b }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -68,16 +105,16 @@ instance IsString DrumID where { fromString = DrumID . Strict.pack; }
 -- scratchy sound. Every time the sound A4 mezzo forte is selected, one of those three are seleted
 -- from a 'Sequencer' using 'getSound'. The squeaky/scratchy sound can be weighted such that it is
 -- randomly selected less often.
-data ToneID = ToneID !ToneIndex !ToneTagSet
+data ToneID = ToneID !ToneKeyIndicies !ToneTagSet
   deriving (Eq, Ord, Show)
 
 -- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded). This is not used
 -- for drum kits.
-data ToneIndex
+data ToneKeyIndicies
   = KeyTone      !KeyIndex
   | SlideTone    !KeyIndex !KeyIndex
   | CrossFaded   !KeyIndex !KeyIndex
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
 data ToneTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
@@ -90,7 +127,7 @@ soundTagSet :: [ToneTag] -> ToneTagSet
 soundTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
 
 instance Show ToneTagSet where
-  show (ToneTagSet vec) = show $ toEnum . fromIntegral <$> Unboxed.toList vec
+  show (ToneTagSet vec) = show $ fromEnum . fromIntegral <$> Unboxed.toList vec
 
 ----------------------------------------------------------------------------------------------------
 
@@ -116,7 +153,27 @@ data DrumInstrument
     , theDrumTable :: !(Map.Map DrumID (Boxed.Vector BufferInfo))
     }
 
-class BuffesSet set idx | set -> idx where
+toneLabel :: Lens' ToneInstrument Strict.Text
+toneLabel = lens theToneLabel $ \ a b -> a{ theToneLabel = b }
+
+toneLowest :: Lens' ToneInstrument KeyIndex
+toneLowest = lens theToneLowest $ \ a b -> a{ theToneLowest = b }
+
+toneHighes :: Lens' ToneInstrument KeyIndex
+toneHighes = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
+
+toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector BufferInfo))
+toneTable = lens theToneTable $ \ a b -> a{ theToneTable = b }
+
+drumLabel :: Lens' DrumInstrument Strict.Text
+drumLabel = lens theDrumLabel $ \ a b -> a{ theDrumLabel = b }
+
+drumTable :: Lens' DrumInstrument (Map.Map DrumID (Boxed.Vector BufferInfo))
+drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
+
+----------------------------------------------------------------------------------------------------
+
+class BufferSet set idx | set -> idx where
   buffers :: idx -> Lens' set (Maybe (Boxed.Vector BufferInfo))
   --getSound :: set -> idx -> Sequencer BufferInfo -- TODO
 
@@ -124,13 +181,13 @@ instance BufferSet ToneInstrument ToneID where { buffers = toneBuffers; }
 instance BufferSet DrumInstrument DrumID where { buffers = drumBuffers; }
 
 -- | Like 'buffers' but specific to the 'ToneID' and 'ToneInstrument' types.
-toneBuffers :: ToneID -> Lens' ToneInstrument (Boxed.Vector BufferInfo)
+toneBuffers :: ToneID -> Lens' ToneInstrument (Maybe (Boxed.Vector BufferInfo))
 toneBuffers i = lens (Map.lookup i . theToneTable) $ \ tone table ->
-  tone{ theToneTable = Map.alter (const table) $ theToneTable tone }
+  tone{ theToneTable = Map.alter (const table) i $ theToneTable tone }
 
-drumBuffers :: DrumID -> Lens' DrumInstrument (Boxed.Vector BufferInfo)
+drumBuffers :: DrumID -> Lens' DrumInstrument (Maybe (Boxed.Vector BufferInfo))
 drumBuffers i = lens (Map.lookup i . theDrumTable) $ \ drum table ->
-  drum{ theDrumTable = Map.alter (const table) $ theDrumTable drum }
+  drum{ theDrumTable = Map.alter (const table) i $ theDrumTable drum }
 
 -- | Prepend 'BufferInfo' data to the front of the 'Boxed.Vector'.
 addBuffer :: BufferInfo -> Boxed.Vector BufferInfo -> Boxed.Vector BufferInfo
@@ -140,4 +197,3 @@ addBuffer info = Boxed.fromList . (info :) . Boxed.toList
 deleteBuffer :: Int -> Boxed.Vector BufferInfo -> Boxed.Vector BufferInfo
 deleteBuffer i vec = if Boxed.length vec <= i || i < 0 then vec else Boxed.fromList $
   (vec Boxed.!) <$> ([0 .. i - 1] ++ [i + 1 .. Boxed.length vec - 1])
-

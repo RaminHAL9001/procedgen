@@ -59,10 +59,8 @@ import           Control.Monad.State
 import           Control.Monad.State.Class
 import           Control.Monad.ST
 
-import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
 import           Data.Semigroup
-import qualified Data.Text                 as Strict
 import qualified Data.Vector.Mutable       as Mutable
 import qualified Data.Vector.Unboxed       as Unboxed
 import qualified Data.Vector               as Boxed
@@ -197,7 +195,7 @@ instance Monoid (PlayedRole leaf) where
   mappend = (<>)
 
 play1Note :: Moment -> Duration -> leaf -> PlayedRole (Duration, leaf)
-play1Note t dt = RoleNotes . Map.singleton t . (,) dt
+play1Note t dt = PlayedRole . Map.singleton t . (,) dt
 
 -- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
@@ -244,7 +242,7 @@ data PureRoleComposition
   = PureRoleComposition
     { pureRoleCompRandGen :: !TFGen
     , pureRoleCompNotes   :: !(Boxed.Vector Note)
-    , pureRoleCompBar     :: !(Boxed.Vector (Bar NoteReference))
+    , pureRoleCompBars    :: !(Boxed.Vector (Bar NoteReference))
     }
 
 instance Monad io => MonadState (RoleComposition io) (ComposeRoleT io) where { state = ComposeRoleT . state; }
