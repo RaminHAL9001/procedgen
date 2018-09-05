@@ -13,11 +13,11 @@ module ProcGen.Music.Sequencer
   ( -- * The Track Data Type
     Track(..), trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
     -- * Sequencer Evaluation
-    Sequencer, SequencerState, PlayToTrack(..),
-    runSequencer, evalSynth, 
+    Sequencer, SequencerState(..), PlayToTrack(..),
+    newSequencer, runSequencer, evalSynth, 
     BufferSet(..), BufferInfo(..), addBuffer, deleteBuffer,
     -- * Defining Drum Sets
-    DrumID(..), DrumInstrument, drumBuffers, newDrum, getDrum,
+    DrumID(..), DrumKit, drumBuffers, newDrum, getDrum,
     -- * Defining Tonal Insruments
     ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..), toneBuffers,
     newTone, getTone,
@@ -67,21 +67,56 @@ readTrackFile = error "TODO: ProcGen.Music.Sequencer.readTrackFile"
 newtype Sequencer a = Sequencer (StateT SequencerState IO a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
+instance MonadState SequencerState Sequencer where { state = Sequencer . state; }
+
 data SequencerState
   = SequencerState
-    { theSequencerGen         :: !TFGen
-    , theSequencerDrumKit     :: !DrumInstrument
-    , theSequencerInstruments :: !(Map.Map Strict.Text ToneInstrument)
+    { theSequencerGen          :: !TFGen
+    , theSequencerSynth        :: !SynthState
+    , theSequencerDrumKit      :: !DrumKit
+    , theSequencerInstruments  :: !(Map.Map Strict.Text ToneInstrument)
     }
 
 sequencerGen :: Lens' SequencerState TFGen
 sequencerGen = lens theSequencerGen $ \ a b -> a{ theSequencerGen = b }
 
-sequencerDrumKit :: Lens' SequencerState DrumInstrument
+sequencerSynth :: Lens' SequencerState SynthState
+sequencerSynth = lens theSequencerSynth $ \ a b -> a{ theSequencerSynth = b }
+
+sequencerDrumKit :: Lens' SequencerState DrumKit
 sequencerDrumKit = lens theSequencerDrumKit $ \ a b -> a{ theSequencerDrumKit = b }
 
 sequencerInstrument :: Lens' SequencerState (Map.Map Strict.Text ToneInstrument)
 sequencerInstrument = lens theSequencerInstruments $ \ a b -> a{ theSequencerInstruments = b }
+
+runSequencer :: Sequencer a -> SequencerState -> IO (a, SequencerState)
+runSequencer (Sequencer f) = runStateT f
+
+newSequencer :: IO SequencerState
+newSequencer = do
+  gen   <- initTFGen
+  synth <- initSynth
+  return SequencerState
+    { theSequencerGen         = gen
+    , theSequencerSynth       = synth
+    , theSequencerDrumKit     = DrumKit Map.empty
+    , theSequencerInstruments = Map.empty
+    }
+
+-- | Evaluate a function of type 'ProcGen.Music.Synth.Synth' within a function of type
+-- 'SequencerState'.
+evalSynth :: Synth a -> Sequencer a
+evalSynth f = do
+  (a, synth) <- use sequencerSynth >>= liftIO . runSynth f
+  sequencerSynth .= synth
+  return a
+
+----------------------------------------------------------------------------------------------------
+
+-- | This type class defines a 'playToTrack' function which can be instantiated by any data type
+-- that can render a sound into a buffer.
+class PlayToTrack a where
+  playToTrack :: Track -> a -> Sequencer ()
 
 ----------------------------------------------------------------------------------------------------
 
@@ -147,12 +182,6 @@ data ToneInstrument
     , theToneTable   :: !(Map.Map ToneID (Boxed.Vector BufferInfo))
     }
 
-data DrumInstrument
-  = DrumInstrument
-    { theDrumLabel :: !Strict.Text
-    , theDrumTable :: !(Map.Map DrumID (Boxed.Vector BufferInfo))
-    }
-
 toneLabel :: Lens' ToneInstrument Strict.Text
 toneLabel = lens theToneLabel $ \ a b -> a{ theToneLabel = b }
 
@@ -165,10 +194,11 @@ toneHighes = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
 toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector BufferInfo))
 toneTable = lens theToneTable $ \ a b -> a{ theToneTable = b }
 
-drumLabel :: Lens' DrumInstrument Strict.Text
-drumLabel = lens theDrumLabel $ \ a b -> a{ theDrumLabel = b }
+----------------------------------------------------------------------------------------------------
 
-drumTable :: Lens' DrumInstrument (Map.Map DrumID (Boxed.Vector BufferInfo))
+newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector BufferInfo))}
+
+drumTable :: Lens' DrumKit (Map.Map DrumID (Boxed.Vector BufferInfo))
 drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
 
 ----------------------------------------------------------------------------------------------------
@@ -178,14 +208,14 @@ class BufferSet set idx | set -> idx where
   --getSound :: set -> idx -> Sequencer BufferInfo -- TODO
 
 instance BufferSet ToneInstrument ToneID where { buffers = toneBuffers; }
-instance BufferSet DrumInstrument DrumID where { buffers = drumBuffers; }
+instance BufferSet DrumKit DrumID where { buffers = drumBuffers; }
 
 -- | Like 'buffers' but specific to the 'ToneID' and 'ToneInstrument' types.
 toneBuffers :: ToneID -> Lens' ToneInstrument (Maybe (Boxed.Vector BufferInfo))
 toneBuffers i = lens (Map.lookup i . theToneTable) $ \ tone table ->
   tone{ theToneTable = Map.alter (const table) i $ theToneTable tone }
 
-drumBuffers :: DrumID -> Lens' DrumInstrument (Maybe (Boxed.Vector BufferInfo))
+drumBuffers :: DrumID -> Lens' DrumKit (Maybe (Boxed.Vector BufferInfo))
 drumBuffers i = lens (Map.lookup i . theDrumTable) $ \ drum table ->
   drum{ theDrumTable = Map.alter (const table) i $ theDrumTable drum }
 
