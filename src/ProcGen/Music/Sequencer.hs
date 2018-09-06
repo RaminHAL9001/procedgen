@@ -15,11 +15,11 @@ module ProcGen.Music.Sequencer
     -- * Sequencer Evaluation
     Sequencer, SequencerState(..), PlayToTrack(..),
     newSequencer, runSequencer, liftSynth, 
-    BufferSet(..), BufferInfo(..), addBuffer, deleteBuffer,
+    SoundSet(..), Sound(..), addSound, deleteSound,
     -- * Defining Drum Sets
-    DrumID(..), DrumKit, drumBuffers, newDrum, getDrum,
+    DrumID(..), DrumKit, drumSounds, newDrum, getDrum,
     -- * Defining Tonal Insruments
-    ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..), toneBuffers,
+    ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..), toneSounds,
     newTone, getTone,
   ) where
 
@@ -172,8 +172,8 @@ soundTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . n
 ----------------------------------------------------------------------------------------------------
 
 -- | A buffer contains meta-information about a 'TDSignal' constructed by a 'ProcGen.Music.Synth'.
-data BufferInfo
-  = BufferInfo
+data Sound
+  = Sound
     { bufferedFromFile :: !Strict.Text -- ^ might be null
     , bufferedFromFD   :: !(Maybe FDSignal)
     , bufferedTDSignal :: !TDSignal
@@ -185,7 +185,7 @@ data ToneInstrument
     { theToneLabel   :: !Strict.Text
     , theToneLowest  :: !KeyIndex
     , theToneHighest :: !KeyIndex
-    , theToneTable   :: !(Map.Map ToneID (Boxed.Vector BufferInfo))
+    , theToneTable   :: !(Map.Map ToneID (Boxed.Vector Sound))
     }
 
 toneLabel :: Lens' ToneInstrument Strict.Text
@@ -197,39 +197,39 @@ toneLowest = lens theToneLowest $ \ a b -> a{ theToneLowest = b }
 toneHighest :: Lens' ToneInstrument KeyIndex
 toneHighest = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
 
-toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector BufferInfo))
+toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector Sound))
 toneTable = lens theToneTable $ \ a b -> a{ theToneTable = b }
 
 ----------------------------------------------------------------------------------------------------
 
-newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector BufferInfo)) }
+newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector Sound)) }
 
-drumTable :: Lens' DrumKit (Map.Map DrumID (Boxed.Vector BufferInfo))
+drumTable :: Lens' DrumKit (Map.Map DrumID (Boxed.Vector Sound))
 drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
 
 ----------------------------------------------------------------------------------------------------
 
-class BufferSet set idx | set -> idx where
-  buffers :: idx -> Lens' set (Maybe (Boxed.Vector BufferInfo))
-  --getSound :: set -> idx -> Sequencer BufferInfo -- TODO
+class SoundSet set idx | set -> idx where
+  buffers :: idx -> Lens' set (Maybe (Boxed.Vector Sound))
+  --getSound :: set -> idx -> Sequencer Sound -- TODO
 
-instance BufferSet ToneInstrument ToneID where { buffers = toneBuffers; }
-instance BufferSet DrumKit DrumID where { buffers = drumBuffers; }
+instance SoundSet ToneInstrument ToneID where { buffers = toneSounds; }
+instance SoundSet DrumKit        DrumID where { buffers = drumSounds; }
 
 -- | Like 'buffers' but specific to the 'ToneID' and 'ToneInstrument' types.
-toneBuffers :: ToneID -> Lens' ToneInstrument (Maybe (Boxed.Vector BufferInfo))
-toneBuffers i = lens (Map.lookup i . theToneTable) $ \ tone table ->
+toneSounds :: ToneID -> Lens' ToneInstrument (Maybe (Boxed.Vector Sound))
+toneSounds i = lens (Map.lookup i . theToneTable) $ \ tone table ->
   tone{ theToneTable = Map.alter (const table) i $ theToneTable tone }
 
-drumBuffers :: DrumID -> Lens' DrumKit (Maybe (Boxed.Vector BufferInfo))
-drumBuffers i = lens (Map.lookup i . theDrumTable) $ \ drum table ->
+drumSounds :: DrumID -> Lens' DrumKit (Maybe (Boxed.Vector Sound))
+drumSounds i = lens (Map.lookup i . theDrumTable) $ \ drum table ->
   drum{ theDrumTable = Map.alter (const table) i $ theDrumTable drum }
 
--- | Prepend 'BufferInfo' data to the front of the 'Boxed.Vector'.
-addBuffer :: BufferInfo -> Boxed.Vector BufferInfo -> Boxed.Vector BufferInfo
-addBuffer info = Boxed.fromList . (info :) . Boxed.toList
+-- | Prepend 'Sound' data to the front of the 'Boxed.Vector'.
+addSound :: Sound -> Boxed.Vector Sound -> Boxed.Vector Sound
+addSound info = Boxed.fromList . (info :) . Boxed.toList
 
--- | Remove 'BufferInfo' data from some index of the 'Boxed.Vector'.
-deleteBuffer :: Int -> Boxed.Vector BufferInfo -> Boxed.Vector BufferInfo
-deleteBuffer i vec = if Boxed.length vec <= i || i < 0 then vec else Boxed.fromList $
+-- | Remove 'Sound' data from some index of the 'Boxed.Vector'.
+deleteSound :: Int -> Boxed.Vector Sound -> Boxed.Vector Sound
+deleteSound i vec = if Boxed.length vec <= i || i < 0 then vec else Boxed.fromList $
   (vec Boxed.!) <$> ([0 .. i - 1] ++ [i + 1 .. Boxed.length vec - 1])
