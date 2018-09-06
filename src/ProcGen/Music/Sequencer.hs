@@ -15,12 +15,12 @@ module ProcGen.Music.Sequencer
     -- * Sequencer Evaluation
     Sequencer, SequencerState(..), PlayToTrack(..),
     newSequencer, runSequencer, liftSynth, 
-    SoundSet(..), Sound(..), addSound, deleteSound,
+    SoundSet(..), Sound(..), HasSoundSet(..), addSound, deleteSound,
     -- * Defining Drum Sets
-    DrumID(..), DrumKit, drumSounds, newDrum, getDrum,
+    DrumID(..), DrumKit, drumSounds, addDrum, getDrum,
     -- * Defining Tonal Insruments
-    ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..), toneSounds,
-    newTone, getTone,
+    InstrumentID(..), ToneID(..), ToneInstrument, ToneKeyIndicies(..), ToneTagSet, ToneTag(..),
+    addInstrument, toneInstrument, toneSounds, addTone, getTone,
   ) where
 
 import           ProcGen.Types
@@ -30,16 +30,18 @@ import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.Synth
 
 import           Control.Lens
+import           Control.Monad.Random
 import           Control.Monad.State
 
-import           Data.List                  (nub)
+import           Data.List                  (nub, sort)
 import qualified Data.Map                    as Map
+import           Data.Semigroup
 import           Data.String
 import qualified Data.Text                   as Strict
 import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as MUnboxed
-import qualified Data.Vector.Mutable         as MBoxed
+--import qualified Data.Vector.Mutable         as MBoxed
 import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
@@ -69,11 +71,17 @@ newtype Sequencer a = Sequencer (StateT SequencerState IO a)
 
 instance MonadState SequencerState Sequencer where { state = Sequencer . state; }
 
+instance MonadRandom Sequencer where
+  getRandomR  = liftTFRand . getRandomR
+  getRandom   = liftTFRand getRandom
+  getRandomRs = liftTFRand . getRandomRs
+  getRandoms  = liftTFRand getRandoms
+
 data SequencerState
   = SequencerState
     { theSequencerSynth        :: !SynthState
     , theSequencerDrumKit      :: !DrumKit
-    , theSequencerInstruments  :: !(Map.Map Strict.Text ToneInstrument)
+    , theSequencerInstruments  :: !(Map.Map InstrumentID ToneInstrument)
     }
 
 sequencerSynth :: Lens' SequencerState SynthState
@@ -82,7 +90,7 @@ sequencerSynth = lens theSequencerSynth $ \ a b -> a{ theSequencerSynth = b }
 sequencerDrumKit :: Lens' SequencerState DrumKit
 sequencerDrumKit = lens theSequencerDrumKit $ \ a b -> a{ theSequencerDrumKit = b }
 
-sequencerInstrument :: Lens' SequencerState (Map.Map Strict.Text ToneInstrument)
+sequencerInstrument :: Lens' SequencerState (Map.Map InstrumentID ToneInstrument)
 sequencerInstrument = lens theSequencerInstruments $ \ a b -> a{ theSequencerInstruments = b }
 
 runSequencer :: Sequencer a -> SequencerState -> IO (a, SequencerState)
@@ -113,8 +121,35 @@ liftTFRand f = do
   sequencerSynth . synthTFGen .= gen
   return a
 
--- | Associate a 'DrumID' with a
-newDrum :: DrumID -> 
+-- | Associate a 'DrumID' with a 'Sound', or append the 'Sound' to the 'SoundSet' if the 'DrumID'
+-- already has one or more 'Sound's associated with it.
+addDrum :: DrumID -> Sound -> Sequencer ()
+addDrum drum sound = sequencerDrumKit %= addDrumToKit drum sound
+
+-- | Select a sound for a given 'DrumID'. If more than one 'Sound' has been added to the same
+-- 'DrumID', one of the 'Sound's will be selected at random.
+getDrum :: DrumID -> Sequencer (Maybe Sound)
+getDrum key = use (sequencerDrumKit . drumSounds key) >>= maybe (pure Nothing) chooseSound
+
+-- | Create a new 'ToneInstrument' for use within this 'Sequencer', or update an existing
+-- instrument.
+addInstrument :: InstrumentID -> KeyIndex -> KeyIndex -> Sequencer InstrumentID
+addInstrument instrm lo hi = do
+  sequencerInstrument %= Map.insertWith (<>) instrm (toneInstrument lo hi)
+  return instrm
+
+addTone :: InstrumentID -> [ToneTag] -> ToneKeyIndicies -> Sound -> Sequencer ToneID
+addTone instrm tags key sound = do
+  let toneID    = ToneID key $ soundTagSet tags
+  let newInstrm = uncurry toneInstrument $ minMaxKeyIndex key
+  sequencerInstrument %=
+    Map.alter (Just . addToneToInstrument toneID sound . maybe newInstrm id) instrm
+  return toneID
+
+getTone :: InstrumentID -> ToneID -> Sequencer (Maybe Sound)
+getTone instrm toneID =
+  (join . fmap (view $ toneSounds toneID) . Map.lookup instrm) <$> use sequencerInstrument >>=
+  maybe (pure Nothing) chooseSound
 
 ----------------------------------------------------------------------------------------------------
 
@@ -135,6 +170,13 @@ instance IsString DrumID where { fromString = DrumID . Strict.pack; }
 
 ----------------------------------------------------------------------------------------------------
 
+newtype InstrumentID = InstrumentID Strict.Text
+  deriving (Eq, Ord, Show)
+
+instance IsString InstrumentID where { fromString = InstrumentID . Strict.pack; }
+
+----------------------------------------------------------------------------------------------------
+
 -- | Acts as a key that can be looked up in a map/dictionary, and serves as a unique descriptor of
 -- the content of a buffer or a cluster of buffers. If there are more than one buffer associated
 -- with a sound, when the sound is selected, one of the buffers is chosen at random.
@@ -151,9 +193,9 @@ data ToneID = ToneID !ToneKeyIndicies !ToneTagSet
 -- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded). This is not used
 -- for drum kits.
 data ToneKeyIndicies
-  = KeyTone      !KeyIndex
-  | SlideTone    !KeyIndex !KeyIndex
-  | CrossFaded   !KeyIndex !KeyIndex
+  = KeyTone    !KeyIndex
+  | SlideTone  !KeyIndex !KeyIndex
+  | CrossFade  !KeyIndex !KeyIndex
   deriving (Eq, Ord, Show)
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
@@ -164,72 +206,116 @@ newtype ToneTagSet = ToneTagSet (Unboxed.Vector Word8)
   deriving (Eq, Ord)
 
 instance Show ToneTagSet where
-  show (ToneTagSet vec) = show $ fromEnum . fromIntegral <$> Unboxed.toList vec
+  show (ToneTagSet vec) = show $ fromEnum . (fromIntegral :: Word8 -> Int) <$> Unboxed.toList vec
 
 soundTagSet :: [ToneTag] -> ToneTagSet
 soundTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
+
+minMaxKeyIndex :: ToneKeyIndicies -> (KeyIndex, KeyIndex)
+minMaxKeyIndex = \ case
+  KeyTone   a   -> (a, a)
+  SlideTone a b -> (min a b, max a b)
+  CrossFade a b -> (min a b, max a b)
 
 ----------------------------------------------------------------------------------------------------
 
 -- | A buffer contains meta-information about a 'TDSignal' constructed by a 'ProcGen.Music.Synth'.
 data Sound
   = Sound
-    { bufferedFromFile :: !Strict.Text -- ^ might be null
-    , bufferedFromFD   :: !(Maybe FDSignal)
-    , bufferedTDSignal :: !TDSignal
+    { soundFromFild     :: !Strict.Text -- ^ might be null
+    , soundFromFD       :: !(Maybe FDSignal)
+    , soundLikelyChoice :: !Percentage
+      -- ^ When randomly choosing this sound from a list of sounds, how likely this sound will be
+      -- picked can be weighted by this value.
+    , soundTDSignal     :: !TDSignal
     }
   deriving Eq
 
+instance Ord Sound where
+  compare a b = soundLikelyChoice b `compare` soundLikelyChoice a
+
 data ToneInstrument
   = ToneInstrument
-    { theToneLabel   :: !Strict.Text
-    , theToneLowest  :: !KeyIndex
-    , theToneHighest :: !KeyIndex
-    , theToneTable   :: !(Map.Map ToneID (Boxed.Vector Sound))
+    { toneLowest   :: !KeyIndex
+    , toneHighest  :: !KeyIndex
+    , theToneTable :: !(Map.Map ToneID SoundSet)
     }
 
-toneLabel :: Lens' ToneInstrument Strict.Text
-toneLabel = lens theToneLabel $ \ a b -> a{ theToneLabel = b }
+instance Semigroup ToneInstrument where
+  a <> b = ToneInstrument
+    { toneLowest   = toneLowest  a `min` toneLowest  b
+    , toneHighest  = toneHighest a `max` toneHighest b
+    , theToneTable = Map.unionWith mappend (theToneTable b) (theToneTable a)
+    }
 
-toneLowest :: Lens' ToneInstrument KeyIndex
-toneLowest = lens theToneLowest $ \ a b -> a{ theToneLowest = b }
+-- | Construct a new 'ToneInstrument'
+toneInstrument :: KeyIndex -> KeyIndex -> ToneInstrument
+toneInstrument lo hi = ToneInstrument
+  { toneLowest   = min lo hi
+  , toneHighest  = max lo hi
+  , theToneTable = Map.empty
+  }
 
-toneHighest :: Lens' ToneInstrument KeyIndex
-toneHighest = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
-
-toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector Sound))
+toneTable :: Lens' ToneInstrument (Map.Map ToneID SoundSet)
 toneTable = lens theToneTable $ \ a b -> a{ theToneTable = b }
 
+addToneToInstrument :: ToneID -> Sound -> ToneInstrument -> ToneInstrument
+addToneToInstrument toneID sound = toneTable %~ 
+  Map.insertWith (<>) toneID (SoundSet $ Boxed.singleton sound)
+
 ----------------------------------------------------------------------------------------------------
 
-newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector Sound)) }
+newtype DrumKit = DrumKit { theDrumTable :: Map.Map DrumID SoundSet }
 
-drumTable :: Lens' DrumKit (Map.Map DrumID (Boxed.Vector Sound))
+drumTable :: Lens' DrumKit (Map.Map DrumID SoundSet)
 drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
 
+addDrumToKit :: DrumID -> Sound -> DrumKit -> DrumKit
+addDrumToKit key val = drumTable %~ Map.insertWith (<>) key (SoundSet $ Boxed.singleton val)
+
 ----------------------------------------------------------------------------------------------------
 
-class SoundSet set idx | set -> idx where
-  buffers :: idx -> Lens' set (Maybe (Boxed.Vector Sound))
-  --getSound :: set -> idx -> Sequencer Sound -- TODO
+newtype SoundSet = SoundSet { soundSetVector :: Boxed.Vector Sound }
 
-instance SoundSet ToneInstrument ToneID where { buffers = toneSounds; }
-instance SoundSet DrumKit        DrumID where { buffers = drumSounds; }
+instance Semigroup SoundSet where
+  (SoundSet a) <> (SoundSet b) = SoundSet $ Boxed.fromList $ sort $ Boxed.toList a ++ Boxed.toList b
 
--- | Like 'buffers' but specific to the 'ToneID' and 'ToneInstrument' types.
-toneSounds :: ToneID -> Lens' ToneInstrument (Maybe (Boxed.Vector Sound))
+instance Monoid SoundSet where { mempty = SoundSet mempty; mappend = (<>); }
+
+class HasSoundSet set idx | set -> idx where
+  soundSet :: idx -> Lens' set (Maybe SoundSet)
+
+instance HasSoundSet ToneInstrument ToneID where { soundSet = toneSounds; }
+instance HasSoundSet DrumKit        DrumID where { soundSet = drumSounds; }
+
+-- | Like 'sounds' but specific to the 'ToneID' and 'ToneInstrument' types.
+toneSounds :: ToneID -> Lens' ToneInstrument (Maybe SoundSet)
 toneSounds i = lens (Map.lookup i . theToneTable) $ \ tone table ->
   tone{ theToneTable = Map.alter (const table) i $ theToneTable tone }
 
-drumSounds :: DrumID -> Lens' DrumKit (Maybe (Boxed.Vector Sound))
+drumSounds :: DrumID -> Lens' DrumKit (Maybe SoundSet)
 drumSounds i = lens (Map.lookup i . theDrumTable) $ \ drum table ->
   drum{ theDrumTable = Map.alter (const table) i $ theDrumTable drum }
 
 -- | Prepend 'Sound' data to the front of the 'Boxed.Vector'.
-addSound :: Sound -> Boxed.Vector Sound -> Boxed.Vector Sound
-addSound info = Boxed.fromList . (info :) . Boxed.toList
+addSound :: Sound -> SoundSet -> SoundSet
+addSound info = SoundSet . Boxed.fromList . sort . (info :) . Boxed.toList . soundSetVector
 
 -- | Remove 'Sound' data from some index of the 'Boxed.Vector'.
-deleteSound :: Int -> Boxed.Vector Sound -> Boxed.Vector Sound
-deleteSound i vec = if Boxed.length vec <= i || i < 0 then vec else Boxed.fromList $
-  (vec Boxed.!) <$> ([0 .. i - 1] ++ [i + 1 .. Boxed.length vec - 1])
+deleteSound :: Int -> SoundSet -> SoundSet
+deleteSound i (SoundSet vec) = SoundSet $
+  if Boxed.length vec <= i || i < 0 then vec else Boxed.fromList $
+    (vec Boxed.!) <$> ([0 .. i - 1] ++ [i + 1 .. Boxed.length vec - 1])
+
+-- | Randomly select a 'Sound' from the 'Boxed.Vector'. 
+chooseSound :: forall m . (Monad m, MonadRandom m) => SoundSet -> m (Maybe Sound)
+chooseSound (SoundSet vec) = do
+  let scale = sum $ soundLikelyChoice <$> Boxed.toList vec
+  prob <- liftM (* scale) getRandom :: m Float
+  -- This loop checks each element in the list in order, but it is expected that these vectors will
+  -- be very small, usually around 4 elements or less.
+  let loop n =  \ case
+        []       -> return Nothing
+        s:sounds -> seq n $! if n >= prob then return $ Just s else
+          loop (n + soundLikelyChoice s) sounds
+  loop 0 $ Boxed.toList vec
