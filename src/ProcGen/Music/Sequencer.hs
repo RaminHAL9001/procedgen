@@ -13,8 +13,8 @@ module ProcGen.Music.Sequencer
   ( -- * The Track Data Type
     Track(..), trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
     -- * Sequencer Evaluation
-    Sequencer, SequencerState(..), PlayToTrack(..),
-    newSequencer, runSequencer, liftSynth, 
+    Sequencer, SequencerState(..), PlayToTrack(..), Target, Source,
+    newSequencer, runSequencer, liftSynth, playRoleToTrack,
     SoundSet(..), Sound(..), HasSoundSet(..), addSound, deleteSound,
     -- * Defining Drum Sets
     DrumID(..), DrumKit, drumSounds, addDrum, getDrum,
@@ -63,6 +63,28 @@ writeTrackFile = error "TODO: ProcGen.Music.Sequencer.writeTrackFile"
 -- | Must be a .WAV file, 44100 hz 16 bit signed little endian single channel.
 readTrackFile :: FilePath -> Track -> IO ()
 readTrackFile = error "TODO: ProcGen.Music.Sequencer.readTrackFile"
+
+----------------------------------------------------------------------------------------------------
+
+type Target a = a
+type Source a = a
+
+-- | This type class defines a 'playToTrack' function which can be instantiated by any data type
+-- that can render a sound into a buffer.
+class PlayToTrack a where
+  playToTrack :: Target Track -> Source a -> Sequencer ()
+
+instance PlayToTrack Sound where
+  playToTrack = error "TODO: ProcGen.Music.Sequencer.playToTrack :: Track -> Sound -> Sequencer ()"
+
+instance PlayToTrack Track where
+  playToTrack = error "TODO: ProcGen.Music.Sequencer.playToTrack :: Track -> Track -> Sequencer ()"
+
+instance PlayToTrack TDSignal where
+  playToTrack = error "TODO: ProcGen.Music.Sequencer.playToTrack :: Track -> TDSignal -> Sequencer ()"
+
+playRoleToTrack :: Track -> Moment -> InstrumentID -> PlayedRole (Interval Note) -> Sequencer ()
+playRoleToTrack = error "TODO: ProcGen.Music.Sequencer.playRoleToTrack"
 
 ----------------------------------------------------------------------------------------------------
 
@@ -150,13 +172,6 @@ getTone :: InstrumentID -> ToneID -> Sequencer (Maybe Sound)
 getTone instrm toneID =
   (join . fmap (view $ toneSounds toneID) . Map.lookup instrm) <$> use sequencerInstrument >>=
   maybe (pure Nothing) chooseSound
-
-----------------------------------------------------------------------------------------------------
-
--- | This type class defines a 'playToTrack' function which can be instantiated by any data type
--- that can render a sound into a buffer.
-class PlayToTrack a where
-  playToTrack :: Track -> a -> Sequencer ()
 
 ----------------------------------------------------------------------------------------------------
 

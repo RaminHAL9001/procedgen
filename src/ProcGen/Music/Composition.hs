@@ -36,7 +36,8 @@
 module ProcGen.Music.Composition
   ( CommonChordProg(..),
     -- * Individual Notes
-    Note(..), makeNote, NoteReference, untied, NoteValue(..), noteValue, Strength(..),
+    Note(..), makeNote, Interval(..), NoteReference, untied,
+    NoteValue(..), noteValue, Strength(..),
     -- * Arranging Notes
     Bar(..), makeBar,
     SubDiv(..), PlayedRole(..), play1Note, sequenceBar, setNoteDurations,
