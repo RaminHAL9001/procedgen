@@ -14,7 +14,7 @@ module ProcGen.Music.Sequencer
     Track(..), trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
     -- * Sequencer Evaluation
     Sequencer, SequencerState(..), PlayToTrack(..),
-    newSequencer, runSequencer, evalSynth, 
+    newSequencer, runSequencer, liftSynth, 
     BufferSet(..), BufferInfo(..), addBuffer, deleteBuffer,
     -- * Defining Drum Sets
     DrumID(..), DrumKit, drumBuffers, newDrum, getDrum,
@@ -71,14 +71,10 @@ instance MonadState SequencerState Sequencer where { state = Sequencer . state; 
 
 data SequencerState
   = SequencerState
-    { theSequencerGen          :: !TFGen
-    , theSequencerSynth        :: !SynthState
+    { theSequencerSynth        :: !SynthState
     , theSequencerDrumKit      :: !DrumKit
     , theSequencerInstruments  :: !(Map.Map Strict.Text ToneInstrument)
     }
-
-sequencerGen :: Lens' SequencerState TFGen
-sequencerGen = lens theSequencerGen $ \ a b -> a{ theSequencerGen = b }
 
 sequencerSynth :: Lens' SequencerState SynthState
 sequencerSynth = lens theSequencerSynth $ \ a b -> a{ theSequencerSynth = b }
@@ -94,22 +90,31 @@ runSequencer (Sequencer f) = runStateT f
 
 newSequencer :: IO SequencerState
 newSequencer = do
-  gen   <- initTFGen
   synth <- initSynth
   return SequencerState
-    { theSequencerGen         = gen
-    , theSequencerSynth       = synth
+    { theSequencerSynth       = synth
     , theSequencerDrumKit     = DrumKit Map.empty
     , theSequencerInstruments = Map.empty
     }
 
 -- | Evaluate a function of type 'ProcGen.Music.Synth.Synth' within a function of type
 -- 'SequencerState'.
-evalSynth :: Synth a -> Sequencer a
-evalSynth f = do
+liftSynth :: Synth a -> Sequencer a
+liftSynth f = do
   (a, synth) <- use sequencerSynth >>= liftIO . runSynth f
   sequencerSynth .= synth
   return a
+
+-- | Evaluate a pure 'ProcGen.Arbitrary.TFRand' function within a 'ProcGen.Music.Synth.Synth'
+-- function.
+liftTFRand :: TFRand a -> Sequencer a
+liftTFRand f = do
+  (a, gen) <- runTFRand f <$> use (sequencerSynth . synthTFGen)
+  sequencerSynth . synthTFGen .= gen
+  return a
+
+-- | Associate a 'DrumID' with a
+newDrum :: DrumID -> 
 
 ----------------------------------------------------------------------------------------------------
 
@@ -158,14 +163,15 @@ data ToneTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
 newtype ToneTagSet = ToneTagSet (Unboxed.Vector Word8)
   deriving (Eq, Ord)
 
-soundTagSet :: [ToneTag] -> ToneTagSet
-soundTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
-
 instance Show ToneTagSet where
   show (ToneTagSet vec) = show $ fromEnum . fromIntegral <$> Unboxed.toList vec
 
+soundTagSet :: [ToneTag] -> ToneTagSet
+soundTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
+
 ----------------------------------------------------------------------------------------------------
 
+-- | A buffer contains meta-information about a 'TDSignal' constructed by a 'ProcGen.Music.Synth'.
 data BufferInfo
   = BufferInfo
     { bufferedFromFile :: !Strict.Text -- ^ might be null
@@ -188,15 +194,15 @@ toneLabel = lens theToneLabel $ \ a b -> a{ theToneLabel = b }
 toneLowest :: Lens' ToneInstrument KeyIndex
 toneLowest = lens theToneLowest $ \ a b -> a{ theToneLowest = b }
 
-toneHighes :: Lens' ToneInstrument KeyIndex
-toneHighes = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
+toneHighest :: Lens' ToneInstrument KeyIndex
+toneHighest = lens theToneHighest $ \ a b -> a{ theToneHighest = b }
 
 toneTable :: Lens' ToneInstrument (Map.Map ToneID (Boxed.Vector BufferInfo))
 toneTable = lens theToneTable $ \ a b -> a{ theToneTable = b }
 
 ----------------------------------------------------------------------------------------------------
 
-newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector BufferInfo))}
+newtype DrumKit = DrumKit { theDrumTable :: (Map.Map DrumID (Boxed.Vector BufferInfo)) }
 
 drumTable :: Lens' DrumKit (Map.Map DrumID (Boxed.Vector BufferInfo))
 drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
