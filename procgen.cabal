@@ -68,6 +68,7 @@ Library {
     ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.Sequencer
+    ProcGen.Music.SoundFont
     ProcGen.Music.Synth
     ProcGen.Music.WaveFile
     ProcGen.VectorBuilder
