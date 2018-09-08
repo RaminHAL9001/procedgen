@@ -11,6 +11,7 @@ import           Data.Int
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
+import           Data.Word
 
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
@@ -133,6 +134,10 @@ indexToTime = (/ sampleRate) . realToFrac
 -- | Convert a 'Sample' to a signed 16-bit integer suitable for storage to a file.
 toPulseCode :: Sample -> Int16
 toPulseCode = round . (* 32704) . clamp1_1
+
+-- | Like 'toPulseCode' but evaluates to a 'Data.Word.Word16' value
+toPulseCodeWord :: Sample -> Word16
+toPulseCodeWord = round . (* 65408) . clamp0_1 . (/ 2) . (+ 1)
 
 -- | Convert a signed 16-bit integer sample value to a floating-point 'Sample' value.
 toSample :: Int16 -> Sample

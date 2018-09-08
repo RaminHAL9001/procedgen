@@ -2,7 +2,7 @@
 --
 -- Currently only supports 44.1K/sec rate, 16-bit signed little-endian formatted samples.
 module ProcGen.Music.WaveFile
-  ( sizeOfRiffHeader, putRiffWaveFormat, getRiffWaveFormat,
+  ( sizeOfRiffHeader, putRiffWaveFormat, putRiffWaveFormatIO, getRiffWaveFormat,
     readWave, writeWave, hReadWave, hWriteWave,
   )
   where
@@ -41,9 +41,8 @@ sz2 = fromIntegral sz1 -- sample size in bytes
 putMagic :: [Char] -> Binary.Put
 putMagic = mapM_ $ Binary.putWord8 . fromIntegral . ord
 
-putRiffWaveFormat :: Unboxed.Vector Sample -> Binary.Put
-putRiffWaveFormat vec = do
-  let siz = Unboxed.length vec
+putRiffWaveOfSize :: Int -> Binary.Put
+putRiffWaveOfSize siz = do
   let sr = round sampleRate
   let sz2 = fromIntegral sz1 :: Word32 -- sample size in bytes
   putMagic    "RIFF"  -- file magic number (4)
@@ -60,7 +59,17 @@ putRiffWaveFormat vec = do
   Binary.putWord16le    16    -- bits per sample (2)
   putMagic           "data"   -- begin data section (4)
   Binary.putWord32le $ sz2 * fromIntegral siz -- data size (4)
-  forM_ (Unboxed.toList vec) $ Binary.putWord16le . fromIntegral . toPulseCode -- data
+
+putRiffWaveFormat :: Unboxed.Vector Sample -> Binary.Put
+putRiffWaveFormat vec = do
+  putRiffWaveOfSize $ Unboxed.length vec
+  forM_ (Unboxed.toList vec) $ Binary.putWord16le . toPulseCodeWord -- data
+
+putRiffWaveFormatIO :: FilePath -> Mutable.IOVector Sample -> IO ()
+putRiffWaveFormatIO path vec = let len = Mutable.length vec in
+  join $ fmap (Bytes.writeFile path . Binary.runPut) $ foldM
+  (\ bin -> fmap ((bin >>) . Binary.putWord16le . toPulseCodeWord) . Mutable.read vec)
+  (putRiffWaveOfSize len) [0 .. len - 1]
 
 getMagic :: String -> [Char] -> Binary.Get ()
 getMagic err cx = case cx of

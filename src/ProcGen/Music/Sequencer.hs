@@ -25,6 +25,7 @@ import           ProcGen.Music.Composition
 import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.SoundFont
 import           ProcGen.Music.Synth
+import           ProcGen.Music.WaveFile
 
 import           Control.Lens
 import           Control.Monad.Random
@@ -32,11 +33,11 @@ import           Control.Monad.State
 
 import qualified Data.Map                    as Map
 import           Data.Semigroup
-import qualified Data.Vector.Unboxed.Mutable as MUnboxed
+import qualified Data.Vector.Unboxed.Mutable as Unboxed
 
 ----------------------------------------------------------------------------------------------------
 
-newtype Track = Track (MUnboxed.IOVector Sample)
+newtype Track = Track (Unboxed.IOVector Sample)
 
 -- | When copying from one 'Track' to another, this function type denotes which 'Track' is the
 -- target.
@@ -50,13 +51,13 @@ trackTime :: Track -> Duration
 trackTime = sampleCountDuration . trackSampleCount
 
 trackSampleCount :: Track -> SampleCount
-trackSampleCount (Track vec) = MUnboxed.length vec
+trackSampleCount (Track vec) = Unboxed.length vec
 
 newTrack :: MonadIO m => Duration -> m Track
-newTrack = liftM Track . liftIO . MUnboxed.new . durationSampleCount
+newTrack = liftM Track . liftIO . Unboxed.new . durationSampleCount
 
 writeTrackFile :: FilePath -> Track -> IO ()
-writeTrackFile = error "TODO: ProcGen.Music.Sequencer.writeTrackFile"
+writeTrackFile path (Track vec) = putRiffWaveFormatIO path vec
 
 -- | Must be a .WAV file, 44100 hz 16 bit signed little endian single channel.
 readTrackFile :: FilePath -> Track -> IO ()
