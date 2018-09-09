@@ -2,7 +2,9 @@
 --
 -- Currently only supports 44.1K/sec rate, 16-bit signed little-endian formatted samples.
 module ProcGen.Music.WaveFile
-  ( sizeOfRiffHeader, putRiffWaveFormat, putRiffWaveFormatIO, getRiffWaveFormat,
+  ( sizeOfRiffHeader,
+    putRiffWaveFormat, putRiffWaveFormatIO,
+    getRiffWaveFormat, getRiffWaveFormatIO,
     readWave, writeWave, hReadWave, hWriteWave,
   )
   where
@@ -81,11 +83,19 @@ packRiffWave
   -> (forall s . ST s (Mutable.STVector s Sample))
   -> Binary.Get (Unboxed.Vector Sample)
 packRiffWave isiz i next = seq next $! if i >= isiz then return (Unboxed.create next) else do
-  samp <- toSample . fromIntegral <$> Binary.getWord16le
+  samp <- wordToSample <$> Binary.getWord16le
   packRiffWave isiz (i + 1) (next >>= \ vec -> Mutable.write vec i samp >> return vec)
 
-getRiffWaveFormat :: Binary.Get (Unboxed.Vector Sample)
-getRiffWaveFormat = do
+-- | Get a @.WAV@ file header, failing if the header is not exactly the correct format:
+--
+-- * 44100 Hz sample rate
+-- * 16 bit little-endian singed integer PCM
+-- * single channel
+--
+-- After checking that the format is correct, this function takes the size of the data payload from
+-- the header and returns it as the first element of the pair, the second element is the files ize.
+getRiffWaveHeader :: Binary.Get (Word32, Word32)
+getRiffWaveHeader = do
   let hdr err get expct = get >>= \i -> if i==expct then return () else fail err
   let sr = round sampleRate
   getMagic "does not appear to be a \".wav\" file"                        "RIFF"
@@ -101,10 +111,45 @@ getRiffWaveFormat = do
   hdr "requires 16-bit signed integer little-endian encoded PCM data"     Binary.getWord16le    16
   getMagic "\".wav\" file contains valid header but no data section"      "data"
   siz <- Binary.getWord32le
+  return (siz, filesiz)
+
+getRiffWaveFormat :: Binary.Get (Unboxed.Vector Sample)
+getRiffWaveFormat = do
+  (siz, filesiz) <- getRiffWaveHeader
   let isiz = fromIntegral $ div siz sz2
-  if siz<0 then fail "data size is a negative value" else
-    if fromIntegral (siz+rhsiz) /= filesiz then fail "incorrect file header size" else
-      if siz==0 then return Unboxed.empty else packRiffWave isiz 0 $ Mutable.new isiz
+  if isiz < 0 then fail "data size is a negative value" else
+    if fromIntegral (siz + rhsiz) /= filesiz then fail "incorrect file header size" else
+      if siz == 0 then return Unboxed.empty else packRiffWave isiz 0 $ Mutable.new isiz
+
+-- | Get a @.WAV@ file header, failing if the header is not exactly the correct format:
+--
+-- * 44100 Hz sample rate
+-- * 16 bit little-endian singed integer PCM
+-- * single channel
+--
+-- After checking that the format is correct, this function takes the size of the data payload from
+-- the header and creates a new mutable buffer sized to fit this many elements.
+getRiffWaveFormatIO :: FilePath -> IO (Mutable.IOVector Sample)
+getRiffWaveFormatIO path = do
+  bytes <- Bytes.readFile path
+  case Binary.pushChunks (Binary.runGetIncremental getRiffWaveHeader) bytes of
+    Binary.Fail _ _ msg        -> fail $ "file "++show path++": "++msg
+    Binary.Partial{}           -> fail $ "file "++show path++": incomplete RIFF header"
+    Binary.Done rem _ (siz, _) -> do
+      let isiz = fromIntegral $ div siz sz2
+      vec <- Mutable.new isiz
+      let loop rem i = if i >= isiz then return vec else 
+            case Binary.pushChunks (Binary.runGetIncremental Binary.getWord16le) rem of
+              Binary.Fail _ _ msg    -> fail $ "file "++show path
+                ++" failed on sample #"++show i++": "++msg
+              Binary.Partial{}       -> fail $ "file "++show path
+                ++" failed on sample #"++show i
+                ++": premature end of input, file header declared "
+                ++show isiz++" samples should exist in this file"
+              Binary.Done rem _ samp -> seq i $! do
+                Mutable.write vec i (wordToSample samp)
+                loop (Bytes.fromStrict rem) (i + 1)
+      loop (Bytes.fromStrict rem) 0
 
 -- | Read an entire RIFF/WAVE file from an already-opened file 'System.IO.Handle'. The
 -- 'System.IO.Handle' is not closed when completed.

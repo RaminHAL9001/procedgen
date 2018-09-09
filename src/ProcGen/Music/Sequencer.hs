@@ -59,14 +59,15 @@ newTrack = liftM Track . liftIO . Unboxed.new . durationSampleCount
 writeTrackFile :: FilePath -> Track -> IO ()
 writeTrackFile path (Track vec) = putRiffWaveFormatIO path vec
 
--- | Must be a .WAV file, 44100 hz 16 bit signed little endian single channel.
-readTrackFile :: FilePath -> Track -> IO ()
-readTrackFile = error "TODO: ProcGen.Music.Sequencer.readTrackFile"
+-- | Must be a @.WAV@ file, 44100 hz 16 bit signed little endian single channel.
+readTrackFile :: FilePath -> IO Track
+readTrackFile = fmap Track . getRiffWaveFormatIO
 
 ----------------------------------------------------------------------------------------------------
 
 -- | This type class defines a 'playToTrack' function which can be instantiated by any data type
--- that can render a sound into a buffer.
+-- that can render a sound into a buffer. Sounds written by 'playToTrack' should overwrite whatever
+-- exists in the buffer, no mixing of signals should occur in this step.
 class PlayToTrack a where
   playToTrack :: Target Track -> Source a -> Sequencer ()
 
