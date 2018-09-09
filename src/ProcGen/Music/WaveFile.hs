@@ -4,7 +4,7 @@
 module ProcGen.Music.WaveFile
   ( sizeOfRiffHeader,
     putRiffWaveFormat, putRiffWaveFormatIO,
-    getRiffWaveFormat, getRiffWaveFormatIO,
+    getRiffWaveFormat, getRiffWaveFormatIO, loadRiffWaveToBufferIO,
     readWave, writeWave, hReadWave, hWriteWave,
   )
   where
@@ -147,6 +147,19 @@ getRiffWaveFormatIO path = do
                 Mutable.write vec i (wordToSample samp)
                 loop (Bytes.fromStrict rem) (i + 1)
       loop (Bytes.fromStrict rem) 0
+
+-- | Load a RIFF formatted @.WAV@ file from an already-open file 'System.IO.Handle' into a mutable
+-- buffer at a given offset, overwriting the content of the buffer with the content of the
+-- file. This function returns a possibly resized buffer, along with the index immediately after the
+-- final index that was written to by the final sample read from thie file.
+loadRiffWaveToBufferIO
+  :: Bool -- ^ Set to true if the given 'Mutable.IOVector' should be resized to allow the full file
+          -- to be buffered.
+  -> Handle -- ^ an already-open file 'System.IO.Handle' from which to read the wave file.
+  -> Mutable.IOVector Sample -- ^ the buffer into which samples from the file should be copied.
+  -> SampleIndex -- ^ The index within the buffer at which to begin writing samples from the file.
+  -> IO (Int, Mutable.IOVector Sample)
+loadRiffWaveToBufferIO = error "TODO: ProcGen.Music.WaveFile.loadRiffWaveToBufferIO"
 
 -- | Read an entire RIFF/WAVE file from an already-opened file 'System.IO.Handle'. The
 -- 'System.IO.Handle' is not closed when completed.
