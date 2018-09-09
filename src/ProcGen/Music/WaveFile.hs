@@ -94,7 +94,7 @@ packRiffWave isiz i next = seq next $! if i >= isiz then return (Unboxed.create 
 --
 -- After checking that the format is correct, this function takes the size of the data payload from
 -- the header and returns it as the first element of the pair, the second element is the files ize.
-getRiffWaveHeader :: Binary.Get (Word32, Word32)
+getRiffWaveHeader :: Binary.Get Int
 getRiffWaveHeader = do
   let hdr err get expct = get >>= \i -> if i==expct then return () else fail err
   let sr = round sampleRate
@@ -111,15 +111,13 @@ getRiffWaveHeader = do
   hdr "requires 16-bit signed integer little-endian encoded PCM data"     Binary.getWord16le    16
   getMagic "\".wav\" file contains valid header but no data section"      "data"
   siz <- Binary.getWord32le
-  return (siz, filesiz)
-
-getRiffWaveFormat :: Binary.Get (Unboxed.Vector Sample)
-getRiffWaveFormat = do
-  (siz, filesiz) <- getRiffWaveHeader
   let isiz = fromIntegral $ div siz sz2
   if isiz < 0 then fail "data size is a negative value" else
-    if fromIntegral (siz + rhsiz) /= filesiz then fail "incorrect file header size" else
-      if siz == 0 then return Unboxed.empty else packRiffWave isiz 0 $ Mutable.new isiz
+    if fromIntegral (siz + rhsiz) /= filesiz then fail "incorrect file header size" else return isiz
+
+getRiffWaveFormat :: Binary.Get (Unboxed.Vector Sample)
+getRiffWaveFormat = getRiffWaveHeader >>= \ isiz ->
+  if isiz == 0 then return Unboxed.empty else packRiffWave isiz 0 $ Mutable.new isiz
 
 -- | Get a @.WAV@ file header, failing if the header is not exactly the correct format:
 --
@@ -133,10 +131,9 @@ getRiffWaveFormatIO :: FilePath -> IO (Mutable.IOVector Sample)
 getRiffWaveFormatIO path = do
   bytes <- Bytes.readFile path
   case Binary.pushChunks (Binary.runGetIncremental getRiffWaveHeader) bytes of
-    Binary.Fail _ _ msg        -> fail $ "file "++show path++": "++msg
-    Binary.Partial{}           -> fail $ "file "++show path++": incomplete RIFF header"
-    Binary.Done rem _ (siz, _) -> do
-      let isiz = fromIntegral $ div siz sz2
+    Binary.Fail _ _ msg    -> fail $ "file "++show path++": "++msg
+    Binary.Partial{}       -> fail $ "file "++show path++": incomplete RIFF header"
+    Binary.Done rem _ isiz -> do
       vec <- Mutable.new isiz
       let loop rem i = if i >= isiz then return vec else 
             case Binary.pushChunks (Binary.runGetIncremental Binary.getWord16le) rem of
