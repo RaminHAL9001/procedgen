@@ -137,11 +137,15 @@ toPulseCode = round . (* 32704) . clamp1_1
 
 -- | Like 'toPulseCode' but evaluates to a 'Data.Word.Word16' value
 toPulseCodeWord :: Sample -> Word16
-toPulseCodeWord = round . (* 65408) . clamp0_1 . (/ 2) . (+ 1)
+toPulseCodeWord = fromIntegral . toPulseCode
 
 -- | Convert a signed 16-bit integer sample value to a floating-point 'Sample' value.
 toSample :: Int16 -> Sample
 toSample = (* (32704.0 / (32768.0 * 32768.0))) . realToFrac
+
+-- | Like 'toSample' but takes a 'Data.Word.Word16' input instead of an 'Data.Int.Int16' input.
+wordToSample :: Word16 -> Sample
+wordToSample = toSample . fromIntegral
 
 -- | Clamp a value between 0 and 1.
 clamp0_1 :: (Fractional x, Ord x) => x -> x
