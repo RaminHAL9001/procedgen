@@ -25,7 +25,7 @@ module ProcGen.Music.Synth
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
     -- * Time Domain Function Construction
-    TDSignal, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, pureIDCT,
+    TDSignal, tdSamples, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, pureIDCT,
     minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
