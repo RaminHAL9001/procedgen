@@ -40,12 +40,12 @@ module ProcGen.Music.Composition
     NoteValue(..), noteValue, Strength(..),
     -- * Arranging Notes
     Bar(..), makeBar,
-    SubDiv(..), PlayedRole(..), play1Note, sequenceBar, setNoteDurations,
+    SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence,
+    play1Note, sequenceBar, setNoteDurations,
+    NoteSequence(..), listNoteSequence,
     -- * Composing Music for a Single Role
-    RoleComposition, PureRoleComposition,
-    newRoleComposition, newRoleCompositionIO, newRoleCompositionPure,
-    runComposeRoleIO, freezeRoleComposition,
-    bar, notes, rest, tie, addNote, play, playNotes, playTie, score,
+    Composition, evalComposition, randGenComposition,
+    PlayableNote(..), note, rest, quick, tieNote, tie, untie,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -53,6 +53,7 @@ module ProcGen.Music.Composition
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Music.KeyFreq88
+import           ProcGen.Music.SoundFont
 
 import           Control.Lens
 import           Control.Monad.Primitive
@@ -60,6 +61,7 @@ import           Control.Monad.State
 import           Control.Monad.State.Class
 import           Control.Monad.ST
 
+import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
 import           Data.Semigroup
 import qualified Data.Vector.Mutable       as Mutable
@@ -99,8 +101,7 @@ data Note
   = RestNote -- ^ indicates that nothing is played for the duration of the 'SubDiv'.
     -- ^ This must refer to a note that was played at an earlier point in the composition.
   | PlayedNote
-    { playedNoteID    :: !NoteReference
-    , playedTiedID    :: !NoteReference
+    { playedTiedID    :: !NoteReference
       -- ^ Set to 'untied' if this note is not tied. If not 'untied' (if it is tied) it must refer
       -- to the 'playedNotID' of 'Note' defined with the 'TiedNote' constructor.
     , playedStrength  :: !Strength
@@ -114,8 +115,7 @@ makeNote :: NoteReference -> Strength -> [KeyIndex] -> Note
 makeNote tied strength = \ case
   []   -> RestNote
   a:ax -> PlayedNote
-    { playedNoteID    = untied -- ^ allow 'addNote' to initialize this to the correct value
-    , playedTiedID    = tied
+    { playedTiedID    = untied
     , playedStrength  = strength
     , playedNoteValue = noteValue a ax
     }
@@ -151,12 +151,10 @@ noteValue a = \ case
 
 ----------------------------------------------------------------------------------------------------
 
--- | A data structure for sub-dividing a measure of time.
-data SubDiv leaf
-  = SubDivLeaf   !leaf
-  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
-  deriving Functor
-
+-- | A 'Bar' is a single unit of a composition that can be constructed by the stateful function type
+-- 'ComposeRoleT'. 'ComposeRoleT' will subdivide a 'Bar' into units and then play a sequence of
+-- notes at each unit. The constructed 'Bar' can then be translated into a 'NoteSequence' using the
+-- 'sequenceBar' function.
 data Bar leaf
   = Bar
     { playMetaOffset :: !Percentage
@@ -183,281 +181,177 @@ makeBar = Bar
 
 ----------------------------------------------------------------------------------------------------
 
--- | The notes played by a single 'Role' at each point in time. The time the note played is defined
--- by the index of the 'Map.Map', where each measure contains up to @measureTimeDiv@ elements.
-newtype PlayedRole leaf = PlayedRole (Map.Map Moment leaf)
+-- | A mapping from 'ProcGen.Types.Moment's in time to @note@s. Essentially this is just a map data
+-- structure that instantiates 'Data.Semigroup.Semigroup' and 'Data.Monoid.Monoid' such that the
+-- append @('Data.Semigroup.<>')@ function performs the right-biased union of the maps, where
+-- right-bias meaning the @note@ on the right of the @('Data.Semigroup.<>')@ operator overwrites the
+-- @note on the left of the operator if the two operators appear in the exact same
+-- 'ProcGen.Types.Moment' in time.
+newtype NoteSequence note = NoteSequence (Map.Map Moment note)
   deriving (Eq, Functor)
 
-instance Semigroup (PlayedRole leaf) where
-  (PlayedRole a) <> (PlayedRole b) = PlayedRole (Map.union b a)
+-- | A data structure for sub-dividing a measure of time. A 'SubDiv' contains more structure than a
+-- 'NoteSequence' but ultimately must be translated to a 'NoteSequence' to be of any use.
+data SubDiv leaf
+  = SubDivLeaf   !leaf
+  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
+  deriving Functor
 
-instance Monoid (PlayedRole leaf) where
-  mempty = PlayedRole mempty
+instance Semigroup (NoteSequence note) where
+  (NoteSequence a) <> (NoteSequence b) = NoteSequence (Map.union b a)
+
+instance Monoid (NoteSequence note) where
+  mempty = NoteSequence mempty
   mappend = (<>)
 
-play1Note :: Moment -> Duration -> leaf -> PlayedRole (Duration, leaf)
-play1Note t dt = PlayedRole . Map.singleton t . (,) dt
+listNoteSequence :: NoteSequence note -> [(Moment, note)]
+listNoteSequence (NoteSequence map) = Map.assocs map
+
+----------------------------------------------------------------------------------------------------
+
+play1Note :: Moment -> Duration -> note -> NoteSequence (Duration, note)
+play1Note t dt = NoteSequence . Map.singleton t . (,) dt
 
 -- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
 -- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
 -- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
-sequenceBar :: Moment -> Duration -> Bar leaf -> PlayedRole (Duration, leaf)
+sequenceBar :: Moment -> Duration -> Bar note -> NoteSequence (Duration, note)
 sequenceBar t0 dt0 msur = loop dt0 mempty (t0 + playMetaOffset msur, playNoteTree msur) where
   loop dt0 map (t0, subdiv) = if t0 >= playMetaCutoff msur then map else case subdiv of
     SubDivLeaf  note -> map <> play1Note t0 dt0 note
     SubDivBranch vec -> if Boxed.null vec then mempty else
       let dt = dt0 / realToFrac (Boxed.length vec) in
       foldl (loop dt) map $ zip (iterate (+ dt) t0) (Boxed.toList vec)
+ -- TODO: ^ make this function interpret tied notes.
 
 -- | For a 'PlayedRole' containing a tuple @('Duration', 'Note')@ pair as what is constructed
 -- by the 'sequenceBar' function, this sets the 'ProcGen.Types.Duration' value in the
 -- 'Prelude.fst' of the tuple as the 'playedDuration' of each 'Note' in the 'Prelude.snd' of
 -- the tuple.
-setNoteDurations :: PlayedRole (Duration, Note) -> PlayedRole (Interval Note)
+setNoteDurations :: NoteSequence (Duration, Note) -> NoteSequence (Interval Note)
 setNoteDurations = fmap $ uncurry Interval
 
 ----------------------------------------------------------------------------------------------------
 
--- | This function type allows you to construct a musical 'Composition'.
-newtype ComposeRoleT io a = ComposeRoleT (StateT (RoleComposition io) io a)
+-- | This is a 'NoteSequence' associated with a 'ProcGen.Music.SoundFont.InstrumentID'.
+data PlayedRole note
+  = PlayedRole
+    { thePlayedRoleInstrument :: !InstrumentID
+    , thePlayedRoleSequence   :: !(NoteSequence note)
+    }
+  deriving (Eq, Functor)
+
+playedRoleInstrument :: Lens' (PlayedRole note) InstrumentID
+playedRoleInstrument = lens thePlayedRoleInstrument $ \ a b -> a{ thePlayedRoleInstrument = b }
+
+playedRoleSequence :: Lens' (PlayedRole note) (NoteSequence note)
+playedRoleSequence = lens thePlayedRoleSequence $ \ a b -> a{ thePlayedRoleSequence = b }
+
+----------------------------------------------------------------------------------------------------
+
+-- | This is a monadic function type designed so you can construct the 'Bar's of an individual role
+-- for a piece of music using @do@ notation. Functions of this data type such as 'note', 'rest',
+-- 'quick', 'tie', and 'untie'.
+--
+-- One aspect that may be confusing about the 'Composition' function type is that the state of the
+-- 'Composition' does not keep track of time at all. Instead, a tree structure of notes of type
+-- 'SubDiv' is constructed. It is only after evaluating the 'Composition' using 'runComposition'
+-- that you can extract the 'SubDiv' and convert it to a timed sequence of notes using
+-- @('setNoteDurations' . 'sequenceBar')@.
+newtype Composition a = Composition (StateT CompositionState (TFRandT IO) a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
--- | This is a data type for constructing a musical composition. It can be evaluated purely in the
--- 'Control.Monad.ST.ST' monad, or in the 'IO' monad.
-data RoleComposition io
-  = RoleComposition
-    { theRoleCompRoleCount  :: !Int
-    , theRoleCompNotes      :: !(Mutable.MVector (PrimState io) Note)
-    , theRoleCompRandGen    :: !TFGen
-    , theRoleCompBarTime    :: !Duration
-    , theRoleCompBarCount   :: !Int
-    , theRoleCompBars       :: !(Mutable.MVector (PrimState io) (Bar NoteReference))
-    , theRoleCompDivSize    :: !Int
-    , theRoleCompCurrentDiv :: [NoteReference]
+data CompositionState
+  = CompositionState
+    { theComposeTieID        :: !Int
+    , theComposeTiedNotes    :: !(IMap.IntMap Note)
+    , theComposeKeySignature :: [ToneIndex]
+    , theComposeNotes        :: [SubDiv Note]
     }
 
--- | This data structure is constructed by evaluating 'runComposePure', it contains buffers of the
--- @('Composition' ('Control.Monad.ST.ST' s))@ in their frozen state.
-data PureRoleComposition
-  = PureRoleComposition
-    { pureRoleCompRandGen :: !TFGen
-    , pureRoleCompNotes   :: !(Boxed.Vector Note)
-    , pureRoleCompBars    :: !(Boxed.Vector (Bar NoteReference))
-    }
+instance MonadStatae CompositionState Composition where
+  state = Composition . lift . state
 
-instance Monad io => MonadState (RoleComposition io) (ComposeRoleT io) where { state = ComposeRoleT . state; }
+instance Semigroup a => Monoid (Composition a) where { a <> b = (<>) <$> a <*> b; }
 
-instance MonadTrans ComposeRoleT where { lift = ComposeRoleT . lift; }
-
-instance (Semigroup a, Monad io) => Semigroup (ComposeRoleT io a) where { (<>) a b = (<>) <$> a <*> b; }
-
-instance (Monoid a, Monad io) => Monoid (ComposeRoleT io a) where
-  mempty = pure mempty
+instance Monoid a => Monoid (Composition a) where
+  mempty = return mempty
   mappend a b = mappend <$> a <*> b
 
--- | Construct a new composition in either the @IO@ or 'Control.Monad.ST.ST' monad. Generate a
--- 'TFGen' with 'ProcGen.Arbitrary.initTGGen', or 'ProcGen.Arbitrary.tfGen'.
-newRoleComposition :: PrimMonad io => TFGen -> io (RoleComposition io)
-newRoleComposition gen = do
-  notes <- Mutable.new 256
-  bars  <- Mutable.new 64
-  return RoleComposition
-    { theRoleCompRoleCount  = 0
-    , theRoleCompNotes      = notes
-    , theRoleCompRandGen    = gen
-    , theRoleCompBarTime    = 4.0
-    , theRoleCompBarCount   = 0
-    , theRoleCompBars       = bars
-    , theRoleCompDivSize    = 0
-    , theRoleCompCurrentDiv = []
-    }
+instance MonadRandom Composition where
+  getRandomR  = Composition . lift . getRandomR
+  getRandom   = Composition $ lift getRandom
+  getRandomRs = Composition . lift . getRandomRs
+  getRandoms  = Composition $ lift getRandoms
 
--- | Once all the composition for a role is complete, freeze the buffers within it so a pure data
--- type can be passed to '
-freezeRoleComposition :: PrimMonad io => RoleComposition io -> io PureRoleComposition
-freezeRoleComposition st = do
-  notes <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount st) (theRoleCompNotes st)
-  bars  <- Boxed.freeze $! Mutable.slice 0 (theRoleCompBarCount  st) (theRoleCompBars  st)
-  return PureRoleComposition
-    { pureRoleCompRandGen = theRoleCompRandGen st
-    , pureRoleCompNotes   = notes
-    , pureRoleCompBars    = bars
-    }
+composeTieID :: Lens' CompositionState Int
+composeTieID = lens theComposeTieID $ \ a b -> a{ theComposeTieID = b }
 
--- | Initializes a 'Composition' state that can be used to evaluate 'runComposeIO'. This function
--- uses 'System.Random.TF.Init.initTFGen' to initialize the random number generator, and allocates a
--- mutable 'Mutable.IOVector' to buffer elements of a musical composition.
-newRoleCompositionIO :: IO (RoleComposition IO)
-newRoleCompositionIO = initTFGen >>= newRoleComposition
+composeTiedNotes :: Lens' CompositionState (IMap.IntMap Note)
+composeTiedNotes = lens theComposeTiedNotes $ \ a b -> a{ theComposeTiedNotes = b }
 
--- | Similar to 'newCompositionIO', except this function evaluates to an
--- @('Composition' (forall s . 'Control.Monad.ST.ST' s))@ value which can evaluate 'ComposeT'
--- function type purely, without side-effects. However, you must provide a random number generator
--- seed.
-newRoleCompositionPure :: TFRandSeed -> ST s (RoleComposition (ST s))
-newRoleCompositionPure = newRoleComposition . tfGen
+composeKeySignature :: Lens' CompositionState [ToneIndex]
+composeKeySignature = lens theComposeKeySignature $ \ a b -> a{ theComposeKeySignature = b }
 
--- | Calls 'newRoleCompositionIO' and evaluates a @('ComposeRoleT' IO)@ function.
-runComposeRoleIO :: ComposeRoleT IO a -> IO (a, RoleComposition IO)
-runComposeRoleIO (ComposeRoleT f) = newRoleCompositionIO >>= runStateT f
+composeNotes :: Lens' CompositionState [SubDiv Note]
+composeNotes = lens theComposeNotes $ \ a b -> a{ theComposeNotes = b }
 
----- | Calls 'newRoleCompositionPure' and evaluates a @('ComposeRoleT' (forall s . 'Control.Monad.ST.ST' s))@
----- function.
---runComposeRolePure :: TFRandSeed -> ComposeRoleT (ST s) a -> (a, PureRoleComposition)
---runComposeRolePure seed (ComposeRoleT f) = runST $ do
---  (a, st) <- newRoleCompositionPure seed >>= runStateT f
---  notes   <- Boxed.freeze $! Mutable.slice 0 (theRoleCompRoleCount st) (theRoleCompNotes st)
---  bars    <- Boxed.freeze $! Mutable.slice 0 (theRoleCompBarCount  st) (theRoleCompBars  st)
---  ((return ( a
---           , PureRoleComposition
---             { pureRoleCompRandGen = theRoleCompRandGen st
---             , pureRoleCompNotes   = notes
---             , pureRoleCompBars    = bars
---             }
---           )) :: ST s (a, PureRoleComposition))
+class PlayableNote n where
+  -- | Convert some value to a 'Note' so it can be played by 'note'. The unit @()@ data type
+  -- instantiates this class such that @()@ can be used to indicate a 'RestNote'.
+  toNote :: n -> Composition Note
 
--- not for export
-compositionNoteCount :: Lens' (RoleComposition io) Int
-compositionNoteCount = lens theRoleCompRoleCount $ \ a b -> a{ theRoleCompRoleCount = b }
+instance PlayableNote ()   where { toNote = return RestNote; }
+instance PlayableNote Note where { toNote = return; }
 
--- not for export
-compositionNotes :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) Note)
-compositionNotes = lens theRoleCompNotes $ \ a b -> a{ theRoleCompNotes = b }
+-- | Play a note
+note :: PlayableNote n => n -> Composition ()
+note = toNote >=> (%=) composeNotes . (:) . SubDivLeaf
 
--- not for export
-compositionRandGen :: Lens' (RoleComposition io) TFGen
-compositionRandGen = lens theRoleCompRandGen $ \ a b -> a{ theRoleCompRandGen = b }
+-- | Leave a brief silent gap in the current 'SubDiv' (a gap in the sub-division of the current
+-- interval).
+rest :: Composition ()
+rest = note RestNote
 
--- not for export
-compositionBarTime :: Lens' (RoleComposition io) Duration
-compositionBarTime = lens theRoleCompBarTime $ \ a b -> a{ theRoleCompBarTime = b }
+-- | Sieze the current time 'Interval' of the current 'SubDiv', and begin sub-dividing it with every
+-- note played.
+quick :: Composition () -> Composition ()
+quick subcomposition = do
+  oldnotes  <- use composeNotes <* (composeNotes .= [])
+  subcomposition
+  notes <- use composeNotes
+  composeNotes .= SubDivBranch (Boxed.fromList notes) : oldnotes
 
--- not for export
-compositionBarCount :: Lens' (RoleComposition io) Int
-compositionBarCount = lens theRoleCompBarCount $ \ a b -> a{ theRoleCompBarCount = b }
+-- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
+-- held for a time until the future 'untie'd note is reached.
+tieNote :: PlayableNote n => n -> Composition (NoteReference, Note)
+tieNote = toNote >=> \ case
+  n@PlayedNote{} -> do
+    i <- composeTieID += 1 >> use composeTieID
+    composeNotes %= (:) n{ playedTiedID = NoteReference i }
+    return (NoteReference i, n)
+  n -> do
+    return (untied, n)
 
--- not for export
-compositionBars :: Lens' (RoleComposition io) (Mutable.MVector (PrimState io) (Bar NoteReference))
-compositionBars = lens theRoleCompBars $ \ a b -> a{ theRoleCompBars = b }
+-- | Shorthand for 'tieNote' returning only the 'NoteReference' and not the 'Note' constructed with
+-- it.
+tie :: PlayeableNote n => n -> Composition NoteReference
+tie = fmap fst . tieNote
 
--- not for export
-compositionDivSize :: Lens' (RoleComposition io) Int
-compositionDivSize = lens theRoleCompDivSize $ \ a b -> a{ theRoleCompDivSize = b }
-
--- not for export
-compositionCurrentDiv :: Lens' (RoleComposition io) [NoteReference]
-compositionCurrentDiv = lens theRoleCompCurrentDiv $ \ a b -> a{ theRoleCompCurrentDiv = b }
-
--- | Construct and return a 'Bar'.
---
--- @
--- 'runComposeIO' $ do
---     a     <- 'notes' [1, 5, 8]
---     b     <- 'chord' [0, 3, 4]
---     intro <- 'bar' $ do
---                  'bar' $ 'play' a >> 'rest'
---                  'bar' $ 'play' b >> play a
---     'score' intro
--- @
-bar :: Monad io => ComposeRoleT io () -> ComposeRoleT io (Bar NoteReference)
-bar compose = do
-  oldlist <- use compositionCurrentDiv
-  oldsize <- use compositionDivSize
-  oldtime <- use compositionBarTime
-  compositionCurrentDiv .= []
-  compositionDivSize    .= 0
-  compositionBarTime    %= (/ 2.0)
-  compose
-  newlist <- fmap SubDivLeaf <$> use compositionCurrentDiv
-  newsize <- use compositionDivSize
-  compositionCurrentDiv .= oldlist
-  compositionDivSize    .= oldsize
-  compositionBarTime    .= oldtime
-  return makeBar
-    { playNoteTree = SubDivBranch $ Boxed.create $ do
-        vec <- Mutable.new newsize
-        mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) $ newsize - 1) newlist
-        return vec
-    }
-
--- TODO: extract this function, along with the 'theRoleCompRoleCount' and 'theRoleCompNotes'
--- elements in the 'Composition' data type into their own data type in a separate module, because
--- these fields and this function are a common mutable data structure used: a mutable buffer of
--- items that grows exponentially and automatically as elements are added to it.
-incrementMutable
-  :: PrimMonad m
-  => Lens' (RoleComposition m) (Mutable.MVector (PrimState m) elem)
-  -> Lens' (RoleComposition m) Int
-  -> ComposeRoleT m (Int, Mutable.MVector (PrimState m) elem)
-incrementMutable vector nelems = do
-  i       <- use nelems
-  nelems += 1
-  reqsize <- use nelems
-  vec     <- use vector
-  let allocsize = Mutable.length vec
-  vec     <- if reqsize < allocsize then return vec else do
-    vec <- lift $ Mutable.grow vec $ head $ dropWhile (<= reqsize) $ iterate (* 2) allocsize
-    vector .= vec
-    return vec
-  return (i, vec)
-
--- | Register a pre-constructed note. 
-addNote :: PrimMonad io => Note -> ComposeRoleT io NoteReference
-addNote note = do
-  (i, vec) <- incrementMutable compositionNotes compositionNoteCount
-  let noteID = NoteReference i
-  lift $ Mutable.write vec i $ note{ playedNoteID = noteID }
-  return noteID
-
--- | Construct an arbitrary note, unconstrained by the key signature. But don't play the constructed
--- note yet. Instead a reference to a note is returned which you can play, and if necessary, you can
--- tie it to other notes. To construct a note that you never intend to tie and just play it
--- immediately, use 'playNote' instead.
-notes :: PrimMonad io => Strength -> [KeyIndex] -> ComposeRoleT io NoteReference
-notes strength = addNote . makeNote untied strength
-  
--- | Construct a rest.
-rest :: PrimMonad io => ComposeRoleT io NoteReference
-rest = addNote RestNote
-
--- | Construct a note tied to the given 'NoteReference'.
-tie :: PrimMonad io => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT io NoteReference
-tie strength ns noteID@(NoteReference i) = do
-  tiedID <- addNote $ makeNote noteID strength ns
-  vec <- use compositionNotes
-  let untieLoop noteID@(NoteReference i) = unless (noteID == untied) $ do
-        prev <- Mutable.read vec i
-        when (playedTiedID prev == noteID) $ do
-          Mutable.write vec i $ prev{ playedTiedID = untied }
-          untieLoop $ playedTiedID prev
-  lift $ do
-    note <- Mutable.read vec i
-    untieLoop $ playedTiedID note
-    Mutable.write vec i $ note{ playedTiedID = tiedID }
-  return tiedID
-
--- | Record a 'NoteReference' into the current 'Bar'. Only notes that are played, and not merely
--- constructed by 'notes' or 'addNotes', will be converted to sound in the synthesizer.
-play :: Monad io => NoteReference -> ComposeRoleT io ()
-play ref = compositionCurrentDiv %= (ref :) >> compositionDivSize  += 1
-
--- | Construct a 'NoteReference' using 'notes' and immediately pass the reference to 'play' to have
--- it recorded. 
-playNotes :: PrimMonad io => Strength -> [KeyIndex] -> ComposeRoleT io NoteReference
-playNotes s n = notes s n >>= \ noteID -> play noteID >> return noteID
-
--- | Construct a 'NoteReference' using 'tie' and immediately pass the referece to 'play' to have it
--- recorded, then tie the note to a previouly 'play'ed 'NoteReference'.
-playTie :: PrimMonad io => Strength -> [KeyIndex] -> NoteReference -> ComposeRoleT io NoteReference
-playTie s n k = tie s n k >>= \ noteID -> play noteID >> return noteID
-
--- | Once the 'bar' function returns it constructs a 'Bar' but does not record it to the
--- 'Composition'. This function records the 'Bar' into the 'Composition' so that the synthesizer
--- can actually convert it to sound. Obviously you may 'score' the same 'Bar' as many times as
--- you like, just be aware that people tend to find the same thing repeated again and again too many
--- times to be boring.
-score :: PrimMonad io => Bar NoteReference -> ComposeRoleT io ()
-score mesr = do
-  (i, vec) <- incrementMutable compositionBars compositionBarCount
-  lift $ Mutable.write vec i mesr
+-- | Stop playing a tied 'note'. Supply the 'NoteReference' returend by a previous call to 'tie',
+-- pass the note value to which the note must be tied as @note1@ (passing 'RestNote' means to tie
+-- the same note that initiated the 'tie'). The value @note2@ can be played with the note that is
+-- being united at the time interval it is untied.
+untie
+  :: (PlayableNote note1, PlayableNote note2)
+  => NoteReference -> note1 -> note2 -> Composition ()
+untie (NoteReference ref) n1 n2 = do
+  n1 <- note n1
+  n1 <- case n1 of
+    RestNote -> maybe RestNote id . IMap.lookup ref <$> use composeTiedNotes
+    n1       -> pure n1
+  case n1 of
+    RestNote -> return ()
+    _        -> note n1
+  note n2
