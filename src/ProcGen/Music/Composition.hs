@@ -36,15 +36,17 @@
 module ProcGen.Music.Composition
   ( CommonChordProg(..),
     -- * Individual Notes
-    ScoredNote(..), scoreNote, PlayedNote(..), NoteReference, untied,
+    ScoredNote(..), scoreNote,
+    PlayedNote(..), playScoredNote,
+    NoteReference, untied,
     NoteValue(..), noteValue, Strength(..),
     -- * Arranging Notes
     Bar(..), makeBar,
-    SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence, sequenceBar,
-    NoteSequence(..), listNoteSequence,
+    SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence,
+    NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
     Composition, evalComposition, randGenComposition,
-    PlayableNote(..), note, rest, quick, tieNote, tie, untie,
+    ScorableNote(..), note, rest, quick, tieNote, tie, untie,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -55,10 +57,8 @@ import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.SoundFont
 
 import           Control.Lens
-import           Control.Monad.Primitive
 import           Control.Monad.State
 import           Control.Monad.State.Class
-import           Control.Monad.ST
 
 import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
@@ -123,10 +123,21 @@ scoreNote :: NoteReference -> Strength -> [KeyIndex] -> ScoredNote
 scoreNote tied strength = \ case
   []   -> ScoredRestNote
   a:ax -> ScoredNote
-    { scoredTiedID    = untied
+    { scoredTiedID    = tied
     , scoredStrength  = strength
     , scoredNoteValue = noteValue a ax
     }
+
+-- | Convert a 'ScoredNote' to a 'PlayedNote'.
+playScoredNote :: Duration -> ScoredNote -> PlayedNote
+playScoredNote dt note = PlayedNote
+  { playedDuration  = dt
+  , playedStrength  = scoredStrength  note
+  , playedNoteValue = scoredNoteValue note
+  , playedTied      = RestNote
+  }
+
+----------------------------------------------------------------------------------------------------
 
 -- | Every note in a 'Composition' has a unique index value or "reference". The 'Composition' keeps
 -- track of each unique note played in order to evaluate "tied notes" which are notes are held for
@@ -162,7 +173,7 @@ noteValue a = \ case
 -- | A 'Bar' is a single unit of a composition that can be constructed by the stateful function type
 -- 'ComposeRoleT'. 'ComposeRoleT' will subdivide a 'Bar' into units and then play a sequence of
 -- notes at each unit. The constructed 'Bar' can then be translated into a 'NoteSequence' using the
--- 'sequenceBar' function.
+-- 'playNoteSequence' function.
 data Bar leaf
   = Bar
     { playMetaOffset :: !Percentage
@@ -186,6 +197,34 @@ makeBar = Bar
   , playMetaCutoff = 1.0
   , playNoteTree   = SubDivBranch Boxed.empty
   }
+
+-- | Construct a lazy list in reverse order (so you can 'Prelude.foldr' over it in forward
+-- order). The result of this function evaluation is intended to be passed to other intermediate
+-- computations before producing a final 'NoteSequence' data structure.
+sequenceBar :: Moment -> Duration -> Bar note -> [(Moment, Duration, note)]
+sequenceBar t0 dt0 msur = loop dt0 (t0 + playMetaOffset msur, playNoteTree msur) [] where
+  loop dt0 (t0, subdiv) list = if t0 >= playMetaCutoff msur then list else case subdiv of
+    SubDivLeaf  note -> (t0, dt0, note) : list
+    SubDivBranch vec -> if Boxed.null vec then mempty else
+      let dt = dt0 / realToFrac (Boxed.length vec) in
+      foldr (loop dt) list $ zip (iterate (+ dt) t0) (Boxed.toList vec)
+
+-- | A 'Prelude.foldr' over the result of 'sequenceBar' in which 'PlayedNotes' that share the same
+-- 'NoteReference' in their 'scoredTiedID' are "tied" together, meaning all tied notes are linked
+-- together into a single 'PlayedNote' structure where each next tied note is set in the
+-- 'playedTied' field of the 'PlayedNote' data structure. Keep in mind that the tied notes are
+-- appended to the result list so this function causes notes to be listed out of order. Use
+-- 'playNoteSequence' to re-order the elements in this list.
+tieSequencedNotes :: [(Moment, Duration, ScoredNote)] -> [(Moment, PlayedNote)]
+tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empty) where
+  f (t, dt, scor) (list, table) = if untied == scoredTiedID scor then (list, table) else
+    let (NoteReference i) = scoredTiedID scor
+        play = (t, playScoredNote dt scor)
+    in (list, IMap.alter (Just . maybe [play] (play :)) i table)
+  tie (t2, n2) (t1, n1) = case n1 of
+    RestNote     -> (t2, n2)
+    PlayedNote{} -> (t1, n1{ playedTied = n2, playedDuration = playedDuration n2 + t2 - t1})
+  makeTied = fmap (foldl1 tie) . IMap.elems
 
 ----------------------------------------------------------------------------------------------------
 
@@ -215,46 +254,14 @@ instance Monoid (NoteSequence note) where
 listNoteSequence :: NoteSequence note -> [(Moment, [note])]
 listNoteSequence (NoteSequence map) = Map.assocs map
 
-----------------------------------------------------------------------------------------------------
-
--- not for export Lazy-list version of 'sequenceBar' that can be composed with 'tieAllNotes'. The
--- result list is generated through repeated "cons"-ing (using the @(:)@ operator), so performing a
--- right-fold over the result will be optimized by GHC to an O(n) operation.
-_seqBar :: Moment -> Duration -> Bar note -> [(Moment, Duration, note)]
-_seqBar t0 dt0 msur = loop dt0 (t0 + playMetaOffset msur, playNoteTree msur) [] where
-  loop dt0 (t0, subdiv) list = if t0 >= playMetaCutoff msur then list else case subdiv of
-    SubDivLeaf  note -> (t0, dt0, note) : list
-    SubDivBranch vec -> if Boxed.null vec then mempty else
-      let dt = dt0 / realToFrac (Boxed.length vec) in
-      foldr (loop dt) list $ zip (iterate (+ dt) t0) (Boxed.toList vec)
-{-# INLINE _seqBar #-}
-
 -- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
 -- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
 -- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
-sequenceBar :: Moment -> Duration -> Bar ScoredNote -> NoteSequence PlayedNote
-sequenceBar t0 dt0 = NoteSequence .
-  foldl (flip $ uncurry $ Map.insertWith (++)) Map.empty .
-  fmap (\ (t, dt, note) -> (,) t $ pure PlayedNote
-           { playedDuration  = dt
-           , playedStrength  = scoredStrength  note
-           , playedNoteValue = scoredNoteValue note
-           , playedTied      = RestNote
-           }) .
-  _seqBar t0 dt0
-
--- | Like 'sequenceBar' but works also ties all 'TiedNote's together to produce the correct
--- 'Interval's.
-sequenceNotes
-  :: IMap.IntMap ScoredNote
-  -> Moment -> Duration -> Bar ScoredNote
-  -> NoteSequence PlayedNote
-sequenceNotes table t0 dt0 = NoteSequence . foldr f init . _seqBar t0 dt0 where
-  init = Map.empty
-  f (t, dt, note) map = case note of
-    note@(ScoredNote{scoredTiedID=tie@(NoteReference i)}) | tie /= untied -> error "TODO"
-    _ -> map
+playNoteSequence :: Moment -> Duration -> Bar ScoredNote -> NoteSequence PlayedNote
+playNoteSequence t0 dt0 = NoteSequence
+  . foldr (uncurry $ Map.insertWith (++)) Map.empty
+  . fmap (fmap pure) . tieSequencedNotes . sequenceBar t0 dt0
 
 ----------------------------------------------------------------------------------------------------
 
@@ -289,7 +296,6 @@ newtype Composition a = Composition (StateT CompositionState (TFRandT IO) a)
 data CompositionState
   = CompositionState
     { theComposeTieID        :: !Int
-    , theComposeTiedNotes    :: !(IMap.IntMap ScoredNote)
     , theComposeNoteCount    :: !Int
     , theComposeKeySignature :: [ToneIndex]
     , theComposeNotes        :: [SubDiv ScoredNote]
@@ -310,11 +316,16 @@ instance MonadRandom Composition where
   getRandomRs = Composition . lift . getRandomRs
   getRandoms  = Composition $ lift getRandoms
 
+emptyCompositionState :: CompositionState
+emptyCompositionState = CompositionState
+  { theComposeTieID        = 0
+  , theComposeNoteCount    = 0
+  , theComposeKeySignature = []
+  , theComposeNotes        = []
+  }
+
 composeTieID :: Lens' CompositionState Int
 composeTieID = lens theComposeTieID $ \ a b -> a{ theComposeTieID = b }
-
-composeTiedNotes :: Lens' CompositionState (IMap.IntMap ScoredNote)
-composeTiedNotes = lens theComposeTiedNotes $ \ a b -> a{ theComposeTiedNotes = b }
 
 composeKeySignature :: Lens' CompositionState [ToneIndex]
 composeKeySignature = lens theComposeKeySignature $ \ a b -> a{ theComposeKeySignature = b }
@@ -334,6 +345,15 @@ class ScorableNote n where
 
 instance ScorableNote ()         where { toNote = const $ return ScoredRestNote; }
 instance ScorableNote ScoredNote where { toNote = return; }
+
+-- | Evaluate a 'Composition' function automatically seeding a new random number generator using
+-- 'Control.Random.TF.Init.initTFGen'.
+evalComposition :: Composition a -> IO a
+evalComposition (Composition f) = liftM fst $
+  seedIORunTFRandT $ evalStateT f emptyCompositionState 
+
+randGenComposition :: Composition a -> TFGen -> IO (a, TFGen)
+randGenComposition (Composition f) = runTFRandT (evalStateT f emptyCompositionState)
 
 -- | Play a note
 note :: ScorableNote n => n -> Composition ()
@@ -380,15 +400,7 @@ tie = fmap fst . tieNote
 -- pass the note value to which the note must be tied as @note1@ (passing 'RestNote' means to tie
 -- the same note that initiated the 'tie'). The value @note2@ can be played with the note that is
 -- being united at the time interval it is untied.
-untie
-  :: (ScorableNote note1, ScorableNote note2)
-  => NoteReference -> note1 -> note2 -> Composition ()
-untie (NoteReference ref) n1 n2 = do
-  n1 <- toNote n1
-  n1 <- case n1 of
-    ScoredRestNote -> maybe ScoredRestNote id . IMap.lookup ref <$> use composeTiedNotes
-    n1             -> pure n1
-  case n1 of
-    ScoredRestNote -> return ()
-    _              -> note n1 >> composeTiedNotes %= IMap.insert ref n1
-  note n2
+untie :: ScorableNote note => NoteReference -> note -> Composition ()
+untie ref = toNote >=> \ case
+  ScoredRestNote -> return ()
+  n -> note n{ scoredTiedID = ref }
