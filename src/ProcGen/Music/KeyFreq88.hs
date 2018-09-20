@@ -6,6 +6,7 @@ module ProcGen.Music.KeyFreq88
     -- * The 88-Key Piano Keyboard
     KeyIndex, keyIndex, keyIndexToWord8,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
+    NoteValue(..), noteValue, noteKeyIndicies,
     -- * Chords
     KeySignature(..), keySignature, keySigFreqTable,
     NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
@@ -220,6 +221,28 @@ keyFreq' :: Frequency -> Frequency
 keyFreq' f = k + d * log(f / concertA) / log 2 where
   k = fromIntegral $ keyIndexToWord8 concertAPianoKey
   d = fromIntegral keysPerOctave
+
+----------------------------------------------------------------------------------------------------
+
+-- | The value of the note played in a 'Note'.
+data NoteValue
+  = Single !Word8
+    -- ^ Play a single note, the 'Data.Wordl.Word8' value will be used as an index to a table
+    -- constructed by a 'keySigFreqTable' for whatever key signature a given bar is played in.
+  | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
+  deriving (Eq, Ord, Show, Read)
+
+-- | Construct a 'NoteValue'. It is better to just use 'scoreNote' rather than ever call this
+-- function directly.
+noteValue :: KeyIndex -> [KeyIndex] -> NoteValue
+noteValue a = \ case
+  [] -> Single $ keyIndexToWord8 a
+  ax -> Chord $ Unboxed.fromList $ keyIndexToWord8 <$> a:ax
+
+noteKeyIndicies :: NoteValue -> [KeyIndex]
+noteKeyIndicies = fmap KeyIndex . \ case
+  Single w -> [w]
+  Chord wx -> Unboxed.toList wx
 
 ----------------------------------------------------------------------------------------------------
 

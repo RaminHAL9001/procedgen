@@ -20,7 +20,7 @@ module ProcGen.Music.Sequencer
     trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
     -- * Sequencer Evaluation
     Sequencer, SequencerState(..), PlayToTrack(..),
-    newSequencer, runSequencer, liftSynth, playRoleToTrack,
+    newSequencer, runSequencer, liftSynth,
     addDrum, getDrum, addInstrument, addTone, getTone,
   ) where
 
@@ -182,10 +182,34 @@ shapeDecayEnvelope = lens theShapeDecayEnvelope $ \ a b -> a{ theShapeDecayEnvel
 -- that can render a sound into a buffer. Sounds written by 'playToTrack' should overwrite whatever
 -- exists in the buffer, no mixing of signals should occur in this step.
 class PlayToTrack signal where
-  playToTrack :: MonadIO m => Target Track -> Target Moment -> Source (ShapedSignal signal) -> m ()
+  playToTrack :: Target Track -> Target Moment -> Source (ShapedSignal signal) -> Sequencer ()
+
+instance PlayToTrack (PlayedRole PlayedNote) where
+  playToTrack track t0 signal = do
+    let role = theShapedSignal signal
+    let putSound sound = signal{ theShapedSignal = sound }
+    gets (Map.lookup (thePlayedRoleInstrument role) . theSequencerInstruments) >>= \ case
+      Nothing     -> error $ "TODO: play role with sine wave generator"
+      Just instrm -> forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) -> do
+        forM_ notes $ \ case
+          RestNote -> return ()
+          note     -> mapM_
+            (sequencerInstrumentNote instrm >=> playToTrack track (t0 + t) . putSound)
+            (flip ToneID (toneTagSet []) . KeyTone <$> noteKeyIndicies (playedNoteValue note))
+            -- TODO: noteKeyIndicies isn't enough, you need to
+            -- construct 'SlideNote's or 'CrossFade' notes for tied notes.
 
 instance PlayToTrack Sound where
   playToTrack track t0 = playToTrack track t0 . fmap soundTDSignal
+
+instance PlayToTrack (Maybe Sound) where
+  playToTrack track t0 signal = case theShapedSignal signal of
+    Nothing    -> return ()
+    Just sound -> playToTrack track t0 signal{ theShapedSignal = sound }
+
+instance PlayToTrack [Sound] where
+  playToTrack track t0 signal = forM_ (theShapedSignal signal) $ \ sound ->
+    playToTrack track t0 signal{ theShapedSignal = sound }
 
 instance PlayToTrack Track where
   playToTrack = error "TODO: ProcGen.Music.Sequencer.playToTrack :: Track -> Track -> Sequencer ()"
@@ -216,8 +240,10 @@ instance PlayToTrack (Unboxed.Vector Sample) where
           (loop env top $! iT + 1) $! iS + 1
     void $ loop attack iS1 iT0 iS0 >>= uncurry (loop (const 1.0) iS2) >>= uncurry (loop decay topS)
 
-playRoleToTrack :: Track -> Moment -> InstrumentID -> PlayedRole (Interval Note) -> Sequencer ()
-playRoleToTrack = error "TODO: ProcGen.Music.Sequencer.playRoleToTrack"
+sequencerInstrumentNote :: ToneInstrument -> ToneID -> Sequencer (Maybe Sound)
+sequencerInstrumentNote instr tone = case Map.lookup tone $  instr ^. toneTable of
+  Nothing       -> return Nothing
+  Just soundset -> chooseSound soundset
 
 ----------------------------------------------------------------------------------------------------
 

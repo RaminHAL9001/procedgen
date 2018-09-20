@@ -39,7 +39,7 @@ module ProcGen.Music.Composition
     ScoredNote(..), scoreNote,
     PlayedNote(..), playScoredNote,
     NoteReference, untied,
-    NoteValue(..), noteValue, Strength(..),
+    Strength(..),
     -- * Arranging Notes
     Bar(..), makeBar,
     SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence,
@@ -64,9 +64,7 @@ import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
 import           Data.Semigroup
 import qualified Data.Vector.Mutable       as Mutable
-import qualified Data.Vector.Unboxed       as Unboxed
 import qualified Data.Vector               as Boxed
-import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
 
@@ -117,6 +115,10 @@ data PlayedNote
     , playedTied      :: !PlayedNote
     }
 
+-- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
+data Strength = Pianismo | Piano | MezzoPiano | MezzoMezzo | MezzoForte | Forte | Fortisimo
+  deriving (Eq, Ord, Show, Read, Enum)
+
 -- | Construct a note from a 'Strength' and zero or more 'ProcGen.Music.KeyFreq88.KeyIndex' values
 -- which refer to notes on an 88-key piano keyboard.
 scoreNote :: NoteReference -> Strength -> [KeyIndex] -> ScoredNote
@@ -148,25 +150,6 @@ newtype NoteReference = NoteReference Int deriving (Eq, Ord, Show)
 -- | A 'Note' that is not tied.
 untied :: NoteReference
 untied = NoteReference minBound
-
--- | The value of the note played in a 'Note'.
-data NoteValue
-  = Single !Word8
-    -- ^ Play a single note, the 'Data.Wordl.Word8' value will be used as an index to a table
-    -- constructed by a 'keySigFreqTable' for whatever key signature a given bar is played in.
-  | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
-  deriving (Eq, Ord, Show, Read)
-
--- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
-data Strength = Pianismo | Piano | MezzoPiano | MezzoMezzo | MezzoForte | Forte | Fortisimo
-  deriving (Eq, Ord, Show, Read, Enum)
-
--- | Construct a 'NoteValue'. It is better to just use 'scoreNote' rather than ever call this
--- function directly.
-noteValue :: KeyIndex -> [KeyIndex] -> NoteValue
-noteValue a = \ case
-  [] -> Single $ keyIndexToWord8 a
-  ax -> Chord $ Unboxed.fromList $ keyIndexToWord8 <$> a:ax
 
 ----------------------------------------------------------------------------------------------------
 
