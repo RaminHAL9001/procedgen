@@ -58,17 +58,17 @@ instance IsString InstrumentID where { fromString = InstrumentID . Strict.pack; 
 -- may have 3 versions of a violin sound playing the note A4 with
 -- 'ProcGen.Music.Composition.MezzoForte' strength, perhaps one which is a slightly squeaky or
 -- scratchy sound. Every time the sound A4 mezzo forte is selected, one of those three are seleted
--- from a 'Sequencer' using 'getSound'. The squeaky/scratchy sound can be weighted such that it is
--- randomly selected less often.
+-- from a 'Sequencer' using 'chooseSound'. The squeaky/scratchy sound can be weighted such that it
+-- is randomly selected less often.
 data ToneID = ToneID !ToneKeyIndicies !ToneTagSet
   deriving (Eq, Ord, Show)
 
 -- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded). This is not used
 -- for drum kits.
 data ToneKeyIndicies
-  = KeyTone    !KeyIndex
-  | SlideTone  !KeyIndex !KeyIndex
-  | CrossFade  !KeyIndex !KeyIndex
+  = KeyTone    !NoteValue
+  | SlideTone  !NoteValue !NoteValue
+  | CrossFade  !NoteValue !NoteValue
   deriving (Eq, Ord, Show)
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
@@ -86,9 +86,12 @@ toneTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nu
 
 minMaxKeyIndex :: ToneKeyIndicies -> (KeyIndex, KeyIndex)
 minMaxKeyIndex = \ case
-  KeyTone   a   -> (a, a)
-  SlideTone a b -> (min a b, max a b)
-  CrossFade a b -> (min a b, max a b)
+  KeyTone   a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
+  SlideTone a b -> minmax2 a b
+  CrossFade a b -> minmax2 a b
+  where
+    idx2    a b = noteKeyIndicies a ++ noteKeyIndicies b
+    minmax2 a b = (minimum $ idx2 a b, maximum $ idx2 a b)
 
 ----------------------------------------------------------------------------------------------------
 

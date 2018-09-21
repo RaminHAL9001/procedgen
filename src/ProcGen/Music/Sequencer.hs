@@ -187,25 +187,18 @@ class PlayToTrack signal where
 instance PlayToTrack (PlayedRole PlayedNote) where
   playToTrack track t0 signal = do
     let role = theShapedSignal signal
-    let putSound sound = signal{ theShapedSignal = sound }
     gets (Map.lookup (thePlayedRoleInstrument role) . theSequencerInstruments) >>= \ case
       Nothing     -> error $ "TODO: play role with sine wave generator"
       Just instrm -> forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) -> do
         forM_ notes $ \ case
           RestNote -> return ()
-          note     -> mapM_
-            (sequencerInstrumentNote instrm >=> playToTrack track (t0 + t) . putSound)
-            (flip ToneID (toneTagSet []) . KeyTone <$> noteKeyIndicies (playedNoteValue note))
+          note     -> sequencerInstrumentNote instrm (playedNoteValue note) >>=
+            maybe (return ()) (playToTrack track (t0 + t) . shapedSound)
             -- TODO: noteKeyIndicies isn't enough, you need to
             -- construct 'SlideNote's or 'CrossFade' notes for tied notes.
 
 instance PlayToTrack Sound where
   playToTrack track t0 = playToTrack track t0 . fmap soundTDSignal
-
-instance PlayToTrack (Maybe Sound) where
-  playToTrack track t0 signal = case theShapedSignal signal of
-    Nothing    -> return ()
-    Just sound -> playToTrack track t0 signal{ theShapedSignal = sound }
 
 instance PlayToTrack [Sound] where
   playToTrack track t0 signal = forM_ (theShapedSignal signal) $ \ sound ->

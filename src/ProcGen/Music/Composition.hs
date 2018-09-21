@@ -101,6 +101,7 @@ data ScoredNote
       -- to the 'playedNotID' of 'Note' defined with the 'TiedNote' constructor.
     , scoredStrength  :: !Strength
     , scoredNoteValue :: !NoteValue
+    , scoredNoteTags  :: !ToneTagSet
     }
   deriving (Eq, Ord, Show)
 
@@ -111,7 +112,7 @@ data PlayedNote
   | PlayedNote
     { playedDuration  :: !Duration
     , playedStrength  :: !Strength
-    , playedNoteValue :: !NoteValue
+    , playedNoteValue :: !ToneID
     , playedTied      :: !PlayedNote
     }
 
@@ -121,23 +122,26 @@ data Strength = Pianismo | Piano | MezzoPiano | MezzoMezzo | MezzoForte | Forte 
 
 -- | Construct a note from a 'Strength' and zero or more 'ProcGen.Music.KeyFreq88.KeyIndex' values
 -- which refer to notes on an 88-key piano keyboard.
-scoreNote :: NoteReference -> Strength -> [KeyIndex] -> ScoredNote
-scoreNote tied strength = \ case
+scoreNote :: NoteReference -> [ToneTag] -> Strength -> [KeyIndex] -> ScoredNote
+scoreNote tied tags strength = \ case
   []   -> ScoredRestNote
   a:ax -> ScoredNote
     { scoredTiedID    = tied
     , scoredStrength  = strength
     , scoredNoteValue = noteValue a ax
+    , scoredNoteTags  = toneTagSet tags
     }
 
 -- | Convert a 'ScoredNote' to a 'PlayedNote'.
 playScoredNote :: Duration -> ScoredNote -> PlayedNote
-playScoredNote dt note = PlayedNote
-  { playedDuration  = dt
-  , playedStrength  = scoredStrength  note
-  , playedNoteValue = scoredNoteValue note
-  , playedTied      = RestNote
-  }
+playScoredNote dt = \ case
+  ScoredRestNote -> RestNote
+  note           -> PlayedNote
+    { playedDuration  = dt
+    , playedStrength  = scoredStrength note
+    , playedNoteValue = ToneID (KeyTone $ scoredNoteValue note) (scoredNoteTags note)
+    , playedTied      = RestNote
+    }
 
 ----------------------------------------------------------------------------------------------------
 
