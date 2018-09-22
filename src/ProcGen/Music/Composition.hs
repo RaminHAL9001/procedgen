@@ -37,7 +37,7 @@ module ProcGen.Music.Composition
   ( CommonChordProg(..),
     -- * Individual Notes
     ScoredNote(..), scoreNote,
-    PlayedNote(..), playScoredNote,
+    PlayedNote(..), playScoredNote, getTiedNotes,
     NoteReference, untied,
     Strength(..),
     -- * Arranging Notes
@@ -120,8 +120,29 @@ data PlayedNote
 data Strength = Pianismo | Piano | MezzoPiano | MezzoMezzo | MezzoForte | Forte | Fortisimo
   deriving (Eq, Ord, Show, Read, Enum)
 
+-- | Extract a sequence of all tied notes from a 'PlayedNote'. This will re-write the 'ToneID's of
+-- the 'playedNoteValue's. If any of the 'PlayedNote's are already slide notes, their existing
+-- slides will be over-written to ensure the list of 'PlayedNote's produced slide from one to the
+-- next smoothly.
+getTiedNotes :: PlayedNote -> [PlayedNote]
+getTiedNotes = \ case
+  RestNote -> []
+  note1    -> case playedTied note1 of
+    RestNote -> [note1]
+    note2    -> note1
+      { playedNoteValue =
+          let (ToneID _ tags) = playedNoteValue note1
+              firstOf =
+                (\ (ToneID idx _) -> case idx of
+                  KeyTone   a   -> a
+                  SlideTone a _ -> a
+                  CrossFade a _ -> a
+                ) . playedNoteValue
+          in  ToneID (SlideTone (firstOf note1) (firstOf note2)) tags
+      } : getTiedNotes note2
+
 -- | Construct a note from a 'Strength' and zero or more 'ProcGen.Music.KeyFreq88.KeyIndex' values
--- which refer to notes on an 88-key piano keyboard.
+-- which refer to notes on an 88-key piano keyboar.d
 scoreNote :: NoteReference -> [ToneTag] -> Strength -> [KeyIndex] -> ScoredNote
 scoreNote tied tags strength = \ case
   []   -> ScoredRestNote
