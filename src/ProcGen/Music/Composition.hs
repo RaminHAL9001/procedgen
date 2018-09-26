@@ -39,13 +39,13 @@ module ProcGen.Music.Composition
     ScoredNote(..), scoreNote,
     PlayedNote(..), playScoredNote, getTiedNotes,
     NoteReference, untied,
-    Strength(..),
+    Strength(..),  strengthToAmplitude,
     -- * Arranging Notes
     Bar(..), makeBar,
     SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence,
     NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
-    Composition, evalComposition, randGenComposition,
+    Composition, evalComposition, randGenComposition, composeKeySignature,
     ScorableNote(..), note, rest, quick, tieNote, tie, untie,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
@@ -117,8 +117,18 @@ data PlayedNote
     }
 
 -- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
-data Strength = Pianismo | Piano | MezzoPiano | MezzoMezzo | MezzoForte | Forte | Fortisimo
+data Strength = Pianismo | Piano | MezzoPiano | Moderare | MezzoForte | Forte | Fortisimo
   deriving (Eq, Ord, Show, Read, Enum)
+
+strengthToAmplitude :: Strength -> Amplitude
+strengthToAmplitude = \ case
+  Pianismo   -> 1/7
+  Piano      -> 2/7
+  MezzoPiano -> 3/7
+  Moderare   -> 4/7
+  MezzoForte -> 5/7
+  Forte      -> 6/7
+  Fortisimo  -> 7/7
 
 -- | Extract a sequence of all tied notes from a 'PlayedNote'. This will re-write the 'ToneID's of
 -- the 'playedNoteValue's. If any of the 'PlayedNote's are already slide notes, their existing

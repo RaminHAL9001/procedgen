@@ -26,6 +26,7 @@ module ProcGen.Music.Sequencer
 
 import           ProcGen.Types
 import           ProcGen.Arbitrary
+import           ProcGen.Buffer
 import           ProcGen.Music.Composition
 import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.SoundFont
@@ -33,8 +34,8 @@ import           ProcGen.Music.Synth
 import           ProcGen.Music.WaveFile
 
 import           Control.Lens
-import           Control.Monad.Random
-import           Control.Monad.State
+--import           Control.Monad.Random
+--import           Control.Monad.State
 
 import qualified Data.Map                    as Map
 import           Data.Semigroup
@@ -185,13 +186,15 @@ class PlayToTrack signal where
   playToTrack :: Target Track -> Target Moment -> Source (ShapedSignal signal) -> Sequencer ()
 
 instance PlayToTrack (PlayedRole PlayedNote) where
-  playToTrack track t0 signal = let role = theShapedSignal signal in
+  playToTrack track t0 signal = do
+    let role = theShapedSignal signal
+    let getNotes f = forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) ->
+          forM_ (notes >>= getTiedNotes) $ \ note -> f (t0 + t) note
     gets (Map.lookup (thePlayedRoleInstrument role) . theSequencerInstruments) >>= \ case
-      Nothing     -> error $ "TODO: play role with sine wave generator"
-      Just instrm -> forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) ->
-        forM_ (notes >>= getTiedNotes) $ \ note ->
-          sequencerInstrumentNote instrm (playedNoteValue note) >>= maybe (return ())
-            (playToTrack track (t0 + t) . flip basicShapedSignal (playedDuration note))
+      Nothing     -> getNotes $ playSinusoidToTrack track
+      Just instrm -> getNotes $ \ t note ->
+        sequencerInstrumentNote instrm (playedNoteValue note) >>=
+        maybe (return ()) (playToTrack track t . flip basicShapedSignal (playedDuration note))
 
 instance PlayToTrack Sound where
   playToTrack track t0 = playToTrack track t0 . fmap soundTDSignal
@@ -233,6 +236,29 @@ sequencerInstrumentNote :: ToneInstrument -> ToneID -> Sequencer (Maybe Sound)
 sequencerInstrumentNote instr tone = case Map.lookup tone $  instr ^. toneTable of
   Nothing       -> return Nothing
   Just soundset -> chooseSound soundset
+
+playSinusoidToTrack :: Target Track -> Target Moment -> PlayedNote -> Sequencer ()
+playSinusoidToTrack (Track vecT) t0 = \ case
+  RestNote -> return ()
+  note     -> do
+    let (ToneID idx _tag) = playedNoteValue note
+    let dt = playedDuration note
+    let (idxA, idxB) = case idx of
+          KeyTone   a   -> (a, a)
+          SlideTone a b -> (a, b)
+          CrossFade a b -> (a, b)
+    let (lenA, lenB) = (noteWeight idxA, noteWeight idxB)
+    let key len = take len . cycle . fmap keyboard88 . noteKeyIndicies
+    forM_ (zip (key lenA idxA) (key lenB idxB)) $ \ (a, b) -> do
+      let i0   = durationSampleCount t0
+      let tone = if a == b then const a else \ t -> a + (a - b) *
+            sigmoid TimeWindow{ timeStart = 0, timeEnd = dt } t
+      phase <- onRandFloat (* (2 * pi))
+      liftIO $ mapBuffer vecT
+        (TimeWindow{ timeStart = i0, timeEnd = i0 + durationSampleCount dt }) $ \ i e -> do
+          let t = indexToTime $ i - i0
+          pure $ e + sinePulse (tone t) phase t *
+            fadeInOut t0 (t0 + 2 / a) (t0 + dt - 2 / b) (t0 + dt) t
 
 ----------------------------------------------------------------------------------------------------
 

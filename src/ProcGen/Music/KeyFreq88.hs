@@ -6,7 +6,7 @@ module ProcGen.Music.KeyFreq88
     -- * The 88-Key Piano Keyboard
     KeyIndex, keyIndex, keyIndexToWord8,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
-    NoteValue(..), noteValue, noteKeyIndicies,
+    NoteValue(..), noteValue, noteWeight, noteKeyIndicies,
     -- * Chords
     KeySignature(..), keySignature, keySigFreqTable,
     NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
@@ -243,6 +243,11 @@ noteKeyIndicies :: NoteValue -> [KeyIndex]
 noteKeyIndicies = fmap KeyIndex . \ case
   Single w -> [w]
   Chord wx -> Unboxed.toList wx
+
+noteWeight :: NoteValue -> Int
+noteWeight = \ case
+  Single{}  -> 1
+  Chord vec -> Unboxed.length vec
 
 ----------------------------------------------------------------------------------------------------
 
