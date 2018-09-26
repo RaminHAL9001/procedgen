@@ -189,7 +189,7 @@ instance PlayToTrack (PlayedRole PlayedNote) where
   playToTrack track t0 signal = do
     let role = theShapedSignal signal
     let getNotes f = forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) ->
-          forM_ (notes >>= getTiedNotes) $ \ note -> f (t0 + t) note
+          forM_ (notes >>= getTiedNotes) $ f $ t0 + t
     gets (Map.lookup (thePlayedRoleInstrument role) . theSequencerInstruments) >>= \ case
       Nothing     -> getNotes $ playSinusoidToTrack track
       Just instrm -> getNotes $ \ t note ->
@@ -204,33 +204,43 @@ instance PlayToTrack [Sound] where
     playToTrack track t0 signal{ theShapedSignal = sound }
 
 instance PlayToTrack Track where
-  playToTrack = error "TODO: ProcGen.Music.Sequencer.playToTrack :: Track -> Track -> Sequencer ()"
+  playToTrack = let vec (Track v) = v in
+    copyVecToTrack (Mutable.length . vec) (Mutable.read . vec)
 
 instance PlayToTrack TDSignal where
   playToTrack track t0 = playToTrack track t0 . fmap tdSamples
 
 instance PlayToTrack (Unboxed.Vector Sample) where
-  playToTrack (Track vecT) t0 shapsig = do
-    let vecS = shapsig ^. shapedSignal
-    let topT = Mutable.length vecT
-    let topS = Unboxed.length vecS
-    let s0   = shapsig ^. shapeInitTime
-    let ds   = shapsig ^. shapeDuration
-    let s1   = s0 + (shapsig ^. shapeAttackDuration)
-    let s2   = s0 + ds - (shapsig ^. shapeDecayDuration)
-    let iT0  = fst (timeIndex t0)
-    let iS0  = max 0 $ min topS $ fst (timeIndex s0)
-    let gapT = max 0 $ topT - iT0
-    let maxS = min topS $ iS0 + gapT
-    let iS1  = max 0 $ min maxS $ fst (timeIndex s1)
-    let iS2  = max 0 $ min maxS $ fst (timeIndex s2)
-    let mkenv env s0 s1 = (shapsig ^. env) (TimeWindow{ timeStart=s0, timeEnd=s1 }) . indexToTime
-    let attack = mkenv shapeAttackEnvelope s0 s1
-    let decay  = mkenv shapeDecayEnvelope s2 (s0 + ds)
-    let loop env top iT iS = if iS >= top then return (iT, iS) else do
-          liftIO $ Mutable.write vecT iT $! env iS * (vecS Unboxed.! iS)
-          (loop env top $! iT + 1) $! iS + 1
-    void $ loop attack iS1 iT0 iS0 >>= uncurry (loop (const 1.0) iS2) >>= uncurry (loop decay topS)
+  playToTrack = copyVecToTrack Unboxed.length (\ vec -> pure . (vec Unboxed.!))
+
+copyVecToTrack
+  :: (vec -> Int) -- ^ get the size
+  -> (vec -> Int -> IO Sample) -- ^ read the vector
+  -> Target Track -> Target Moment -> ShapedSignal vec -> Sequencer ()
+copyVecToTrack length read (Track vecT) t0 shapesig = do
+  let vecS   = shapesig ^. shapedSignal
+  let lenS   = length vecS
+  let topS   = sampleCountDuration lenS
+  let s0     = shapesig ^. shapeInitTime
+  let att'   = max 0 $ shapesig ^. shapeAttackDuration
+  let dect'  = max 0 $ shapesig ^. shapeDecayDuration
+  let dt     = max 0 $ shapesig ^. shapeDuration
+  let edges  = att' + dect'
+  let escale = if att' >= 0 && dect' >= 0 && dt < edges then dt / edges else 1.0
+  let (att, dect) = (att' * escale, dect' * escale)
+  let time t0 dt = TimeWindow
+        { timeStart = t0
+        , timeEnd   = t0 + min (s0 + dt) topS - s0
+        }
+  let attackWin = time t0 att
+  let playWin   = time (timeEnd attackWin) dt
+  let decayWin  = time (timeEnd playWin) dect
+  let idx       = fmap durationSampleCount
+  let f i e     = (+ e) <$> read vecS i
+  when (dt > 1/32) $ liftIO $ do
+    mapBuffer vecT (idx attackWin) f
+    mapBuffer vecT (idx playWin  ) f
+    mapBuffer vecT (idx decayWin ) f
 
 sequencerInstrumentNote :: ToneInstrument -> ToneID -> Sequencer (Maybe Sound)
 sequencerInstrumentNote instr tone = case Map.lookup tone $  instr ^. toneTable of
@@ -244,9 +254,8 @@ playSinusoidToTrack (Track vecT) t0 = \ case
     let (ToneID idx _tag) = playedNoteValue note
     let dt = playedDuration note
     let (idxA, idxB) = case idx of
-          KeyTone   a   -> (a, a)
-          SlideTone a b -> (a, b)
-          CrossFade a b -> (a, b)
+          KeyTone    a   -> (a, a)
+          TiedNote _ a b -> (a, b)
     let (lenA, lenB) = (noteWeight idxA, noteWeight idxB)
     let key len = take len . cycle . fmap keyboard88 . noteKeyIndicies
     forM_ (zip (key lenA idxA) (key lenB idxB)) $ \ (a, b) -> do

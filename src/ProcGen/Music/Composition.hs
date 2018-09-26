@@ -98,7 +98,7 @@ data ScoredNote
   | ScoredNote
     { scoredTiedID    :: !NoteReference
       -- ^ Set to 'untied' if this note is not tied. If not 'untied' (if it is tied) it must refer
-      -- to the 'playedNotID' of 'Note' defined with the 'TiedNote' constructor.
+      -- to the 'playedNoteID' of 'Note' defined with the 'tieNote' constructor.
     , scoredStrength  :: !Strength
     , scoredNoteValue :: !NoteValue
     , scoredNoteTags  :: !ToneTagSet
@@ -139,17 +139,7 @@ getTiedNotes = \ case
   RestNote -> []
   note1    -> case playedTied note1 of
     RestNote -> [note1]
-    note2    -> note1
-      { playedNoteValue =
-          let (ToneID _ tags) = playedNoteValue note1
-              firstOf =
-                (\ (ToneID idx _) -> case idx of
-                  KeyTone   a   -> a
-                  SlideTone a _ -> a
-                  CrossFade a _ -> a
-                ) . playedNoteValue
-          in  ToneID (SlideTone (firstOf note1) (firstOf note2)) tags
-      } : getTiedNotes note2
+    note2    -> note1 : getTiedNotes note2
 
 -- | Construct a note from a 'Strength' and zero or more 'ProcGen.Music.KeyFreq88.KeyIndex' values
 -- which refer to notes on an 88-key piano keyboar.d
@@ -241,7 +231,20 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
     in (list, IMap.alter (Just . maybe [play] (play :)) i table)
   tie (t2, n2) (t1, n1) = case n1 of
     RestNote     -> (t2, n2)
-    PlayedNote{} -> (t1, n1{ playedTied = n2, playedDuration = playedDuration n2 + t2 - t1})
+    PlayedNote{} -> (,) t1 $ n1
+      { playedNoteValue = let unchanged = playedNoteValue n1 in case n2 of
+          RestNote     -> unchanged
+          PlayedNote{} ->
+            let (ToneID key1 tags1) = playedNoteValue n1
+                (ToneID key2 _    ) = playedNoteValue n2
+            in  case key1 of
+                  KeyTone a -> case key2 of
+                    KeyTone b -> ToneID (TiedNote TieNotes a b) tags1
+                    _         -> unchanged
+                  _         -> unchanged
+      , playedTied = n2
+      , playedDuration = playedDuration n2 + t2 - t1
+      }
   makeTied = fmap (foldl1 tie) . IMap.elems
 
 ----------------------------------------------------------------------------------------------------

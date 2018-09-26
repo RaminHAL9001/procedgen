@@ -6,7 +6,7 @@ module ProcGen.Music.SoundFont
   ( -- * Defining Drum Sets
     DrumID(..), DrumKit, drumSounds, drumTable, addDrumToKit,
     -- * Defining Tonal Insruments
-    InstrumentID(..), ToneID(..), ToneKeyIndicies(..), ToneTag(..),
+    InstrumentID(..), ToneID(..), ToneKeyIndicies(..), TiedTag(..), ToneTag(..),
     ToneInstrument, addToneToInstrument, toneInstrument, toneSounds,
     ToneTagSet, toneTagSet, toneTable, minMaxKeyIndex,
     -- * Working with Sound objects
@@ -67,9 +67,12 @@ data ToneID = ToneID !ToneKeyIndicies !ToneTagSet
 -- for drum kits.
 data ToneKeyIndicies
   = KeyTone    !NoteValue
-  | SlideTone  !NoteValue !NoteValue
-  | CrossFade  !NoteValue !NoteValue
+  | TiedNote   !TiedTag  !NoteValue !NoteValue
   deriving (Eq, Ord, Show)
+
+-- | A tag used to indicate how notes are tied.
+data TiedTag = TieNotes | CrossFadeNotes
+  deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
 data ToneTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
@@ -86,9 +89,8 @@ toneTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nu
 
 minMaxKeyIndex :: ToneKeyIndicies -> (KeyIndex, KeyIndex)
 minMaxKeyIndex = \ case
-  KeyTone   a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
-  SlideTone a b -> minmax2 a b
-  CrossFade a b -> minmax2 a b
+  KeyTone    a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
+  TiedNote _ a b -> minmax2 a b
   where
     idx2    a b = noteKeyIndicies a ++ noteKeyIndicies b
     minmax2 a b = (minimum $ idx2 a b, maximum $ idx2 a b)
