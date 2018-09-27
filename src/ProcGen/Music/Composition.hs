@@ -232,7 +232,9 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
   tie (t2, n2) (t1, n1) = case n1 of
     RestNote     -> (t2, n2)
     PlayedNote{} -> (,) t1 $ n1
-      { playedNoteValue = let unchanged = playedNoteValue n1 in case n2 of
+      { playedTied      = n2
+      , playedDuration  = playedDuration n2 + t2 - t1
+      , playedNoteValue = let unchanged = playedNoteValue n1 in case n2 of
           RestNote     -> unchanged
           PlayedNote{} ->
             let (ToneID key1 tags1) = playedNoteValue n1
@@ -242,8 +244,6 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
                     KeyTone b -> ToneID (TiedNote TieNotes a b) tags1
                     _         -> unchanged
                   _         -> unchanged
-      , playedTied = n2
-      , playedDuration = playedDuration n2 + t2 - t1
       }
   makeTied = fmap (foldl1 tie) . IMap.elems
 
@@ -386,31 +386,48 @@ rest :: Composition ()
 rest = note ScoredRestNote
 
 -- | Sieze the current time 'Interval' of the current 'SubDiv', and begin sub-dividing it with every
--- note played.
-quick :: Composition () -> Composition ()
-quick subcomposition = do
+-- note played. The 'Composition' state does not contain timing information, timing is applied using
+-- 'playNotSequence', however the information on how time is sub-divided is maintained in the 'Composition' state.
+--
+-- After a 'Composition' function is evaluated by 'evalComposition', suppose you pass the top-level
+-- 'SubDiv' passed to 'playNoteSequence' using a duration of 4.0 seconds for the top-level
+-- interval. When the notes are sequenced, the 'quick' function will subdivide this 4.0 second
+-- interval such that if you play 4 'note's, each note is played for a duration of 1.0 seconds.
+--
+-- If instead of playing a 'note' you play a nested call to 'quick' the 1.0 second interval will be
+-- further sub-divided. Within this nested 'quick' if two 'note's are played, each note is played
+-- for a duration of 0.5 seconds.
+quick :: Composition void -> Composition (SubDiv ScoredNote)
+quick = fmap snd . quick'
+
+-- | Like 'quick' but does not throw away the value of type @a@ that was returned by the
+-- 'Composition' function parameter that was evaluated.
+quick' :: Composition a -> Composition (a, SubDiv ScoredNote)
+quick' subcomposition = do
   oldnotes <- use composeNotes     <* (composeNotes     .= [])
   oldcount <- use composeNoteCount <* (composeNoteCount .= 0)
-  subcomposition
+  a <- subcomposition
   notes    <- use composeNotes
   count    <- use composeNoteCount
   let mkvec count elems = Boxed.create $ do
         vec <- Mutable.new count
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) (count - 1)) elems
         return vec
-  composeNotes     .= SubDivBranch (mkvec count notes) : oldnotes
+  let subdiv = SubDivBranch $ mkvec count notes
+  composeNotes     .= subdiv : oldnotes
   composeNoteCount .= oldcount + 1
+  return (a, subdiv)
 
 -- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
 -- held for a time until the future 'untie'd note is reached.
 tieNote :: ScorableNote n => n -> Composition (NoteReference, ScoredNote)
 tieNote = toNote >=> \ case
-  n@ScoredNote{} -> do
+  n@ScoredNote{}  -> do
     i <- composeTieID += 1 >> use composeTieID
     composeNotes %= (:) (SubDivLeaf n{ scoredTiedID = NoteReference i })
     return (NoteReference i, n)
-  n -> do
-    return (untied, n)
+  ScoredRestNote -> do
+    return (untied, ScoredRestNote)
 
 -- | Shorthand for 'tieNote' returning only the 'NoteReference' and not the 'Note' constructed with
 -- it.
@@ -424,4 +441,4 @@ tie = fmap fst . tieNote
 untie :: ScorableNote note => NoteReference -> note -> Composition ()
 untie ref = toNote >=> \ case
   ScoredRestNote -> return ()
-  n -> note n{ scoredTiedID = ref }
+  n@ScoredNote{} -> note n{ scoredTiedID = ref }
