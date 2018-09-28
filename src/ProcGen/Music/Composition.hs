@@ -447,6 +447,22 @@ newtype Composition a = Composition (StateT CompositionState (TFRandT IO) a)
 
 data CompositionState
   = CompositionState
-    { theComposedInstruments :: Map.Map InstrumentID (PlayedRole PlayedNote)
+    { theCompositionMeasure  :: !Duration
+    , theCompositionMoment   :: !Moment
+    , theComposedInstruments :: Map.Map InstrumentID (PlayedRole PlayedNote)
     , theComposedDrums       :: PlayedRole DrumID
     }
+
+-- | The amount of time for each measure. This parameter essentially sets the tempo of the music.
+compositionMeasure :: Lens' CompositionState Duration
+compositionMeasure = lens theCompositionMoment $ \ a b -> a{ theCompositionMoment = b }
+
+compositionMoment :: Lens' CompositionState Moment
+compositionMoment = lens theCompositionMoment $ \ a b -> a{ theCompositionMoment = b }
+
+composedInstruments :: Lens' CompositionState (Map.Map InstrumentID (PlayedRole PlayedNote))
+composedInstruments = lens theComposedInstruments $ \ a b -> a{ theComposedInstruments = b }
+
+composedDrums :: Lens' CompositionState (PlayedRole DrumID)
+composedDrums = lens theComposedDrums $ \ a b -> a{ theComposedDrums = b }
+  
