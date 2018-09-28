@@ -41,8 +41,7 @@ module ProcGen.Music.Composition
     NoteReference, untied,
     Strength(..),  strengthToAmplitude,
     -- * Arranging Notes
-    Bar(..), makeBar,
-    SubDiv(..), PlayedRole(..), playedRoleInstrument, playedRoleSequence,
+    Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence,
     NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
     Composition, evalComposition, randGenComposition, composeKeySignature,
@@ -93,7 +92,7 @@ data CommonChordProg
 -- 'Composition' whereas a 'PlayedNote' is an instruction to a synthesizer to play a particular
 -- note.
 data ScoredNote
-  = ScoredRestNote -- ^ indicates that nothing is played for the duration of the 'SubDiv'.
+  = ScoredRestNote -- ^ indicates that nothing is played for the duration of the 'Bar'.
     -- ^ This must refer to a note that was played at an earlier point in the composition.
   | ScoredNote
     { scoredTiedID    :: !NoteReference
@@ -178,44 +177,68 @@ untied = NoteReference minBound
 
 ----------------------------------------------------------------------------------------------------
 
--- | A 'Bar' is a single unit of a composition that can be constructed by the stateful function type
--- 'ComposeRoleT'. 'ComposeRoleT' will subdivide a 'Bar' into units and then play a sequence of
--- notes at each unit. The constructed 'Bar' can then be translated into a 'NoteSequence' using the
--- 'playNoteSequence' function.
+-- | A data structure for sub-dividing a measure of time. A 'Bar' contains more structure than a
+-- 'NoteSequence' but ultimately must be translated to a 'NoteSequence' to be of any use. The 'Bar'
+-- data type is used within the 'Composition' data type to compose music, whereas the 'NoteSequence'
+-- data type is used to sequence the sounds that make music onto a recorded track of audio data.
 data Bar leaf
-  = Bar
-    { playMetaOffset :: !Percentage
-      -- ^ Wait an amount of time, specified as a percentage of the measure play time, before
-      -- playing the notes defined in this measure.
-    , playMetaCutoff :: !Percentage
-      -- ^ Stop playing after some percentage of the measure play time after the 'playMetaOffset'
-      -- has begun, regardless of whether unplayed notes remain in this measure. For example, if the
-      -- play offset is 0.25 and you want to play only to the end of the measure and no more beyond
-      -- it, specify 0.75 for 'playMetaCutoff'. Basically, the 'playMetaOffset' and 'playMetaCutoff'
-      -- add together to specify the point in time after the start of the measure where the measure
-      -- starts and ends. If the sum of these two values is greater than 1.0, the notes will be
-      -- played beyond the end of the measure.
-    , playNoteTree   :: !(SubDiv leaf)
-    }
-  deriving Functor
+  = BarLeaf   !leaf
+  | BarBranch !(Boxed.Vector (Bar leaf))
+  deriving (Eq, Functor)
 
-makeBar :: Bar leaf
-makeBar = Bar
-  { playMetaOffset = 0.0
-  , playMetaCutoff = 1.0
-  , playNoteTree   = SubDivBranch Boxed.empty
-  }
+instance Semigroup (Bar leaf) where
+  a <> b = case a of
+    BarLeaf{} -> case b of
+      BarLeaf{}   -> BarBranch $ Boxed.fromList [a, b]
+      BarBranch b -> if Boxed.null b then a else BarBranch $ Boxed.cons a b
+    BarBranch a -> if Boxed.null a then b else case b of
+      BarLeaf{}   -> BarBranch $ Boxed.snoc a b
+      BarBranch b -> BarBranch $ a <> b
+
+instance Monoid (Bar leaf) where
+  mempty = BarBranch Boxed.empty
+  mappend = (<>)
 
 -- | Construct a lazy list in reverse order (so you can 'Prelude.foldr' over it in forward
 -- order). The result of this function evaluation is intended to be passed to other intermediate
 -- computations before producing a final 'NoteSequence' data structure.
 sequenceBar :: Moment -> Duration -> Bar note -> [(Moment, Duration, note)]
-sequenceBar t0 dt0 msur = loop dt0 (t0 + playMetaOffset msur, playNoteTree msur) [] where
-  loop dt0 (t0, subdiv) list = if t0 >= playMetaCutoff msur then list else case subdiv of
-    SubDivLeaf  note -> (t0, dt0, note) : list
-    SubDivBranch vec -> if Boxed.null vec then mempty else
+sequenceBar t0 dt0 msur = loop dt0 (t0, msur) [] where
+  loop dt0 (t0, subdiv) list = case subdiv of
+    BarLeaf  note -> (t0, dt0, note) : list
+    BarBranch vec -> if Boxed.null vec then mempty else
       let dt = dt0 / realToFrac (Boxed.length vec) in
       foldr (loop dt) list $ zip (iterate (+ dt) t0) (Boxed.toList vec)
+
+----------------------------------------------------------------------------------------------------
+
+-- | A mapping from 'ProcGen.Types.Moment's in time to @note@s. Essentially this is just a map data
+-- structure that instantiates 'Data.Semigroup.Semigroup' and 'Data.Monoid.Monoid' such that the
+-- append @('Data.Semigroup.<>')@ function performs the right-biased union of the maps, where
+-- right-bias meaning the @note@ on the right of the @('Data.Semigroup.<>')@ operator overwrites the
+-- @note on the left of the operator if the two operators appear in the exact same
+-- 'ProcGen.Types.Moment' in time. Use 'playNoteSequence' to convert a 'Bar' to a 'NoteSequence'.
+newtype NoteSequence note = NoteSequence (Map.Map Moment [note])
+  deriving (Eq, Functor)
+
+instance Semigroup (NoteSequence note) where
+  NoteSequence a <> NoteSequence b = NoteSequence $ Map.unionWith (++) a b
+
+instance Monoid (NoteSequence note) where
+  mempty = NoteSequence Map.empty
+  mappend = (<>)
+
+listNoteSequence :: NoteSequence note -> [(Moment, [note])]
+listNoteSequence (NoteSequence map) = Map.assocs map
+
+-- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
+-- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
+-- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
+-- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
+playNoteSequence :: Moment -> Duration -> Bar ScoredNote -> NoteSequence PlayedNote
+playNoteSequence t0 dt0 = NoteSequence
+  . foldr (uncurry $ Map.insertWith (++)) Map.empty
+  . fmap (fmap pure) . tieSequencedNotes . sequenceBar t0 dt0
 
 -- | A 'Prelude.foldr' over the result of 'sequenceBar' in which 'PlayedNotes' that share the same
 -- 'NoteReference' in their 'scoredTiedID' are "tied" together, meaning all tied notes are linked
@@ -249,43 +272,6 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
 
 ----------------------------------------------------------------------------------------------------
 
--- | A mapping from 'ProcGen.Types.Moment's in time to @note@s. Essentially this is just a map data
--- structure that instantiates 'Data.Semigroup.Semigroup' and 'Data.Monoid.Monoid' such that the
--- append @('Data.Semigroup.<>')@ function performs the right-biased union of the maps, where
--- right-bias meaning the @note@ on the right of the @('Data.Semigroup.<>')@ operator overwrites the
--- @note on the left of the operator if the two operators appear in the exact same
--- 'ProcGen.Types.Moment' in time.
-newtype NoteSequence note = NoteSequence (Map.Map Moment [note])
-  deriving (Eq, Functor)
-
--- | A data structure for sub-dividing a measure of time. A 'SubDiv' contains more structure than a
--- 'NoteSequence' but ultimately must be translated to a 'NoteSequence' to be of any use.
-data SubDiv leaf
-  = SubDivLeaf   !leaf
-  | SubDivBranch !(Boxed.Vector (SubDiv leaf))
-  deriving (Eq, Functor)
-
-instance Semigroup (NoteSequence note) where
-  (NoteSequence a) <> (NoteSequence b) = NoteSequence (Map.union b a)
-
-instance Monoid (NoteSequence note) where
-  mempty = NoteSequence mempty
-  mappend = (<>)
-
-listNoteSequence :: NoteSequence note -> [(Moment, [note])]
-listNoteSequence (NoteSequence map) = Map.assocs map
-
--- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
--- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
--- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
--- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
-playNoteSequence :: Moment -> Duration -> Bar ScoredNote -> NoteSequence PlayedNote
-playNoteSequence t0 dt0 = NoteSequence
-  . foldr (uncurry $ Map.insertWith (++)) Map.empty
-  . fmap (fmap pure) . tieSequencedNotes . sequenceBar t0 dt0
-
-----------------------------------------------------------------------------------------------------
-
 -- | This is a 'NoteSequence' associated with a 'ProcGen.Music.SoundFont.InstrumentID'.
 data PlayedRole note
   = PlayedRole
@@ -308,36 +294,36 @@ playedRoleSequence = lens thePlayedRoleSequence $ \ a b -> a{ thePlayedRoleSeque
 --
 -- One aspect that may be confusing about the 'Composition' function type is that the state of the
 -- 'Composition' does not keep track of time at all. Instead, a tree structure of notes of type
--- 'SubDiv' is constructed. It is only after evaluating the 'Composition' using 'runComposition'
--- that you can extract the 'SubDiv' and convert it to a timed sequence of notes using
+-- 'Bar' is constructed. It is only after evaluating the 'Composition' using 'runComposition'
+-- that you can extract the 'Bar' and convert it to a timed sequence of notes using
 -- @('setNoteDurations' . 'sequenceBar')@.
-newtype Composition a = Composition (StateT CompositionState (TFRandT IO) a)
+newtype Composition note a = Composition (StateT (CompositionState note) (TFRandT IO) a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
-data CompositionState
+data CompositionState note
   = CompositionState
     { theComposeTieID        :: !Int
     , theComposeNoteCount    :: !Int
     , theComposeKeySignature :: [ToneIndex]
-    , theComposeNotes        :: [SubDiv ScoredNote]
+    , theComposeNotes        :: [Bar note]
     }
 
-instance MonadState CompositionState Composition where
+instance MonadState (CompositionState note) (Composition note) where
   state = Composition . state
 
-instance Semigroup a => Semigroup (Composition a) where { a <> b = (<>) <$> a <*> b; }
+instance Semigroup a => Semigroup (Composition note a) where { a <> b = (<>) <$> a <*> b; }
 
-instance Monoid a => Monoid (Composition a) where
+instance Monoid a => Monoid (Composition note a) where
   mempty = return mempty
   mappend a b = mappend <$> a <*> b
 
-instance MonadRandom Composition where
+instance MonadRandom (Composition note) where
   getRandomR  = Composition . lift . getRandomR
   getRandom   = Composition $ lift getRandom
   getRandomRs = Composition . lift . getRandomRs
   getRandoms  = Composition $ lift getRandoms
 
-emptyCompositionState :: CompositionState
+emptyCompositionState :: CompositionState note
 emptyCompositionState = CompositionState
   { theComposeTieID        = 0
   , theComposeNoteCount    = 0
@@ -345,16 +331,16 @@ emptyCompositionState = CompositionState
   , theComposeNotes        = []
   }
 
-composeTieID :: Lens' CompositionState Int
+composeTieID :: Lens' (CompositionState note) Int
 composeTieID = lens theComposeTieID $ \ a b -> a{ theComposeTieID = b }
 
-composeKeySignature :: Lens' CompositionState [ToneIndex]
+composeKeySignature :: Lens' (CompositionState note) [ToneIndex]
 composeKeySignature = lens theComposeKeySignature $ \ a b -> a{ theComposeKeySignature = b }
 
-composeNotes :: Lens' CompositionState [SubDiv ScoredNote]
+composeNotes :: Lens' (CompositionState note) [Bar note]
 composeNotes = lens theComposeNotes $ \ a b -> a{ theComposeNotes = b }
 
-composeNoteCount :: Lens' CompositionState Int
+composeNoteCount :: Lens' (CompositionState note) Int
 composeNoteCount = lens theComposeNoteCount $ \ a b -> a{ theComposeNoteCount = b }
 
 ----------------------------------------------------------------------------------------------------
@@ -362,47 +348,47 @@ composeNoteCount = lens theComposeNoteCount $ \ a b -> a{ theComposeNoteCount = 
 class ScorableNote n where
   -- | Convert some value to a 'Note' so it can be played by 'note'. The unit @()@ data type
   -- instantiates this class such that @()@ can be used to indicate a 'RestNote'.
-  toNote :: n -> Composition ScoredNote
+  toNote :: n -> Composition note ScoredNote
 
 instance ScorableNote ()         where { toNote = const $ return ScoredRestNote; }
 instance ScorableNote ScoredNote where { toNote = return; }
 
 -- | Evaluate a 'Composition' function automatically seeding a new random number generator using
 -- 'Control.Random.TF.Init.initTFGen'.
-evalComposition :: Composition a -> IO a
+evalComposition :: Composition note a -> IO a
 evalComposition (Composition f) = liftM fst $
   seedIORunTFRandT $ evalStateT f emptyCompositionState 
 
-randGenComposition :: Composition a -> TFGen -> IO (a, TFGen)
+randGenComposition :: Composition note a -> TFGen -> IO (a, TFGen)
 randGenComposition (Composition f) = runTFRandT (evalStateT f emptyCompositionState)
 
 -- | Play a note
-note :: ScorableNote n => n -> Composition ()
-note n = toNote n >>= (%=) composeNotes . (:) . SubDivLeaf >> composeNoteCount += 1
+note :: ScorableNote n => n -> Composition ScoredNote ()
+note n = toNote n >>= (%=) composeNotes . (:) . BarLeaf >> composeNoteCount += 1
 
--- | Leave a brief silent gap in the current 'SubDiv' (a gap in the sub-division of the current
+-- | Leave a brief silent gap in the current 'Bar' (a gap in the sub-division of the current
 -- interval).
-rest :: Composition ()
+rest :: Composition ScoredNote ()
 rest = note ScoredRestNote
 
--- | Sieze the current time 'Interval' of the current 'SubDiv', and begin sub-dividing it with every
+-- | Sieze the current time 'Interval' of the current 'Bar', and begin sub-dividing it with every
 -- note played. The 'Composition' state does not contain timing information, timing is applied using
 -- 'playNotSequence', however the information on how time is sub-divided is maintained in the 'Composition' state.
 --
 -- After a 'Composition' function is evaluated by 'evalComposition', suppose you pass the top-level
--- 'SubDiv' passed to 'playNoteSequence' using a duration of 4.0 seconds for the top-level
+-- 'Bar' passed to 'playNoteSequence' using a duration of 4.0 seconds for the top-level
 -- interval. When the notes are sequenced, the 'quick' function will subdivide this 4.0 second
 -- interval such that if you play 4 'note's, each note is played for a duration of 1.0 seconds.
 --
 -- If instead of playing a 'note' you play a nested call to 'quick' the 1.0 second interval will be
 -- further sub-divided. Within this nested 'quick' if two 'note's are played, each note is played
 -- for a duration of 0.5 seconds.
-quick :: Composition void -> Composition (SubDiv ScoredNote)
+quick :: Composition note void -> Composition note (Bar note)
 quick = fmap snd . quick'
 
 -- | Like 'quick' but does not throw away the value of type @a@ that was returned by the
 -- 'Composition' function parameter that was evaluated.
-quick' :: Composition a -> Composition (a, SubDiv ScoredNote)
+quick' :: Composition note a -> Composition note (a, Bar note)
 quick' subcomposition = do
   oldnotes <- use composeNotes     <* (composeNotes     .= [])
   oldcount <- use composeNoteCount <* (composeNoteCount .= 0)
@@ -413,32 +399,32 @@ quick' subcomposition = do
         vec <- Mutable.new count
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) (count - 1)) elems
         return vec
-  let subdiv = SubDivBranch $ mkvec count notes
+  let subdiv = BarBranch $ mkvec count notes
   composeNotes     .= subdiv : oldnotes
   composeNoteCount .= oldcount + 1
   return (a, subdiv)
 
 -- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
 -- held for a time until the future 'untie'd note is reached.
-tieNote :: ScorableNote n => n -> Composition (NoteReference, ScoredNote)
+tieNote :: ScorableNote n => n -> Composition ScoredNote (NoteReference, ScoredNote)
 tieNote = toNote >=> \ case
   n@ScoredNote{}  -> do
     i <- composeTieID += 1 >> use composeTieID
-    composeNotes %= (:) (SubDivLeaf n{ scoredTiedID = NoteReference i })
+    composeNotes %= (:) (BarLeaf n{ scoredTiedID = NoteReference i })
     return (NoteReference i, n)
   ScoredRestNote -> do
     return (untied, ScoredRestNote)
 
 -- | Shorthand for 'tieNote' returning only the 'NoteReference' and not the 'Note' constructed with
 -- it.
-tie :: ScorableNote n => n -> Composition NoteReference
+tie :: ScorableNote n => n -> Composition ScoredNote NoteReference
 tie = fmap fst . tieNote
 
 -- | Stop playing a tied 'note'. Supply the 'NoteReference' returend by a previous call to 'tie',
 -- pass the note value to which the note must be tied as @note1@ (passing 'RestNote' means to tie
 -- the same note that initiated the 'tie'). The value @note2@ can be played with the note that is
 -- being united at the time interval it is untied.
-untie :: ScorableNote note => NoteReference -> note -> Composition ()
+untie :: ScorableNote note => NoteReference -> note -> Composition ScoredNote ()
 untie ref = toNote >=> \ case
   ScoredRestNote -> return ()
   n@ScoredNote{} -> note n{ scoredTiedID = ref }
