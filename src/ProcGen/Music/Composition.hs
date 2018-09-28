@@ -44,8 +44,9 @@ module ProcGen.Music.Composition
     Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence, nextBar,
     NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
-    Composition, evalComposition, randGenComposition, composeKeySignature,
+    Notation, evalNotation, randGenNotation, composeKeySignature,
     ScorableNote(..), note, rest, quick, tieNote, tie, untie,
+    Composition, CompositionState(..),
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -87,10 +88,9 @@ data CommonChordProg
 
 ----------------------------------------------------------------------------------------------------
 
--- | A 'Composition' is constructed of a list of 'ScoredNote's each played at a point in time. A
--- 'ScoredNote' is different from a 'PlayedNote' in that a 'ScoredNote' is an element of a
--- 'Composition' whereas a 'PlayedNote' is an instruction to a synthesizer to play a particular
--- note.
+-- | 'Notation' constructs a list of 'ScoredNote's each played at a point in time. A 'ScoredNote' is
+-- different from a 'PlayedNote' in that a 'ScoredNote' is an element of the 'Notation' type whereas
+-- a 'PlayedNote' is an instruction to a synthesizer to play a particular note.
 data ScoredNote
   = ScoredRestNote -- ^ indicates that nothing is played for the duration of the 'Bar'.
     -- ^ This must refer to a note that was played at an earlier point in the composition.
@@ -165,10 +165,10 @@ playScoredNote dt = \ case
 
 ----------------------------------------------------------------------------------------------------
 
--- | Every note in a 'Composition' has a unique index value or "reference". The 'Composition' keeps
+-- | Every note written by 'Notation' has a unique index value or "reference". The 'Notation' keeps
 -- track of each unique note played in order to evaluate "tied notes" which are notes are held for
 -- an amount of time, sometimes sliding (gradually changing the sound'S base frequency) into another
--- note. 
+-- note.
 newtype NoteReference = NoteReference Int deriving (Eq, Ord, Show)
 
 -- | A 'Note' that is not tied.
@@ -179,8 +179,9 @@ untied = NoteReference minBound
 
 -- | A data structure for sub-dividing a measure of time. A 'Bar' contains more structure than a
 -- 'NoteSequence' but ultimately must be translated to a 'NoteSequence' to be of any use. The 'Bar'
--- data type is used within the 'Composition' data type to compose music, whereas the 'NoteSequence'
--- data type is used to sequence the sounds that make music onto a recorded track of audio data.
+-- data type is constructed during evaluation of 'Notation' functions to compose music, whereas the
+-- 'NoteSequence' data type is used to sequence the sounds that make music onto a recorded track of
+-- audio data.
 data Bar leaf
   = BarLeaf   !leaf
   | BarBranch !(Boxed.Vector (Bar leaf))
@@ -292,55 +293,54 @@ playedRoleSequence = lens thePlayedRoleSequence $ \ a b -> a{ thePlayedRoleSeque
 -- for a piece of music using @do@ notation. Functions of this data type such as 'note', 'rest',
 -- 'quick', 'tie', and 'untie'.
 --
--- One aspect that may be confusing about the 'Composition' function type is that the state of the
--- 'Composition' does not keep track of time at all. Instead, a tree structure of notes of type
--- 'Bar' is constructed. It is only after evaluating the 'Composition' using 'runComposition'
--- that you can extract the 'Bar' and convert it to a timed sequence of notes using
--- @('setNoteDurations' . 'sequenceBar')@.
-newtype Composition note a = Composition (StateT (CompositionState note) (TFRandT IO) a)
+-- One aspect that may be confusing about the 'Notation' function type is that the state of the
+-- 'Notation' does not keep track of time at all, nor does it track what role is being
+-- played. Instead, you evaluate a 'Notation' function to define various musical motifs which you
+-- can then use to compose a larger piece of music in the 'Composition' function type.
+newtype Notation note a = Notation (StateT (NotationState note) (TFRandT IO) a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
-data CompositionState note
-  = CompositionState
+data NotationState note
+  = NotationState
     { theComposeTieID        :: !Int
     , theComposeNoteCount    :: !Int
     , theComposeKeySignature :: [ToneIndex]
     , theComposeNotes        :: [Bar note]
     }
 
-instance MonadState (CompositionState note) (Composition note) where
-  state = Composition . state
+instance MonadState (NotationState note) (Notation note) where
+  state = Notation . state
 
-instance Semigroup a => Semigroup (Composition note a) where { a <> b = (<>) <$> a <*> b; }
+instance Semigroup a => Semigroup (Notation note a) where { a <> b = (<>) <$> a <*> b; }
 
-instance Monoid a => Monoid (Composition note a) where
+instance Monoid a => Monoid (Notation note a) where
   mempty = return mempty
   mappend a b = mappend <$> a <*> b
 
-instance MonadRandom (Composition note) where
-  getRandomR  = Composition . lift . getRandomR
-  getRandom   = Composition $ lift getRandom
-  getRandomRs = Composition . lift . getRandomRs
-  getRandoms  = Composition $ lift getRandoms
+instance MonadRandom (Notation note) where
+  getRandomR  = Notation . lift . getRandomR
+  getRandom   = Notation $ lift getRandom
+  getRandomRs = Notation . lift . getRandomRs
+  getRandoms  = Notation $ lift getRandoms
 
-emptyCompositionState :: CompositionState note
-emptyCompositionState = CompositionState
+emptyNotationState :: NotationState note
+emptyNotationState = NotationState
   { theComposeTieID        = 0
   , theComposeNoteCount    = 0
   , theComposeKeySignature = []
   , theComposeNotes        = []
   }
 
-composeTieID :: Lens' (CompositionState note) Int
+composeTieID :: Lens' (NotationState note) Int
 composeTieID = lens theComposeTieID $ \ a b -> a{ theComposeTieID = b }
 
-composeKeySignature :: Lens' (CompositionState note) [ToneIndex]
+composeKeySignature :: Lens' (NotationState note) [ToneIndex]
 composeKeySignature = lens theComposeKeySignature $ \ a b -> a{ theComposeKeySignature = b }
 
-composeNotes :: Lens' (CompositionState note) [Bar note]
+composeNotes :: Lens' (NotationState note) [Bar note]
 composeNotes = lens theComposeNotes $ \ a b -> a{ theComposeNotes = b }
 
-composeNoteCount :: Lens' (CompositionState note) Int
+composeNoteCount :: Lens' (NotationState note) Int
 composeNoteCount = lens theComposeNoteCount $ \ a b -> a{ theComposeNoteCount = b }
 
 ----------------------------------------------------------------------------------------------------
@@ -348,47 +348,48 @@ composeNoteCount = lens theComposeNoteCount $ \ a b -> a{ theComposeNoteCount = 
 class ScorableNote n where
   -- | Convert some value to a 'Note' so it can be played by 'note'. The unit @()@ data type
   -- instantiates this class such that @()@ can be used to indicate a 'RestNote'.
-  toNote :: n -> Composition note ScoredNote
+  toNote :: n -> Notation note ScoredNote
 
 instance ScorableNote ()         where { toNote = const $ return ScoredRestNote; }
 instance ScorableNote ScoredNote where { toNote = return; }
 
--- | Evaluate a 'Composition' function automatically seeding a new random number generator using
+-- | Evaluate a 'Notation' function automatically seeding a new random number generator using
 -- 'Control.Random.TF.Init.initTFGen'.
-evalComposition :: Composition note a -> IO a
-evalComposition (Composition f) = liftM fst $
-  seedIORunTFRandT $ evalStateT f emptyCompositionState 
+evalNotation :: Notation note a -> IO a
+evalNotation (Notation f) = liftM fst $
+  seedIORunTFRandT $ evalStateT f emptyNotationState 
 
-randGenComposition :: Composition note a -> TFGen -> IO (a, TFGen)
-randGenComposition (Composition f) = runTFRandT (evalStateT f emptyCompositionState)
+randGenNotation :: Notation note a -> TFGen -> IO (a, TFGen)
+randGenNotation (Notation f) = runTFRandT (evalStateT f emptyNotationState)
 
 -- | Play a note
-note :: ScorableNote n => n -> Composition ScoredNote ()
+note :: ScorableNote n => n -> Notation ScoredNote ()
 note n = toNote n >>= (%=) composeNotes . (:) . BarLeaf >> composeNoteCount += 1
 
 -- | Leave a brief silent gap in the current 'Bar' (a gap in the sub-division of the current
 -- interval).
-rest :: Composition ScoredNote ()
+rest :: Notation ScoredNote ()
 rest = note ScoredRestNote
 
 -- | Sieze the current time 'Interval' of the current 'Bar', and begin sub-dividing it with every
--- note played. The 'Composition' state does not contain timing information, timing is applied using
--- 'playNotSequence', however the information on how time is sub-divided is maintained in the 'Composition' state.
+-- note played. The 'Notation' state does not contain timing information, timing is applied using
+-- 'playNotSequence', however the information on how time is sub-divided is maintained in the
+-- 'Notation' state.
 --
--- After a 'Composition' function is evaluated by 'evalComposition', suppose you pass the top-level
--- 'Bar' passed to 'playNoteSequence' using a duration of 4.0 seconds for the top-level
--- interval. When the notes are sequenced, the 'quick' function will subdivide this 4.0 second
--- interval such that if you play 4 'note's, each note is played for a duration of 1.0 seconds.
+-- After a 'Notation' function is evaluated by 'evalNotation', suppose you pass the top-level 'Bar'
+-- passed to 'playNoteSequence' using a duration of 4.0 seconds for the top-level interval. When the
+-- notes are sequenced, the 'quick' function will subdivide this 4.0 second interval such that if
+-- you evaluate the 'note' function 4 times, each 'note' is played for a duration of 1.0 seconds.
 --
--- If instead of playing a 'note' you play a nested call to 'quick' the 1.0 second interval will be
--- further sub-divided. Within this nested 'quick' if two 'note's are played, each note is played
--- for a duration of 0.5 seconds.
-quick :: Composition note void -> Composition note (Bar note)
+-- If instead of evaluating 'note' you evaluate a nested call to 'quick' the 1.0 second interval
+-- will be further sub-divided. Within this nested 'quick' if two 'note's are played, each note is
+-- played for a duration of 0.5 seconds.
+quick :: Notation note void -> Notation note (Bar note)
 quick = fmap snd . quick'
 
 -- | Like 'quick' but does not throw away the value of type @a@ that was returned by the
--- 'Composition' function parameter that was evaluated.
-quick' :: Composition note a -> Composition note (a, Bar note)
+-- 'Notation' function parameter that was evaluated.
+quick' :: Notation note a -> Notation note (a, Bar note)
 quick' subcomposition = do
   oldnotes <- use composeNotes     <* (composeNotes     .= [])
   oldcount <- use composeNoteCount <* (composeNoteCount .= 0)
@@ -405,7 +406,7 @@ quick' subcomposition = do
   return (a, subdiv)
 
 -- | Remove the current 'Bar' and replace it with a new empty 'Bar', return the previous 'Bar'.
-nextBar :: Composition note (Bar note)
+nextBar :: Notation note (Bar note)
 nextBar = do
   notes <- use composeNotes
   composeNotes .= mempty
@@ -416,7 +417,7 @@ nextBar = do
 
 -- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
 -- held for a time until the future 'untie'd note is reached.
-tieNote :: ScorableNote n => n -> Composition ScoredNote (NoteReference, ScoredNote)
+tieNote :: ScorableNote n => n -> Notation ScoredNote (NoteReference, ScoredNote)
 tieNote = toNote >=> \ case
   n@ScoredNote{}  -> do
     i <- composeTieID += 1 >> use composeTieID
@@ -427,16 +428,25 @@ tieNote = toNote >=> \ case
 
 -- | Shorthand for 'tieNote' returning only the 'NoteReference' and not the 'Note' constructed with
 -- it.
-tie :: ScorableNote n => n -> Composition ScoredNote NoteReference
+tie :: ScorableNote n => n -> Notation ScoredNote NoteReference
 tie = fmap fst . tieNote
 
 -- | Stop playing a tied 'note'. Supply the 'NoteReference' returend by a previous call to 'tie',
 -- pass the note value to which the note must be tied as @note1@ (passing 'RestNote' means to tie
 -- the same note that initiated the 'tie'). The value @note2@ can be played with the note that is
 -- being united at the time interval it is untied.
-untie :: ScorableNote note => NoteReference -> note -> Composition ScoredNote ()
+untie :: ScorableNote note => NoteReference -> note -> Notation ScoredNote ()
 untie ref = toNote >=> \ case
   ScoredRestNote -> return ()
   n@ScoredNote{} -> note n{ scoredTiedID = ref }
 
+----------------------------------------------------------------------------------------------------
 
+newtype Composition a = Composition (StateT CompositionState (TFRandT IO) a)
+  deriving (Functor, Applicative, Monad, MonadIO)
+
+data CompositionState
+  = CompositionState
+    { theComposedInstruments :: Map.Map InstrumentID (PlayedRole PlayedNote)
+    , theComposedDrums       :: PlayedRole DrumID
+    }
