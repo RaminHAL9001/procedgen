@@ -41,7 +41,7 @@ module ProcGen.Music.Composition
     NoteReference, untied,
     Strength(..),  strengthToAmplitude,
     -- * Arranging Notes
-    Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence,
+    Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence, nextBar,
     NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
     Composition, evalComposition, randGenComposition, composeKeySignature,
@@ -404,6 +404,16 @@ quick' subcomposition = do
   composeNoteCount .= oldcount + 1
   return (a, subdiv)
 
+-- | Remove the current 'Bar' and replace it with a new empty 'Bar', return the previous 'Bar'.
+nextBar :: Composition note (Bar note)
+nextBar = do
+  notes <- use composeNotes
+  composeNotes .= mempty
+  case notes of
+    []  -> return mempty
+    [a] -> return a
+    ax  -> return $ BarBranch $ Boxed.fromList ax
+
 -- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
 -- held for a time until the future 'untie'd note is reached.
 tieNote :: ScorableNote n => n -> Composition ScoredNote (NoteReference, ScoredNote)
@@ -428,3 +438,5 @@ untie :: ScorableNote note => NoteReference -> note -> Composition ScoredNote ()
 untie ref = toNote >=> \ case
   ScoredRestNote -> return ()
   n@ScoredNote{} -> note n{ scoredTiedID = ref }
+
+
