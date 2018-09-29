@@ -9,7 +9,7 @@ module ProcGen.Arbitrary
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
     shuffleTake,
     Word256, TFRandSeed, tfGen,
-    TFRandT(..), TFRand,  arbTFRand, seedIOArbTFRand,
+    TFRandT(..), TFRand, arbTFRand, seedIOArbTFRand,
     seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
      seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT, runTFRand,  runTFRandT,
     testDistributionFunction,
@@ -24,7 +24,7 @@ import           Control.Arrow
 import           Control.Exception (evaluate)
 import           Control.Monad
 import           Control.Monad.ST
-import           Control.Monad.Trans
+import           Control.Monad.State
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
@@ -211,6 +211,9 @@ instance Monad m => MonadRandom (TFRandT m) where
   getRandom   = TFRandT getRandom
   getRandomRs = TFRandT . getRandomRs
   getRandoms  = TFRandT getRandoms
+
+instance Monad m => MonadSplit TFGen (TFRandT m) where
+  getSplit = TFRandT getSplit
 
 instance MonadTrans TFRandT where { lift = TFRandT . lift; }
 

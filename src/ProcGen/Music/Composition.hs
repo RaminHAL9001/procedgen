@@ -44,9 +44,9 @@ module ProcGen.Music.Composition
     Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence, nextBar,
     NoteSequence(..), listNoteSequence, playNoteSequence,
     -- * Composing Music for a Single Role
-    Notation, evalNotation, randGenNotation, composeKeySignature,
+    Notation, evalNotation, randGenNotation, notationKeySignature,
     ScorableNote(..), note, rest, quick, tieNote, tie, untie,
-    Composition, CompositionState(..),
+    Composition, CompositionState(..), instrument, composeNotes, composedDrums,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -59,6 +59,7 @@ import           ProcGen.Music.SoundFont
 import           Control.Lens
 import           Control.Monad.State
 import           Control.Monad.State.Class
+import           Control.Monad.Trans.Random.Lazy
 
 import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
@@ -302,10 +303,10 @@ newtype Notation note a = Notation (StateT (NotationState note) (TFRandT IO) a)
 
 data NotationState note
   = NotationState
-    { theComposeTieID        :: !Int
-    , theComposeNoteCount    :: !Int
-    , theComposeKeySignature :: [ToneIndex]
-    , theComposeNotes        :: [Bar note]
+    { theNotationTieID        :: !Int
+    , theNotationNoteCount    :: !Int
+    , theNotationKeySignature :: [ToneIndex]
+    , theNotationNotes        :: [Bar note]
     }
 
 instance MonadState (NotationState note) (Notation note) where
@@ -323,25 +324,28 @@ instance MonadRandom (Notation note) where
   getRandomRs = Notation . lift . getRandomRs
   getRandoms  = Notation $ lift getRandoms
 
+instance MonadSplit TFGen (Notation note) where
+  getSplit = Notation $ lift getSplit
+
 emptyNotationState :: NotationState note
 emptyNotationState = NotationState
-  { theComposeTieID        = 0
-  , theComposeNoteCount    = 0
-  , theComposeKeySignature = []
-  , theComposeNotes        = []
+  { theNotationTieID        = 0
+  , theNotationNoteCount    = 0
+  , theNotationKeySignature = []
+  , theNotationNotes        = []
   }
 
-composeTieID :: Lens' (NotationState note) Int
-composeTieID = lens theComposeTieID $ \ a b -> a{ theComposeTieID = b }
+notationTieID :: Lens' (NotationState note) Int
+notationTieID = lens theNotationTieID $ \ a b -> a{ theNotationTieID = b }
 
-composeKeySignature :: Lens' (NotationState note) [ToneIndex]
-composeKeySignature = lens theComposeKeySignature $ \ a b -> a{ theComposeKeySignature = b }
+notationKeySignature :: Lens' (NotationState note) [ToneIndex]
+notationKeySignature = lens theNotationKeySignature $ \ a b -> a{ theNotationKeySignature = b }
 
-composeNotes :: Lens' (NotationState note) [Bar note]
-composeNotes = lens theComposeNotes $ \ a b -> a{ theComposeNotes = b }
+notationNotes :: Lens' (NotationState note) [Bar note]
+notationNotes = lens theNotationNotes $ \ a b -> a{ theNotationNotes = b }
 
-composeNoteCount :: Lens' (NotationState note) Int
-composeNoteCount = lens theComposeNoteCount $ \ a b -> a{ theComposeNoteCount = b }
+notationNoteCount :: Lens' (NotationState note) Int
+notationNoteCount = lens theNotationNoteCount $ \ a b -> a{ theNotationNoteCount = b }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -364,7 +368,7 @@ randGenNotation (Notation f) = runTFRandT (evalStateT f emptyNotationState)
 
 -- | Play a note
 note :: ScorableNote n => n -> Notation ScoredNote ()
-note n = toNote n >>= (%=) composeNotes . (:) . BarLeaf >> composeNoteCount += 1
+note n = toNote n >>= (%=) notationNotes . (:) . BarLeaf >> notationNoteCount += 1
 
 -- | Leave a brief silent gap in the current 'Bar' (a gap in the sub-division of the current
 -- interval).
@@ -391,25 +395,25 @@ quick = fmap snd . quick'
 -- 'Notation' function parameter that was evaluated.
 quick' :: Notation note a -> Notation note (a, Bar note)
 quick' subcomposition = do
-  oldnotes <- use composeNotes     <* (composeNotes     .= [])
-  oldcount <- use composeNoteCount <* (composeNoteCount .= 0)
+  oldnotes <- use notationNotes     <* (notationNotes     .= [])
+  oldcount <- use notationNoteCount <* (notationNoteCount .= 0)
   a <- subcomposition
-  notes    <- use composeNotes
-  count    <- use composeNoteCount
+  notes    <- use notationNotes
+  count    <- use notationNoteCount
   let mkvec count elems = Boxed.create $ do
         vec <- Mutable.new count
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) (count - 1)) elems
         return vec
   let subdiv = BarBranch $ mkvec count notes
-  composeNotes     .= subdiv : oldnotes
-  composeNoteCount .= oldcount + 1
+  notationNotes     .= subdiv : oldnotes
+  notationNoteCount .= oldcount + 1
   return (a, subdiv)
 
 -- | Remove the current 'Bar' and replace it with a new empty 'Bar', return the previous 'Bar'.
 nextBar :: Notation note (Bar note)
 nextBar = do
-  notes <- use composeNotes
-  composeNotes .= mempty
+  notes <- use notationNotes
+  notationNotes .= mempty
   case notes of
     []  -> return mempty
     [a] -> return a
@@ -420,8 +424,8 @@ nextBar = do
 tieNote :: ScorableNote n => n -> Notation ScoredNote (NoteReference, ScoredNote)
 tieNote = toNote >=> \ case
   n@ScoredNote{}  -> do
-    i <- composeTieID += 1 >> use composeTieID
-    composeNotes %= (:) (BarLeaf n{ scoredTiedID = NoteReference i })
+    i <- notationTieID += 1 >> use notationTieID
+    notationNotes %= (:) (BarLeaf n{ scoredTiedID = NoteReference i })
     return (NoteReference i, n)
   ScoredRestNote -> do
     return (untied, ScoredRestNote)
@@ -449,20 +453,46 @@ data CompositionState
   = CompositionState
     { theCompositionMeasure  :: !Duration
     , theCompositionMoment   :: !Moment
-    , theComposedInstruments :: Map.Map InstrumentID (PlayedRole PlayedNote)
-    , theComposedDrums       :: PlayedRole DrumID
+    , theComposedInstruments :: Map.Map InstrumentID (NoteSequence PlayedNote)
+    , theComposedDrums       :: Map.Map DrumID (NoteSequence Strength)
     }
+
+instance MonadState CompositionState Composition where
+  state = Composition . state
+
+instance MonadSplit TFGen Composition where
+  getSplit = Composition $ lift getSplit
+
+instance MonadRandom Composition where
+  getRandomR  = Composition . lift . getRandomR
+  getRandom   = Composition $ lift getRandom
+  getRandomRs = Composition . lift . getRandomRs
+  getRandoms  = Composition $ lift getRandoms
 
 -- | The amount of time for each measure. This parameter essentially sets the tempo of the music.
 compositionMeasure :: Lens' CompositionState Duration
-compositionMeasure = lens theCompositionMoment $ \ a b -> a{ theCompositionMoment = b }
+compositionMeasure = lens theCompositionMeasure $ \ a b -> a{ theCompositionMeasure = b }
 
 compositionMoment :: Lens' CompositionState Moment
 compositionMoment = lens theCompositionMoment $ \ a b -> a{ theCompositionMoment = b }
 
-composedInstruments :: Lens' CompositionState (Map.Map InstrumentID (PlayedRole PlayedNote))
+composedInstruments :: Lens' CompositionState (Map.Map InstrumentID (NoteSequence PlayedNote))
 composedInstruments = lens theComposedInstruments $ \ a b -> a{ theComposedInstruments = b }
 
-composedDrums :: Lens' CompositionState (PlayedRole DrumID)
+composedDrums :: Lens' CompositionState (Map.Map DrumID (NoteSequence Strength))
 composedDrums = lens theComposedDrums $ \ a b -> a{ theComposedDrums = b }
-  
+
+-- | Evaluate a 'Notation' function to construct some playable notes for a given
+-- 'ProcGen.Music.SoundFont.InstrumentID'.
+composeNotes :: Notation notes a -> Composition a
+composeNotes f = Composition $ lift $ TFRandT $ liftRandT $ liftIO . randGenNotation f
+
+-- | Associate a 'Bar' defined by 'defineBar' with an 'InstrumentID', creating a 'NoteSequence' from
+-- the given 'Bar' and setting the notest to time.
+instrument :: InstrumentID -> Bar ScoredNote -> Composition ()
+instrument inst bar = do
+  t  <- use compositionMoment
+  dt <- use compositionMeasure
+  let seq = playNoteSequence t dt bar
+  composedInstruments %= Map.alter (Just . maybe seq (<> seq)) inst
+
