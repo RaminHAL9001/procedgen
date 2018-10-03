@@ -1,16 +1,28 @@
+-- | This module models an 88-key keyboard and provides data types and functions for modeling
+-- chords within the 88-key construct.
+--
+-- You can construct a 'NoteValue' directly, or you can construct a 'Chord' and then produce a
+-- 'NoteValue' using the 'chordToNotes' function. Once you have a 'NoteValue', you can provide
+-- additional transformations on it using 'mapNoteValue'. Convert a 'NoteValue' to a list of
+-- 'KeyIndex' values (which index individual keys on the 88-key keyboard) using the
+-- 'noteKeyIndicies' function, and then map these key values to 'ProcGen.Types.Frequency' values
+-- using the 'keyboard88' function. Or, you can convert a 'NoteValue' directly to a list of
+-- 'ProcGen.Types.Frequency' values using 'noteKeyFrequencies'.
 module ProcGen.Music.KeyFreq88
-  (-- * Tonics
+  ( -- * Playable Notes
+    ToNoteValue(..), NoteValue(..),
+    noteValue, noteWeight, noteKeyIndicies, mapNoteValue, sliceNotes, noteKeyFrequencies,
+    -- * Tonics
+    OctaveLimit, octaveLimit, octaveLimitKey,
     ToneIndex(..), ToneShift(..), UniqueToneIndex(..), OctaveIntervalIndex,
-    packW8, unpackW8, toneToUnique, uniqueToTone, toneShift, toneName, uniqueToneIndex,
-    isUniqueToneIndex,
+    toneToUnique, uniqueToTone, toneShift, toneName, uniqueToneIndex,
+    isUniqueToneIndex, uniqueToneKeyIndex, 
+    -- * Chords
+    NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
+    Chord, triad, seventh, fifthChord, powerChord, nameToChord, chordToNotes,
     -- * The 88-Key Piano Keyboard
     KeyIndex, keyIndex, keyIndexToWord8,
     keyboard88, the88Keys, concertA, concertAPianoKey, keysPerOctave, keyFreq, keyFreq',
-    NoteValue(..), noteValue, noteWeight, noteKeyIndicies,
-    -- * Chords
-    KeySignature(..), keySignature, keySigFreqTable,
-    NamedChord(..), major7ths, minor7ths, augmented7ths, diminished7ths, dominant7ths,
-    Chord, triad, seventh, nameToChord, chordToKeys
   )
   where
 
@@ -19,7 +31,6 @@ import           ProcGen.Types
 import           Control.Arrow
                 
 import           Data.Char
-import           Data.List                      (nub, sort)
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
                 
@@ -32,13 +43,25 @@ import           Data.Word
 -- intervals.
 type OctaveIntervalIndex = Int
 
+-- | When constructing chords, arbitrary 'Prelude.Int' values are allowed. To convert these values
+-- to useful 'KeyIndex' values, it is necessary to compute the modulo of some multiple of 12 (the
+-- number of steps in an octave) of the integer value. This 'OctaveLimit' sets the multiple of 12
+-- and an offset value. An offset of zero selects keys at the bass end of the 88-key keyboard, an
+-- offset of 7 selects keys at the trebble end.
+data OctaveLimit = OctaveLimit{ octaveLower :: !Int, octaveUpper :: !Int }
+  deriving (Eq, Ord, Show)
+
+-- | Construct an 'OctaveLimit'.
+octaveLimit :: ToneIndex -> OctaveIntervalIndex -> OctaveIntervalIndex -> OctaveLimit
+octaveLimit tone lo0 hi0 = OctaveLimit{ octaveLower = lo, octaveUpper = hi } where
+  n   = fromEnum $ toneToUnique tone
+  hi1 = mod   8 hi0
+  lo1 = mod lo0 hi0
+  (lo2, hi2) = (lo1 * 12 + n, hi1 * 12 + n)
+  (lo , hi ) = (min lo2 hi2, max lo2 hi2)
+
 packW8 :: (Show e, Enum e) => e -> Word8
-packW8 e = let i = fromEnum e in
-  if i <= fromIntegral (maxBound::Word8) then fromIntegral i else error $
-    "the value " ++ show e ++
-    " is enumerated from " ++ show i ++
-    " which cannot be converted to a Word8 limited to the range [" ++ show (minBound :: Word8) ++
-    ".." ++ show (maxBound::Word8) ++ "]"
+packW8 e = fromIntegral $ mod (fromEnum e) 96
 
 unpackW8 :: Enum e => Word8 -> e
 unpackW8 = toEnum . fromIntegral
@@ -49,8 +72,10 @@ data ToneShift = Natural | Sharp | Flat deriving (Eq, Ord, Show, Read, Enum, Bou
 
 -- | This is a logical tone index. This is different from a 'UniqueToneIndex' where each symbol maps
 -- to a unique frequency. A 'ToneIndex' is a logical symbol, so 'C'' maps to the same tonal
--- frequency as 'D_'. Therefore this symbol should not be used for computing chords. Use
--- 'UniqueToneIndex' to compute chords.
+-- frequency as 'D_'. Therefore this data type is only used to label elements of music. To convert
+-- at 'ToneIndex' to a 'KeyIndex' value, first convert it to a 'UniqueToneIndex' value using
+-- 'toneToUnique'. Then with the 'UniqueToneIndex' you can use 'Prelude.fromEnum' to obtain the
+-- integer key value, or 
 data ToneIndex
   = A_ | A | A'
   | B_ | B | B'
@@ -95,6 +120,18 @@ instance Show ToneIndex where
     Natural -> ""
     Flat    -> "_"
     Sharp   -> "#"
+
+-- | Given an 'OctaveLimit', use an 'Prelude.Int' value to select a 'KeyIndex' from this range of
+-- allowed values.
+octaveLimitKey :: OctaveLimit -> Int -> KeyIndex
+octaveLimitKey (OctaveLimit lo hi) i0 =
+  let lim = hi - lo + 1
+      i1  = lo + mod i0 lim
+  in  KeyIndex $ fromIntegral $ if i1 >= 88 then mod i1 12 + lo else i1
+
+-- | Convert a 'UniqueToneIndex' to a 'KeyIndex' value within a given 'OctaveLimit'.
+uniqueToneKeyIndex :: OctaveLimit -> UniqueToneIndex -> KeyIndex
+uniqueToneKeyIndex oct = octaveLimitKey oct . fromEnum
 
 isUniqueToneIndex :: Int -> Bool
 isUniqueToneIndex i =
@@ -188,8 +225,7 @@ newtype KeyIndex = KeyIndex { keyIndexToWord8 :: Word8 }
 -- | Construct a 'KeyIndex', evaluates to an error value if the given
 -- number is less than zero or greater than 87.
 keyIndex :: Int -> KeyIndex
-keyIndex i = if 0 <= i && i < 88 then KeyIndex $ fromIntegral i else error $
-  "Keyboard88.keyIndex "++show i++" out of bounds: value must be between 0 and 87"
+keyIndex = KeyIndex . fromIntegral . flip mod 88
 
 -- | The table of key frequencies in an 88-key keyboard. The lowest
 -- value, A0 (27.5 Hz) is at @keyIndex 0@.
@@ -224,6 +260,16 @@ keyFreq' f = k + d * log(f / concertA) / log 2 where
 
 ----------------------------------------------------------------------------------------------------
 
+-- | To construct 'NoteValue's, which can be chords or single notes, there are a variety of data
+-- types provided in this module, but all of them need to translate a high-level value like a
+-- 'ToneIndex' to a set of 'KeyIndex' values stored in a 'NoteValue'.
+class ToNoteValue a where { toNoteValue :: OctaveLimit -> a -> NoteValue; }
+
+instance ToNoteValue Chord where { toNoteValue = chordToNotes; }
+
+instance ToNoteValue NamedChord where
+  toNoteValue oct = chordToNotes oct . nameToChord
+
 -- | The value of the note played in a 'Note'.
 data NoteValue
   = Single !Word8
@@ -232,7 +278,7 @@ data NoteValue
   | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
   deriving (Eq, Ord, Show, Read)
 
--- | Construct a 'NoteValue'. It is better to just use 'scoreNote' rather than ever call this
+-- | Construct a 'NoteValue'. It is better to just use 'toNoteValue' rather than ever call this
 -- function directly.
 noteValue :: KeyIndex -> [KeyIndex] -> NoteValue
 noteValue a = \ case
@@ -244,28 +290,30 @@ noteKeyIndicies = fmap KeyIndex . \ case
   Single w -> [w]
   Chord wx -> Unboxed.toList wx
 
+noteKeyFrequencies :: NoteValue -> [Frequency]
+noteKeyFrequencies = fmap keyboard88 . noteKeyIndicies
+
 noteWeight :: NoteValue -> Int
 noteWeight = \ case
   Single{}  -> 1
   Chord vec -> Unboxed.length vec
 
-----------------------------------------------------------------------------------------------------
+-- | Apply an integer transformation to each note within the given 'OctaveLimit'. For example, if
+-- the integer transformation is @(+ 2)@ and is applied to a 'NoteValue' constructed from a 'C'
+-- 'Maj3', the result is a 'D' 'Maj3'.
+mapNoteValue :: OctaveLimit -> (Int -> Int) -> NoteValue -> NoteValue
+mapNoteValue OctaveLimit{octaveLower=lo,octaveUpper=hi } f = \ case
+  Single  a -> Single $ fromIntegral $ sh $ fromIntegral a
+  Chord vec -> Chord $ Unboxed.fromList $
+    fmap (fromIntegral . sh . fromIntegral) $ Unboxed.toList vec
+  where { sh a = mod (f $ a - lo) (hi - lo + 1) + lo }
 
-data KeySignature = KeySignature !ToneIndex !Chord
-  deriving (Eq, Ord, Show, Read)
-
--- | A constructor for a 'KeySignature', but unlike the capitalized data constructor, this function
--- takes a 'NamedChord' rather than a 'Chord'.
-keySignature :: ToneIndex -> NamedChord -> KeySignature
-keySignature i = KeySignature i . nameToChord
-
--- | Compute a 'KeySignature' frequency table, that is a table of all frequencies that are members
--- of this 'KeySignature'. A procedurally generated song will randomly select frequencies from a
--- table for the key signature. It is best to memoize these tables whenever possible.
-keySigFreqTable :: KeySignature -> Unboxed.Vector Frequency
-keySigFreqTable (KeySignature tonic chord) =
-  let offset = fromIntegral $ fromEnum $ toneToUnique tonic in Unboxed.fromList
-  [keyboard88 $ KeyIndex $ i + offset | (KeyIndex i) <- chordToKeys chord, i + offset < 88]
+-- | Cut a 'NoteValue' into it's component parts. So if it is a chord, it the 'NoteValue' will be
+-- converted to a list of 'NoteValue's in which each note of the chord is played in order.
+sliceNotes :: NoteValue -> [NoteValue]
+sliceNotes = \ case
+  Single a -> [Single a]
+  Chord ax -> Single <$> Unboxed.toList ax
 
 ----------------------------------------------------------------------------------------------------
 
@@ -299,25 +347,42 @@ dominant7ths = [Dom7, DomFlat7]
 -- 'minor' depends on the integer values set in these constructors. The 'KeySignature' of the chord
 -- independent of this chord value.
 data Chord
-  = Triad   !Word8 !Word8
+  = Fifth
+  | Power
+  | Triad   !Word8 !Word8
   | Seventh !Word8 !Word8 !Word8
   deriving (Eq, Ord, Read, Show)
 
 -- | A 'Triad' has 3 notes, the first note (tonic) is always 0, the next two are the number of
 -- steps on a piano keyboard (counting both black and white keys) away from the tonic are the
 -- next two notes.
-triad :: Word8 -> Word8 -> Chord
-triad a b = Triad (a `mod` 12) (b `mod` 12)
+triad :: Int -> Int -> Chord
+triad a b = Triad (fromIntegral $ a `mod` 12) (fromIntegral $ b `mod` 12)
+
+-- | The 5th chord.
+fifthChord :: Chord
+fifthChord = Fifth
+
+-- | The power chord, which is a 'fifthChord' with a note one octave above the root appended.
+powerChord :: Chord
+powerChord = Power
 
 -- | Like 'triad' but takes an additional note.
-seventh :: Word8 -> Word8 -> Word8 -> Chord
-seventh a b c = Seventh (a `mod` 12) (b `mod` 12) (c `mod` 12)
+seventh :: Int -> Int -> Int -> Chord
+seventh a b c = Seventh
+  (fromIntegral $ a `mod` 12)
+  (fromIntegral $ b `mod` 12)
+  (fromIntegral $ c `mod` 12)
 
 -- | Produce all key indicies for a 'Chord', which you will usually produce from a 'nameToChord',
 -- although you can invent your own 'Chord's which don't have an associated 'NamedChord'.
-chordToKeys :: Chord -> [KeyIndex]
-chordToKeys = (\ case { Triad a b -> [0, a, b]; Seventh a b c -> [0, a, b, c]; }) >>> \ keys ->
-  fmap KeyIndex $ sort $ nub $ takeWhile (< 88) [m*12 + k | m <- [0 .. 7], k <- keys]
+chordToNotes :: OctaveLimit -> Chord -> NoteValue
+chordToNotes oct = (\ notes -> noteValue (head notes) (tail notes)) .
+  fmap (octaveLimitKey oct . fromIntegral) . \ case
+    Fifth         -> [0, 5]
+    Power         -> [0, 5, 12]
+    Triad   a b   -> [0, a, b]
+    Seventh a b c -> [0, a, b, c]
 
 -- | Produce a 'Chord' from a 'NamedChord'. This function makes computing frequencies for
 -- 'KeySignatures' much easier.

@@ -357,6 +357,14 @@ class ScorableNote n where
 instance ScorableNote ()         where { toNote = const $ return ScoredRestNote; }
 instance ScorableNote ScoredNote where { toNote = return; }
 
+instance ScorableNote NoteValue  where
+  toNote n = return ScoredNote
+    { scoredTiedID = untied
+    , scoredStrength = Moderare
+    , scoredNoteValue = n
+    , scoredNoteTags  = toneTagSet []
+    }
+  
 -- | Evaluate a 'Notation' function automatically seeding a new random number generator using
 -- 'Control.Random.TF.Init.initTFGen'.
 evalNotation :: Notation note a -> IO a
@@ -496,3 +504,11 @@ instrument inst bar = do
   let seq = playNoteSequence t dt bar
   composedInstruments %= Map.alter (Just . maybe seq (<> seq)) inst
 
+----------------------------------------------------------------------------------------------------
+
+exampleComposition :: Composition (Bar ScoredNote)
+exampleComposition = do 
+  let updown = note 0 >> rest >> note 12 >> rest >> nextBar
+  a <- composeNotes updown
+  b <- composeNotes (rest >> quick updown)
+  return (a <> b)
