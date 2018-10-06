@@ -16,6 +16,8 @@ module ProcGen.GHCI
     addLayer, onLayer, onLayerGroup, onTopLayer,
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
+    -- * Procedural Generation of Music
+    musicToFile,
     -- * Working with persistent values in the GHCI process.
     module ProcGen,
     module Happlets.Lib.Gtk,
@@ -23,6 +25,8 @@ module ProcGen.GHCI
   where
 
 import           ProcGen
+import           ProcGen.Music.Composition
+import           ProcGen.Music.Sequencer
 
 import           Control.Arrow
 import           Control.Concurrent
@@ -295,3 +299,20 @@ newParamWin = newPlotWin plotParam
 -- | If you have 'chapp'-ed to a 'PlotParametric' view, you can use 'param' to live-update the view.
 param :: GtkGUI (PlotParametric ProcGenFloat) a -> IO a
 param = liveUpdate
+
+----------------------------------------------------------------------------------------------------
+
+musicToFile :: FilePath -> TFRandSeed -> Composition () -> IO ()
+musicToFile path seed f = do
+  (((), comp), _) <- runCompositionTFGen f (tfGen seed) emptyComposition
+  let roles = getPlayedRoles comp
+  case timeWindow roles of
+    Nothing -> return ()
+    Just tw@(TimeWindow{timeStart=t0,timeEnd=t1}) -> do
+      track <- newTrack (2.0 + twDuration tw)
+      seqst <- newSequencer
+      let wholeShape sig = basicShapedSignal sig (t1 - t0 + 2) & shapeInitTime .~ 0.5
+      ((), _seqst) <- flip runSequencer seqst $
+        -- TODO: setup muical instruments and drums here.
+        mapM_ (playToTrack track 0.5 . wholeShape) roles
+      writeTrackFile path track

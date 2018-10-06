@@ -42,11 +42,13 @@ module ProcGen.Music.Composition
     Strength(..),  strengthToAmplitude,
     -- * Arranging Notes
     Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence, nextBar,
-    NoteSequence(..), listNoteSequence, playNoteSequence,
+    NoteSequence(..), listNoteSequence, playNoteSequence, getPlayedRoles,
     -- * Composing Music for a Single Role
     Notation, evalNotation, randGenNotation, notationKeySignature,
-    ScorableNote(..), note, rest, quick, tieNote, tie, untie,
-    Composition, CompositionState(..), instrument, composeNotes, composedDrums,
+    ScorableNote(..), note, rest, intNote, quick, tieNote, tie, untie,
+    Composition, CompositionState(..), runCompositionTFGen, emptyComposition,
+    instrument, composeNotes, composedDrums,
+    exampleComposition,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
@@ -56,11 +58,13 @@ import           ProcGen.Arbitrary
 import           ProcGen.Music.KeyFreq88
 import           ProcGen.Music.SoundFont
 
+import           Control.Arrow
 import           Control.Lens
 import           Control.Monad.State
 import           Control.Monad.State.Class
 import           Control.Monad.Trans.Random.Lazy
 
+import           Data.Maybe
 import qualified Data.IntMap               as IMap
 import qualified Data.Map                  as Map
 import           Data.Semigroup
@@ -115,6 +119,11 @@ data PlayedNote
     , playedNoteValue :: !ToneID
     , playedTied      :: !PlayedNote
     }
+
+instance HasTimeWindow PlayedNote Moment where
+  timeWindow = \ case
+    RestNote -> Nothing
+    PlayedNote{ playedDuration=dt } -> Just TimeWindow{ timeStart=0, timeEnd=dt }
 
 -- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
 data Strength = Pianismo | Piano | MezzoPiano | Moderare | MezzoForte | Forte | Fortisimo
@@ -230,6 +239,14 @@ instance Monoid (NoteSequence note) where
   mempty = NoteSequence Map.empty
   mappend = (<>)
 
+instance HasTimeWindow note Moment => HasTimeWindow (NoteSequence note) Moment where
+  timeWindow =
+    ( listNoteSequence >=> \ (t0, notes) ->
+      twShift t0 <$> (notes >>= maybeToList . timeWindow)
+    ) >>> \ case
+      []   -> Nothing
+      a:ax -> Just $ foldl twMinBounds a ax
+
 listNoteSequence :: NoteSequence note -> [(Moment, [note])]
 listNoteSequence (NoteSequence map) = Map.assocs map
 
@@ -281,6 +298,12 @@ data PlayedRole note
     , thePlayedRoleSequence   :: !(NoteSequence note)
     }
   deriving (Eq, Functor)
+
+instance HasTimeWindow (PlayedRole PlayedNote) Moment where
+  timeWindow = timeWindow . thePlayedRoleSequence
+
+instance HasTimeWindow [PlayedRole PlayedNote] Moment where
+  timeWindow = twMinBoundsAll . (>>= (maybeToList . timeWindow))
 
 playedRoleInstrument :: Lens' (PlayedRole note) InstrumentID
 playedRoleInstrument = lens thePlayedRoleInstrument $ \ a b -> a{ thePlayedRoleInstrument = b }
@@ -356,15 +379,20 @@ class ScorableNote n where
 
 instance ScorableNote ()         where { toNote = const $ return ScoredRestNote; }
 instance ScorableNote ScoredNote where { toNote = return; }
+instance ScorableNote [KeyIndex] where { toNote = return . scoreNote untied [] Moderare; }
+instance ScorableNote [Int]      where { toNote = toNote . fmap keyIndex; }
 
 instance ScorableNote NoteValue  where
-  toNote n = return ScoredNote
-    { scoredTiedID = untied
-    , scoredStrength = Moderare
-    , scoredNoteValue = n
+  toNote n = pure $ ScoredNote
+    { scoredTiedID    = untied
     , scoredNoteTags  = toneTagSet []
+    , scoredNoteValue = n
+    , scoredStrength  = Moderare
     }
   
+intNote :: [Int] -> Notation note ScoredNote
+intNote = toNote
+
 -- | Evaluate a 'Notation' function automatically seeding a new random number generator using
 -- 'Control.Random.TF.Init.initTFGen'.
 evalNotation :: Notation note a -> IO a
@@ -477,6 +505,17 @@ instance MonadRandom Composition where
   getRandomRs = Composition . lift . getRandomRs
   getRandoms  = Composition $ lift getRandoms
 
+emptyComposition :: CompositionState
+emptyComposition = CompositionState
+  { theCompositionMeasure  = 0
+  , theCompositionMoment   = 0
+  , theComposedInstruments = Map.empty
+  , theComposedDrums       = Map.empty
+  }
+
+getPlayedRoles :: CompositionState -> [PlayedRole PlayedNote]
+getPlayedRoles comp = uncurry PlayedRole <$> Map.assocs (comp ^. composedInstruments)
+
 -- | The amount of time for each measure. This parameter essentially sets the tempo of the music.
 compositionMeasure :: Lens' CompositionState Duration
 compositionMeasure = lens theCompositionMeasure $ \ a b -> a{ theCompositionMeasure = b }
@@ -489,6 +528,13 @@ composedInstruments = lens theComposedInstruments $ \ a b -> a{ theComposedInstr
 
 composedDrums :: Lens' CompositionState (Map.Map DrumID (NoteSequence Strength))
 composedDrums = lens theComposedDrums $ \ a b -> a{ theComposedDrums = b }
+
+runCompositionTFGen
+  :: Composition a
+  -> TFGen
+  -> CompositionState
+  -> IO ((a, CompositionState), TFGen)
+runCompositionTFGen (Composition f) gen st = runTFRandT (runStateT f st) gen
 
 -- | Evaluate a 'Notation' function to construct some playable notes for a given
 -- 'ProcGen.Music.SoundFont.InstrumentID'.
@@ -508,7 +554,7 @@ instrument inst bar = do
 
 exampleComposition :: Composition (Bar ScoredNote)
 exampleComposition = do 
-  let updown = note 0 >> rest >> note 12 >> rest >> nextBar
+  let updown = intNote[39] >> rest >> intNote[61] >> rest >> nextBar
   a <- composeNotes updown
   b <- composeNotes (rest >> quick updown)
   return (a <> b)

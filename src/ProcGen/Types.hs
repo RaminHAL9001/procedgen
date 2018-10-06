@@ -480,12 +480,17 @@ minMax = foldl stepMinMax mempty
 ----------------------------------------------------------------------------------------------------
 
 class (Eq n, Ord n, Num n) => HasTimeWindow a n | a -> n where
-  timeWindow :: a -> TimeWindow n
+  timeWindow :: a -> Maybe (TimeWindow n)
 
 -- | For discrete functions (like vectors), the 'timeEnd' value should be set to the length of the
 -- vector. The 'twContains' function returns false if the index is equal to the 'timeEnd' value.
 data TimeWindow t = TimeWindow{ timeStart :: !t, timeEnd :: !t }
   deriving (Eq, Ord, Show, Read, Functor)
+
+instance HasTimeWindow (TimeWindow Moment) Moment where { timeWindow = Just; }
+instance HasTimeWindow (TimeWindow Int   ) Int    where { timeWindow = Just; }
+instance HasTimeWindow [TimeWindow Moment] Moment where { timeWindow = twMinBoundsAll; }
+instance HasTimeWindow [TimeWindow Int   ] Int    where { timeWindow = twMinBoundsAll; }
 
 -- | Returns 'Prelude.True' if the given point @t@ is contained within the -- 'TimeWindow'.
 -- 'TimeWindow's are inclusive intervlas, meaning if the point @t@ is equal to either of the
@@ -521,6 +526,17 @@ twIntersect (TimeWindow{ timeStart=a0, timeEnd=a1 }) (TimeWindow{ timeStart=b0, 
         EQ -> Just (aLo, min aHi bLo)
         LT -> if aHi < bLo then Nothing else Just (aHi, bLo)
         GT -> if bHi < aLo then Nothing else Just (bHi, aLo)
+
+-- | Compute the minimum bounding window required to fit both windows given. This is like a union of
+-- two windows except the windows need not overlap.
+twMinBounds :: Ord t => TimeWindow t -> TimeWindow t -> TimeWindow t
+twMinBounds a b = TimeWindow{ timeStart = minimum times, timeEnd = maximum times } where
+  times = [timeStart a, timeEnd a, timeStart b, timeEnd b]
+
+twMinBoundsAll :: (Eq n, Ord n, Num n) => [TimeWindow n] -> Maybe (TimeWindow n)
+twMinBoundsAll = \ case
+  []   -> Nothing
+  a:ax -> Just $ foldl twMinBounds a ax
 
 -- | Enumerate all time values in the givem 'TimeWindow' but with a given time-step value.
 twParametric :: RealFrac t => t -> TimeWindow t -> [t]

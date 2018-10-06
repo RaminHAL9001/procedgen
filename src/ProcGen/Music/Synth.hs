@@ -773,7 +773,7 @@ instance TimeDomain TDSignal where
     in  if i < tdSize td then a + (if i + 1 < tdSize td then (b - a) * r else 0.0) else 0.0
 
 instance HasTimeWindow TDSignal SampleIndex where
-  timeWindow = tdTimeWindow
+  timeWindow = Just . tdTimeWindow
 
 tdSize :: TDSignal -> Int
 tdSize (TDSignal vec) = Unboxed.length vec
@@ -787,12 +787,14 @@ tdTimeWindow :: TDSignal -> TimeWindow SampleIndex
 tdTimeWindow (TDSignal vec) = TimeWindow{ timeStart = 0, timeEnd = Unboxed.length vec }
 
 tdDuration :: TDSignal -> Duration
-tdDuration = twDuration . fmap indexToTime . timeWindow
+tdDuration = maybe 0 (twDuration . fmap indexToTime) . timeWindow
 
 -- | Produce a lazy linked-list of all 'ProcGen.Types.Sample's stored in the 'TDSignal'. 
 listTDSamples :: TDSignal -> TimeWindow Moment -> [Sample]
 listTDSamples td@(TDSignal vec) =
-  maybe [] (fmap (vec Unboxed.!) . twEnum) . twIntersect (timeWindow td) . fmap (fst . timeIndex)
+  maybe [] (fmap (vec Unboxed.!) . twEnum) .
+  (\ tw -> join $ twIntersect <$> timeWindow td <*> pure tw) .
+  fmap (fst . timeIndex)
 
 -- | Compute minimum and maximum values of the 'TDSignal'. 'TDSignals' that have been normalized
 -- will almost always return values of @-1.0@ and @1.0@.
