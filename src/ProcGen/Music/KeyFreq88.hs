@@ -1,16 +1,16 @@
 -- | This module models an 88-key keyboard and provides data types and functions for modeling
 -- chords within the 88-key construct.
 --
--- You can construct a 'NoteValue' directly, or you can construct a 'Chord' and then produce a
--- 'NoteValue' using the 'chordToNotes' function. Once you have a 'NoteValue', you can provide
--- additional transformations on it using 'mapNoteValue'. Convert a 'NoteValue' to a list of
+-- You can construct a 'ToneValue' directly, or you can construct a 'Chord' and then produce a
+-- 'ToneValue' using the 'chordToNotes' function. Once you have a 'ToneValue', you can provide
+-- additional transformations on it using 'mapNoteValue'. Convert a 'ToneValue' to a list of
 -- 'KeyIndex' values (which index individual keys on the 88-key keyboard) using the
 -- 'noteKeyIndicies' function, and then map these key values to 'ProcGen.Types.Frequency' values
--- using the 'keyboard88' function. Or, you can convert a 'NoteValue' directly to a list of
+-- using the 'keyboard88' function. Or, you can convert a 'ToneValue' directly to a list of
 -- 'ProcGen.Types.Frequency' values using 'noteKeyFrequencies'.
 module ProcGen.Music.KeyFreq88
   ( -- * Playable Notes
-    ToNoteValue(..), NoteValue(..),
+    ToNoteValue(..), ToneValue(..),
     noteValue, noteWeight, noteKeyIndicies, mapNoteValue, sliceNotes, noteKeyFrequencies,
     -- * Tonics
     OctaveLimit, octaveLimit, octaveLimitKey,
@@ -260,10 +260,10 @@ keyFreq' f = k + d * log(f / concertA) / log 2 where
 
 ----------------------------------------------------------------------------------------------------
 
--- | To construct 'NoteValue's, which can be chords or single notes, there are a variety of data
+-- | To construct 'ToneValue's, which can be chords or single notes, there are a variety of data
 -- types provided in this module, but all of them need to translate a high-level value like a
--- 'ToneIndex' to a set of 'KeyIndex' values stored in a 'NoteValue'.
-class ToNoteValue a where { toNoteValue :: OctaveLimit -> a -> NoteValue; }
+-- 'ToneIndex' to a set of 'KeyIndex' values stored in a 'ToneValue'.
+class ToNoteValue a where { toNoteValue :: OctaveLimit -> a -> ToneValue; }
 
 instance ToNoteValue Chord where { toNoteValue = chordToNotes; }
 
@@ -271,46 +271,46 @@ instance ToNoteValue NamedChord where
   toNoteValue oct = chordToNotes oct . nameToChord
 
 -- | The value of the note played in a 'Note'.
-data NoteValue
+data ToneValue
   = Single !Word8
     -- ^ Play a single note, the 'Data.Wordl.Word8' value will be used as an index to a table
     -- constructed by a 'keySigFreqTable' for whatever key signature a given bar is played in.
   | Chord  !(Unboxed.Vector Word8) -- ^ Like a 'Single' but playes several notes simultaneously.
   deriving (Eq, Ord, Show, Read)
 
--- | Construct a 'NoteValue'. It is better to just use 'toNoteValue' rather than ever call this
+-- | Construct a 'ToneValue'. It is better to just use 'toNoteValue' rather than ever call this
 -- function directly.
-noteValue :: KeyIndex -> [KeyIndex] -> NoteValue
+noteValue :: KeyIndex -> [KeyIndex] -> ToneValue
 noteValue a = \ case
   [] -> Single $ keyIndexToWord8 a
   ax -> Chord $ Unboxed.fromList $ keyIndexToWord8 <$> a:ax
 
-noteKeyIndicies :: NoteValue -> [KeyIndex]
+noteKeyIndicies :: ToneValue -> [KeyIndex]
 noteKeyIndicies = fmap KeyIndex . \ case
   Single w -> [w]
   Chord wx -> Unboxed.toList wx
 
-noteKeyFrequencies :: NoteValue -> [Frequency]
+noteKeyFrequencies :: ToneValue -> [Frequency]
 noteKeyFrequencies = fmap keyboard88 . noteKeyIndicies
 
-noteWeight :: NoteValue -> Int
+noteWeight :: ToneValue -> Int
 noteWeight = \ case
   Single{}  -> 1
   Chord vec -> Unboxed.length vec
 
 -- | Apply an integer transformation to each note within the given 'OctaveLimit'. For example, if
--- the integer transformation is @(+ 2)@ and is applied to a 'NoteValue' constructed from a 'C'
+-- the integer transformation is @(+ 2)@ and is applied to a 'ToneValue' constructed from a 'C'
 -- 'Maj3', the result is a 'D' 'Maj3'.
-mapNoteValue :: OctaveLimit -> (Int -> Int) -> NoteValue -> NoteValue
+mapNoteValue :: OctaveLimit -> (Int -> Int) -> ToneValue -> ToneValue
 mapNoteValue OctaveLimit{octaveLower=lo,octaveUpper=hi } f = \ case
   Single  a -> Single $ fromIntegral $ sh $ fromIntegral a
   Chord vec -> Chord $ Unboxed.fromList $
     fmap (fromIntegral . sh . fromIntegral) $ Unboxed.toList vec
   where { sh a = mod (f $ a - lo) (hi - lo + 1) + lo }
 
--- | Cut a 'NoteValue' into it's component parts. So if it is a chord, it the 'NoteValue' will be
--- converted to a list of 'NoteValue's in which each note of the chord is played in order.
-sliceNotes :: NoteValue -> [NoteValue]
+-- | Cut a 'ToneValue' into it's component parts. So if it is a chord, it the 'ToneValue' will be
+-- converted to a list of 'ToneValue's in which each note of the chord is played in order.
+sliceNotes :: ToneValue -> [ToneValue]
 sliceNotes = \ case
   Single a -> [Single a]
   Chord ax -> Single <$> Unboxed.toList ax
@@ -376,7 +376,7 @@ seventh a b c = Seventh
 
 -- | Produce all key indicies for a 'Chord', which you will usually produce from a 'nameToChord',
 -- although you can invent your own 'Chord's which don't have an associated 'NamedChord'.
-chordToNotes :: OctaveLimit -> Chord -> NoteValue
+chordToNotes :: OctaveLimit -> Chord -> ToneValue
 chordToNotes oct = (\ notes -> noteValue (head notes) (tail notes)) .
   fmap (octaveLimitKey oct . fromIntegral) . \ case
     Fifth         -> [0, 5]

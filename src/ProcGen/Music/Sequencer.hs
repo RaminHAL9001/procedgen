@@ -185,7 +185,7 @@ shapeDecayEnvelope = lens theShapeDecayEnvelope $ \ a b -> a{ theShapeDecayEnvel
 class PlayToTrack signal where
   playToTrack :: Target Track -> Target Moment -> Source (ShapedSignal signal) -> Sequencer ()
 
-instance PlayToTrack (PlayedRole PlayedNote) where
+instance PlayToTrack (PlayedRole PlayedTone) where
   playToTrack track t0 signal = do
     let role = theShapedSignal signal
     let getNotes f = forM_ (listNoteSequence $ thePlayedRoleSequence role) $ \ (t, notes) ->
@@ -247,15 +247,15 @@ sequencerInstrumentNote instr tone = case Map.lookup tone $  instr ^. toneTable 
   Nothing       -> return Nothing
   Just soundset -> chooseSound soundset
 
-playSinusoidToTrack :: Target Track -> Target Moment -> PlayedNote -> Sequencer ()
+playSinusoidToTrack :: Target Track -> Target Moment -> PlayedTone -> Sequencer ()
 playSinusoidToTrack (Track vecT) t0 = \ case
   RestNote -> return ()
   note     -> do
-    let (ToneID idx _tag) = playedNoteValue note
+    let (NoteID idx _tag) = playedNoteValue note
     let dt = playedDuration note
     let (idxA, idxB) = case idx of
-          KeyTone    a   -> (a, a)
-          TiedNote _ a b -> (a, b)
+          NoteKey    a   -> (a, a)
+          NoteTied _ a b -> (a, b)
     let (lenA, lenB) = (noteWeight idxA, noteWeight idxB)
     let key len = take len . cycle . fmap keyboard88 . noteKeyIndicies
     forM_ (zip (key lenA idxA) (key lenB idxB)) $ \ (a, b) -> do
@@ -343,9 +343,9 @@ addInstrument instrm lo hi = do
   sequencerInstrument %= Map.insertWith (<>) instrm (toneInstrument lo hi)
   return instrm
 
-addTone :: InstrumentID -> [ToneTag] -> ToneKeyIndicies -> Sound -> Sequencer ToneID
+addTone :: InstrumentID -> [PlayNoteTag] -> ToneKeyIndicies -> Sound -> Sequencer ToneID
 addTone instrm tags key sound = do
-  let toneID    = ToneID key $ toneTagSet tags
+  let toneID    = NoteID key $ playNoteTagSet tags
   let newInstrm = uncurry toneInstrument $ minMaxKeyIndex key
   sequencerInstrument %=
     Map.alter (Just . addToneToInstrument toneID sound . maybe newInstrm id) instrm

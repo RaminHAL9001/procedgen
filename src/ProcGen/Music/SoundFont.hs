@@ -3,12 +3,14 @@
 -- ProcGen does not make use of any standardized or proprietary sound font formats, the sound fonts
 -- defined in this module use a formatting unique to the ProcGen project.
 module ProcGen.Music.SoundFont
-  ( -- * Defining Drum Sets
-    DrumID(..), DrumKit, drumSounds, drumTable, addDrumToKit,
+  ( NoteID(..), NoteKeyIndicies(..),
+    -- * Defining Drum Sets
+    DrumID, DrumIndex(..), DrumValue, DrumKeyIndicies, DrumKit,
+    drumValueIDs, drumValue, drumSounds, drumTable, addDrumToKit,
     -- * Defining Tonal Insruments
-    InstrumentID(..), ToneID(..), ToneKeyIndicies(..), TiedTag(..), ToneTag(..),
+    InstrumentID(..), ToneID, ToneKeyIndicies, TiedTag(..), PlayNoteTag(..),
     ToneInstrument, addToneToInstrument, toneInstrument, toneSounds,
-    ToneTagSet, toneTagSet, toneTable, minMaxKeyIndex,
+    PlayNoteTagSet, playNoteTagSet, toneTable, minMaxKeyIndex,
     -- * Working with Sound objects
     Sound, soundLikelyChoice, soundLoadedFromFile, soundRenderedFromFDSignal, soundTDSignal,
     soundFromFile, soundFromFDSignal, soundFromFDSignalFile,
@@ -33,13 +35,15 @@ import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
 
--- | A 'DrumID' identifies elements of a drum set. "Drums" are really just arbitrary sound effects
--- that are not categorized by tone. If your sounds can be categorized by tone, consider associating
--- them with a 'ToneID' instead of a 'DrumID'.
-newtype DrumID = DrumID Strict.Text
+-- | A 'DrumIndex' is analogous to a 'ProcGen.Music.KeyFreq88.KeyIndex' in that it is used to select
+-- a drum from a 'DrumKit'. The difference is, a 'DrumKit' is an unordered set of sound-making
+-- elements, whereas an 88-key keyboard is an ordered set of sound-making elements (ordered in that
+-- lower frequencies have lower index values).
+newtype DrumIndex = DrumIndex { unwrapDrumIndex :: Strict.Text }
   deriving (Eq, Ord, Show)
 
-instance IsString DrumID where { fromString = DrumID . Strict.pack; }
+instance IsString DrumIndex where
+  fromString = DrumIndex . Strict.pack
 
 ----------------------------------------------------------------------------------------------------
 
@@ -49,6 +53,9 @@ newtype InstrumentID = InstrumentID Strict.Text
 instance IsString InstrumentID where { fromString = InstrumentID . Strict.pack; }
 
 ----------------------------------------------------------------------------------------------------
+
+type ToneID = NoteID ToneValue
+type DrumID = NoteID DrumValue
 
 -- | Acts as a key that can be looked up in a map/dictionary, and serves as a unique descriptor of
 -- the content of a buffer or a cluster of buffers. If there are more than one buffer associated
@@ -60,14 +67,16 @@ instance IsString InstrumentID where { fromString = InstrumentID . Strict.pack; 
 -- scratchy sound. Every time the sound A4 mezzo forte is selected, one of those three are seleted
 -- from a 'Sequencer' using 'chooseSound'. The squeaky/scratchy sound can be weighted such that it
 -- is randomly selected less often.
-data ToneID = ToneID !ToneKeyIndicies !ToneTagSet
+data NoteID value = NoteID !(NoteKeyIndicies value) !PlayNoteTagSet
   deriving (Eq, Ord, Show)
 
--- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded). This is not used
--- for drum kits.
-data ToneKeyIndicies
-  = KeyTone    !NoteValue
-  | TiedNote   !TiedTag  !NoteValue !NoteValue
+type ToneKeyIndicies = NoteKeyIndicies ToneValue
+type DrumKeyIndicies = NoteKeyIndicies DrumValue
+
+-- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded).
+data NoteKeyIndicies value
+  = NoteKey    !value
+  | NoteTied   !TiedTag  !value !value
   deriving (Eq, Ord, Show)
 
 -- | A tag used to indicate how notes are tied.
@@ -75,22 +84,30 @@ data TiedTag = TieNotes | CrossFadeNotes
   deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
-data ToneTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
+data PlayNoteTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
   deriving (Eq, Ord, Show, Enum, Bounded)
 
-newtype ToneTagSet = ToneTagSet (Unboxed.Vector Word8)
+newtype PlayNoteTagSet = PlayNoteTagSet (Unboxed.Vector Word8)
   deriving (Eq, Ord)
 
-instance Show ToneTagSet where
-  show (ToneTagSet vec) = show $ fromEnum . (fromIntegral :: Word8 -> Int) <$> Unboxed.toList vec
+instance Show PlayNoteTagSet where
+  show (PlayNoteTagSet vec) = show $ fromEnum . (fromIntegral :: Word8 -> Int) <$> Unboxed.toList vec
 
-toneTagSet :: [ToneTag] -> ToneTagSet
-toneTagSet = ToneTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
+instance Semigroup PlayNoteTagSet where
+  (PlayNoteTagSet a) <> (PlayNoteTagSet b) = PlayNoteTagSet $
+    Unboxed.fromList $ nub $ Unboxed.toList a ++ Unboxed.toList b
+
+instance Monoid PlayNoteTagSet where
+  mempty = playNoteTagSet []
+  mappend = (<>)
+
+playNoteTagSet :: [PlayNoteTag] -> PlayNoteTagSet
+playNoteTagSet = PlayNoteTagSet . Unboxed.fromList . fmap (fromIntegral . fromEnum) . nub
 
 minMaxKeyIndex :: ToneKeyIndicies -> (KeyIndex, KeyIndex)
 minMaxKeyIndex = \ case
-  KeyTone    a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
-  TiedNote _ a b -> minmax2 a b
+  NoteKey    a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
+  NoteTied _ a b -> minmax2 a b
   where
     idx2    a b = noteKeyIndicies a ++ noteKeyIndicies b
     minmax2 a b = (minimum $ idx2 a b, maximum $ idx2 a b)
@@ -162,7 +179,20 @@ addToneToInstrument toneID sound = toneTable %~
 
 ----------------------------------------------------------------------------------------------------
 
-newtype DrumKit = DrumKit { theDrumTable :: Map.Map DrumID SoundSet }
+-- | A 'DrumValue' is similar to a 'ToneValue' in that it contains one or more drums to play at a
+-- given moment. Under the hood, the 'DrumValue' is simply a list of strings. Notcie that
+-- 'DrumValue' instantiates 'Data.Semigroup.Semigroup' but not 'Data.Monoid.Monoid', because it is
+-- meaningless to have an empty drum value in a sequencer: if a note exists it is played, if it is
+-- not played it does not exist.
+newtype DrumValue = DrumValue Strict.Text
+  deriving (Eq, Ord)
+
+instance Semigroup DrumValue where
+  (DrumValue a) <> (DrumValue b) = DrumValue $
+    Strict.intercalate (Strict.singleton '\0') $
+    nub $ reverse $ breakByNulls b ++ breakByNulls a
+
+data DrumKit = DrumKit { theDrumTable :: Map.Map DrumID SoundSet }
 
 instance Semigroup DrumKit where
   (DrumKit a) <> (DrumKit b) = DrumKit $ Map.unionWith (<>) a b
@@ -174,6 +204,20 @@ drumTable = lens theDrumTable $ \ a b -> a{ theDrumTable = b }
 
 addDrumToKit :: DrumID -> Sound -> DrumKit -> DrumKit
 addDrumToKit key val = drumTable %~ Map.insertWith (<>) key (SoundSet $ Boxed.singleton val)
+
+-- | Extract all 'DrumID' values that are stored in the 'DrumValue'.
+drumValueIDs :: DrumValue -> [DrumIndex]
+drumValueIDs (DrumValue str) = DrumIndex <$> breakByNulls str
+
+-- not for export
+breakByNulls :: Strict.Text -> [Strict.Text]
+breakByNulls = filter (not . Strict.null) . flip loop [] where
+  loop str stack = let (item, remainder) = Strict.breakOn (Strict.singleton '\0') str in
+    (if Strict.null remainder then id else loop $ Strict.tail remainder) (item:stack)
+
+drumValue :: DrumIndex -> [DrumIndex] -> DrumValue
+drumValue a = DrumValue . Strict.intercalate (Strict.singleton '\0') .
+  join . fmap (breakByNulls . unwrapDrumIndex) . (a :)
 
 ----------------------------------------------------------------------------------------------------
 
