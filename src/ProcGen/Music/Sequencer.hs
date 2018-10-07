@@ -19,6 +19,7 @@ module ProcGen.Music.Sequencer
     Track(..), Target, Source,
     trackTime, trackSampleCount, newTrack, writeTrackFile, readTrackFile,
     -- * Sequencer Evaluation
+    musicToFile,
     Sequencer, SequencerState(..), PlayToTrack(..),
     newSequencer, runSequencer, liftSynth,
     addDrum, getDrum, addInstrument, addTone, getTone,
@@ -69,6 +70,25 @@ writeTrackFile path (Track vec) = putRiffWaveFormatIO path vec
 -- | Must be a @.WAV@ file, 44100 hz 16 bit signed little endian single channel.
 readTrackFile :: FilePath -> IO Track
 readTrackFile = fmap Track . getRiffWaveFormatIO
+
+musicToFile
+  :: FilePath       -- ^ the sound file to be created.
+  -> TFRandSeed     -- ^ a psuedo-random number generator seed number.
+  -> Sequencer ()   -- ^ initialize the sequencer.
+  -> Composition () -- ^ compose the music.
+  -> IO ()
+musicToFile path seed seqinit f = do
+  (((), comp), _) <- runCompositionTFGen f (tfGen seed) emptyComposition
+  let roles = getPlayedRoles comp
+  case timeWindow roles of
+    Nothing -> return ()
+    Just tw@(TimeWindow{timeStart=t0,timeEnd=t1}) -> do
+      track <- newTrack (2.0 + twDuration tw)
+      seqst <- newSequencer
+      let wholeShape sig = basicShapedSignal sig (t1 - t0 + 2) & shapeInitTime .~ 0.5
+      ((), _seqst) <- flip runSequencer seqst $
+        seqinit >> mapM_ (playToTrack track 0.5 . wholeShape) roles
+      writeTrackFile path track
 
 ----------------------------------------------------------------------------------------------------
 
