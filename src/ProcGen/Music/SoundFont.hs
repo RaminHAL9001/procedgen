@@ -8,7 +8,7 @@ module ProcGen.Music.SoundFont
     DrumID, DrumIndex(..), DrumValue, DrumKeyIndicies, DrumKit,
     drumValueIDs, drumValue, drumSounds, drumTable, addDrumToKit,
     -- * Defining Tonal Insruments
-    InstrumentID(..), ToneID, ToneKeyIndicies, TiedTag(..), PlayNoteTag(..),
+    InstrumentID(..), ToneID, ToneKeyIndicies, PlayNoteTag(..),
     ToneInstrument, addToneToInstrument, toneInstrument, toneSounds,
     PlayNoteTagSet, playNoteTagSet, toneTable, minMaxKeyIndex,
     -- * Working with Sound objects
@@ -75,13 +75,14 @@ type DrumKeyIndicies = NoteKeyIndicies DrumValue
 
 -- | Identify a sound by it's tone, or it's tone-transition (slide or cross-faded).
 data NoteKeyIndicies value
-  = NoteKey    !value
-  | NoteTied   !TiedTag  !value !value
-  deriving (Eq, Ord, Show)
+  = NoteKey  !value
+  | NoteTied !value !value
+  deriving (Eq, Ord)
 
--- | A tag used to indicate how notes are tied.
-data TiedTag = TieNotes | CrossFadeNotes
-  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+instance Show value => Show (NoteKeyIndicies value) where
+  showsPrec _ = \ case
+    NoteKey  a   -> shows a
+    NoteTied a b -> shows a . (" --> " ++) . shows b
 
 -- | Additional tags for a sound. A 'ToneID' has any number of these additional tags.
 data PlayNoteTag = Vibrato | Rolled | Muffled | Flubbed | Scratched
@@ -106,8 +107,8 @@ playNoteTagSet = PlayNoteTagSet . Unboxed.fromList . fmap (fromIntegral . fromEn
 
 minMaxKeyIndex :: ToneKeyIndicies -> (KeyIndex, KeyIndex)
 minMaxKeyIndex = \ case
-  NoteKey    a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
-  NoteTied _ a b -> minmax2 a b
+  NoteKey  a   -> (minimum $ noteKeyIndicies a, maximum $ noteKeyIndicies a)
+  NoteTied a b -> minmax2 a b
   where
     idx2    a b = noteKeyIndicies a ++ noteKeyIndicies b
     minmax2 a b = (minimum $ idx2 a b, maximum $ idx2 a b)
@@ -191,6 +192,9 @@ instance Semigroup DrumValue where
   (DrumValue a) <> (DrumValue b) = DrumValue $
     Strict.intercalate (Strict.singleton '\0') $
     nub $ reverse $ breakByNulls b ++ breakByNulls a
+
+instance Show DrumValue where
+  show (DrumValue txt) = Strict.unpack txt
 
 data DrumKit = DrumKit { theDrumTable :: Map.Map DrumID SoundSet }
 
