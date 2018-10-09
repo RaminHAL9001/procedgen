@@ -71,6 +71,8 @@ import           Data.Semigroup
 import qualified Data.Vector.Mutable       as Mutable
 import qualified Data.Vector               as Boxed
 
+import           Text.Printf
+
 ----------------------------------------------------------------------------------------------------
 
 -- | Common chord progressions
@@ -129,6 +131,16 @@ instance HasTimeWindow (PlayedNote any) Moment where
   timeWindow = \ case
     RestNote -> Nothing
     PlayedNote{ playedDuration=dt } -> Just TimeWindow{ timeStart=0, timeEnd=dt }
+
+instance Show value => Show (PlayedNote value) where
+  show = \ case
+    RestNote       -> "rest"
+    n@PlayedNote{} -> do
+      let show_dt = printf "%5f %s" (show $ playedDuration n) (show $ playedStrength n)
+      let ident   = replicate (22 - length show_dt) ' '
+      (show_dt ++) . (ident ++) . shows (playedNoteValue n) $ case playedTied n of
+        RestNote -> ""
+        _        -> " [tied]"
 
 -- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
 data Strength = Pianismo | Piano | MezzoPiano | Moderare | MezzoForte | Forte | Fortisimo
@@ -259,6 +271,17 @@ instance HasTimeWindow note Moment => HasTimeWindow (NoteSequence note) Moment w
       []   -> Nothing
       a:ax -> Just $ foldl twMinBounds a ax
 
+instance Show note => Show (NoteSequence note) where
+  show (NoteSequence map) = do
+    (t, notes) <- Map.assocs map
+    case notes of
+      []       -> ""
+      n0:notes -> do
+        let show_t = show t
+        let inden  = replicate (length show_t + 1) ' '
+        unlines $ (show_t ++ ' ':show n0)
+                : (notes >>= \ n -> [inden ++ show n])
+
 listNoteSequence :: NoteSequence note -> [(Moment, [note])]
 listNoteSequence (NoteSequence map) = Map.assocs map
 
@@ -295,7 +318,7 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
                 (NoteID key2 _    ) = playedNoteValue n2
             in  case key1 of
                   NoteKey a -> case key2 of
-                    NoteKey b -> NoteID (NoteTied TieNotes a b) tags1
+                    NoteKey b -> NoteID (NoteTied a b) tags1
                     _         -> unchanged
                   _         -> unchanged
       }
@@ -316,6 +339,9 @@ instance HasTimeWindow (PlayedRole (PlayedNote any)) Moment where
 
 instance HasTimeWindow [PlayedRole (PlayedNote any)] Moment where
   timeWindow = twMinBoundsAll . (>>= (maybeToList . timeWindow))
+
+instance Show note => Show (PlayedRole note) where
+  show n = show (thePlayedRoleSequence n) ++ '\n' : show (thePlayedRoleSequence n)
 
 playedRoleInstrument :: Lens' (PlayedRole note) InstrumentID
 playedRoleInstrument = lens thePlayedRoleInstrument $ \ a b -> a{ thePlayedRoleInstrument = b }

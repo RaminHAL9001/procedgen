@@ -274,8 +274,8 @@ playSinusoidToTrack (Track vecT) t0 = \ case
     let (NoteID idx _tag) = playedNoteValue note
     let dt = playedDuration note
     let (idxA, idxB) = case idx of
-          NoteKey    a   -> (a, a)
-          NoteTied _ a b -> (a, b)
+          NoteKey  a   -> (a, a)
+          NoteTied a b -> (a, b)
     let (lenA, lenB) = (noteWeight idxA, noteWeight idxB)
     let key len = take len . cycle . fmap keyboard88 . noteKeyIndicies
     forM_ (zip (key lenA idxA) (key lenB idxB)) $ \ (a, b) -> do
