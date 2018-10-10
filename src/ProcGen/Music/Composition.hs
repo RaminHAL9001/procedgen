@@ -340,6 +340,9 @@ instance HasTimeWindow (PlayedRole (PlayedNote any)) Moment where
 instance HasTimeWindow [PlayedRole (PlayedNote any)] Moment where
   timeWindow = twMinBoundsAll . (>>= (maybeToList . timeWindow))
 
+instance Show note => Show (PlayedRole note) where
+  show n = show (thePlayedRoleSequence n) ++ '\n' : show (thePlayedRoleSequence n)
+
 playedRoleInstrument :: Lens' (PlayedRole note) InstrumentID
 playedRoleInstrument = lens thePlayedRoleInstrument $ \ a b -> a{ thePlayedRoleInstrument = b }
 
