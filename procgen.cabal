@@ -59,21 +59,23 @@ Library {
     ProcGen.Buffer
     ProcGen.Collapsible
     ProcGen.GHCI
-    ProcGen.Plot
-    ProcGen.Plot.GUI
-    ProcGen.Plot.Examples
-    ProcGen.PrimeNumbers
-    ProcGen.Properties
-    ProcGen.ReaderLogic
-    ProcGen.PrettyPrint
     ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.Sequencer
     ProcGen.Music.SoundFont
     ProcGen.Music.Synth
     ProcGen.Music.WaveFile
-    ProcGen.VectorBuilder
+    ProcGen.Plot
+    ProcGen.Plot.Examples
+    ProcGen.Plot.GUI
+    ProcGen.PrimeNumbers
+    ProcGen.Properties
+    ProcGen.ReaderLogic
+    ProcGen.TinyRelDB
     ProcGen.Types
+    ProcGen.VectorBuilder
+
+
 
   BUILD-DEPENDS:
     binary               >=0.7.0.0  && <0.9.0.0,
@@ -132,19 +134,19 @@ Test-suite procgen-live {
     ProcGen.Buffer
     ProcGen.Collapsible
     ProcGen.GHCI
+    ProcGen.Music.Composition
+    ProcGen.Music.KeyFreq88
+    ProcGen.Music.Synth
+    ProcGen.Music.WaveFile
     ProcGen.Plot
-    ProcGen.Plot.GUI
     ProcGen.Plot.Examples
+    ProcGen.Plot.GUI
     ProcGen.PrimeNumbers
     ProcGen.Properties
     ProcGen.ReaderLogic
-    ProcGen.PrettyPrint
-    ProcGen.Music.Composition
-    ProcGen.Music.KeyFreq88
-    ProcGen.Music.WaveFile
-    ProcGen.Music.Synth
-    ProcGen.VectorBuilder
+    ProcGen.TinyRelDB
     ProcGen.Types
+    ProcGen.VectorBuilder
 
   BUILD-DEPENDS:
     binary               >=0.7.0.0  && <0.9.0.0,
