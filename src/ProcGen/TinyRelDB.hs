@@ -4,20 +4,27 @@
 -- binary CSV files, or on no files at all, everything can be done in memory only. This turns out to
 -- be a useful abstraction for pretty printers and text editors.
 module ProcGen.TinyRelDB
-  ( RowElem, Row, Doc(..), rowIndent, theRowIndent, rowElems, theRowElems,
-    aggregA, aggreg,
-    DocFolding, DocFolder, foldDocM, foldDoc,
-    DocMapping, DocMapper, mapDocM, mapDocWithPauseM, mapDoc, mapDocWithPause,
-    docMapperStep, docMapperRun, docMapperPause,
-    Str.IsString(..),
-    -- * Row Header
-    IsPrimitive(..),
-    IsNumericPrimitive(..),
-    IndexElem(..), indexElemTypeSize,
+  ( -- * Classes of Primitives
+    Str.IsString(..), IsNumericPrimitive(..), IsPrimitive(..),
+    putNumericPrimitive,
+    -- * Database Data Types
+    PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
+    -- * Mapping Haskell Data Types
+    DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
+    writeRowPrim, tableFoldDown, tableFoldUp,
+    nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
+    -- * Low-Level Row Formatting
+    RowTagBytes, rowElemBytes,
+    RowHeaderElem(..), RowElemOffset, RowElemLength, RowHeaderTable,
+    RowHeader, rowHeader, indexHeaderTag,
+    RowTag(..), indexElemTypeSize,
     PrimElemType(..), primElemTypeSize,
+    aggregA, aggreg,
+    -- * Packed Vectors
+    PackedVectorElem, toByteString, (!?), (!), length, fromList, toList,
   ) where
 
-import           Prelude                     hiding (fail)
+import           Prelude                     hiding (fail, length)
 
 import           Control.Arrow
 import           Control.Applicative
@@ -28,7 +35,7 @@ import           Control.Monad.Reader        hiding (fail)
 import           Control.Monad.State         hiding (fail)
 
 import qualified Data.Binary                 as Bin
-import           Data.Binary.Builder            (Builder, toLazyByteString)
+import           Data.Binary.Builder            (Builder)
 import           Data.Binary.Get
 import           Data.Binary.Put
 import           Data.Bits
@@ -44,8 +51,8 @@ import           Data.Semigroup
 import qualified Data.String                 as Str
 import qualified Data.Text                   as TStrict
 import qualified Data.Text.Lazy              as TLazy
-import qualified Data.Vector.Unboxed         as Unboxed
-import qualified Data.Vector.Unboxed.Mutable as Mutable
+--import qualified Data.Vector.Unboxed         as Unboxed
+--import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
@@ -77,7 +84,7 @@ aggreg def add ax bx = runIdentity $ aggregA def (\ a -> pure . add a) ax bx
 -- 'Data.Word.Word8' values with the highest significant bit of each 'Data.Word.Word8' set to 1 if
 -- it is not the final value in the number. The remaining 7 bits (the septet) are the content of the
 -- value. There are up to 5 septets, however many are necessary to store the full numerical value.
-newtype VarWord35 = VarWord35 Word64
+newtype VarWord35 = VarWord35 Int64
   deriving (Eq, Ord, Show)
 
 instance Bounded VarWord35 where
@@ -106,14 +113,14 @@ binGetVarWord35 = fmap VarWord35 $ loop $ loop $ loop $ loop $ loop $ pure 0 whe
 
 ----------------------------------------------------------------------------------------------------
 
--- | 'IndexElem' types 'UTF8String' and 'BinaryBlob' do not take a 'FormElemClass' and so 6 bits of
+-- | 'RowTag' types 'UTF8String' and 'BinaryBlob' do not take a 'FormElemClass' and so 6 bits of
 -- the 'Data.Word.Word8' are used to record the serialized index value's blob size are prepended as
 -- higher significant digits to the 'VarWord35', with the 6th bit indicating whether there is a
 -- 'VarWord35' following in the serialized blob, and the lower 5 bits used as a multiplier to the
 -- 'VarWord35'. So in actual fact, the 'UTF8String' and 'BinaryBlob' types can store blobs of
 -- @2^(5+35) == 2^40@ bytes, which is a Tebibyte. This exceeds the memory capacity of most modern
 -- computer systems.
-newtype VarWord40 = VarWord40 Word64
+newtype VarWord40 = VarWord40 Int64
   deriving (Eq, Ord, Show)
 
 instance Bounded VarWord40 where
@@ -129,7 +136,7 @@ splitVarWord40 (VarWord40 w64) = let (VarWord35 mask) = maxBound in
 
 ----------------------------------------------------------------------------------------------------
 
-data IndexElem
+data RowTag
   = NumericPrimitive !PrimElemType
     -- ^ numerical primitive
   | HomoArray        !PrimElemType !VarWord35
@@ -139,18 +146,18 @@ data IndexElem
   | BinaryBlob       !VarWord40
   deriving (Eq, Ord, Show)
 
-instance Bin.Binary IndexElem where
+instance Bin.Binary RowTag where
   put = putIndexElem
   get = getIndexElem
 
-indexElemBinPrefix :: IndexElem -> Word8
+indexElemBinPrefix :: RowTag -> Word8
 indexElemBinPrefix = (`shift` 6) . \ case
   NumericPrimitive{} -> 0
   HomoArray{}        -> 1
   UTF8String{}       -> 2
   BinaryBlob{}       -> 3
 
-indexElemTypeSize :: IndexElem -> Word64
+indexElemTypeSize :: RowTag -> Int64
 indexElemTypeSize = \ case
   NumericPrimitive       e  -> primElemTypeSize e
   HomoArray e (VarWord35 x) -> primElemTypeSize e * x
@@ -179,7 +186,7 @@ primElemTypeBinSuffix :: PrimElemType -> Word8
 primElemTypeBinSuffix = fromIntegral . fromEnum
 
 -- | The serialized size (in bytes) of a value represented by the 'PrimElemType'.
-primElemTypeSize :: PrimElemType -> Word64
+primElemTypeSize :: PrimElemType -> Int64
 primElemTypeSize = \ case
   PrimTypeUTFChar  -> primTypeUTFCharSize
   PrimTypeHostInt  -> numericPrimitiveSize (Proxy :: Proxy Int)
@@ -195,7 +202,7 @@ primElemTypeSize = \ case
   PrimTypeFloat    -> numericPrimitiveSize (Proxy :: Proxy Float)
   PrimTypeDouble   -> numericPrimitiveSize (Proxy :: Proxy Double)
 
-putIndexElem :: IndexElem -> Put
+putIndexElem :: RowTag -> Put
 putIndexElem e = case e of
   NumericPrimitive p     -> putWord8 $ pfx .|. primElemTypeBinSuffix p
   HomoArray        p w35 -> putWord8 (pfx .|. primElemTypeBinSuffix p) >> Bin.put w35
@@ -210,7 +217,7 @@ putIndexElem e = case e of
 
 -- | Entries in the database are can be indexed for faster access times. Variable-sized element
 -- types are followed by a 'VarWord35' blob-size.
-getIndexElem :: Get IndexElem
+getIndexElem :: Get RowTag
 getIndexElem = do
   w8 <- Bin.getWord8
   let mtyp    = (.&. 0x03) . flip shift (-6) $ w8 -- get the 8th and 7th bits
@@ -227,16 +234,16 @@ getIndexElem = do
 
 ----------------------------------------------------------------------------------------------------
 
-calcByteSize :: Bin.Binary a => a -> Word64
-calcByteSize = fromIntegral . BLazy.length . runPut . put 
+calcByteSize :: Bin.Binary a => a -> Int64
+calcByteSize = fromIntegral . BLazy.length . runPut . Bin.put 
 
-primTypeUTFCharSize :: Word64
+primTypeUTFCharSize :: Int64
 primTypeUTFCharSize = 3
 
 -- | The class of type that can be represented as a single 'PrimElemType' when serialized.
 class IsNumericPrimitive a where
   numericPrimitiveType :: Proxy a -> PrimElemType
-  numericPrimitiveSize :: Proxy a -> Word64
+  numericPrimitiveSize :: Proxy a -> Int64
 
 instance IsNumericPrimitive Char where
   numericPrimitiveType Proxy = PrimTypeUTFChar
@@ -313,7 +320,7 @@ instance Monoid (PackedVector elem) where
   _          -> Nothing
   where
     u = elemUnitSize (Proxy :: Proxy elem)
-    decoder = pushChunk (runGetIncremental $ isolate u get) $
+    decoder = pushChunk (runGetIncremental $ isolate u Bin.get) $
       BStrict.take u $ BStrict.drop (i * u) bytes
 
 (!) :: (PackedVectorElem elem, Bin.Binary elem) => PackedVector elem -> Int -> elem
@@ -324,79 +331,25 @@ length :: forall elem . PackedVectorElem elem => PackedVector elem -> Int
 length (PackedVector bytes) = BStrict.length bytes `div` elemUnitSize (Proxy :: Proxy elem)
 
 fromList :: forall elem . (PackedVectorElem elem, Bin.Binary elem) => [elem] -> PackedVector elem
-fromList elems = PackedVector $ BLazy.toStrict $ runPut (mapM_ put elems)
+fromList elems = PackedVector $ BLazy.toStrict $ runPut (mapM_ Bin.put elems)
 
 toList :: forall elem . (PackedVectorElem elem, Bin.Binary elem) => PackedVector elem -> [elem]
 toList (PackedVector bytes) = loop  bytes where
   u = elemUnitSize (Proxy :: Proxy elem)
-  loop bytes = case runGetIncremental (isolate u get) `pushChunk` bytes of
+  loop bytes = case runGetIncremental (isolate u Bin.get) `pushChunk` bytes of
     Done bytes _ a -> a : loop bytes
     _              -> []
-
-----------------------------------------------------------------------------------------------------
-
--- | This data type expresses a 'Row' element in compressed form. It is byte string lazily copied
--- from the 'Row's serialized byte string.
-newtype RowElem = RowElem { rowElemBytes :: BLazy.ByteString }
-  deriving (Eq, Ord)
-
-type RowElemOffset  = Word64
-type RowElemLength  = Word64
-type RowHeaderTable = [(IndexElem, RowElemOffset, RowElemLength)]
-
--- | A serialized row header contains several 'IndexElem's, each one of variable size. This
--- 'RowHeader' type is an un-serialized form of the row header, where each 'IndexElem' takes 6
--- bytes regardless of it's value. This allows for faster indexing and decoding.
-data RowHeader
-  = RowHeader
-    { rowHeaderLength   :: !Int
-      -- ^ Get the number of elements in this 'Row'.
-    , rowHeaderByteSize :: !Word64
-    , rowHeaderTable    :: RowHeaderTable
-    }
-  deriving (Eq, Ord)
-
--- | Split the 'RowHeader' from a 'Row' and return the header along with the content.
-rowHeader :: Row -> (RowHeader, BLazy.ByteString)
-rowHeader (Row bytes) = if BStrict.null bytes then (emptyHeader, mempty) else init where
-  emptyHeader = RowHeader
-    { rowHeaderLength   = 0
-    , rowHeaderByteSize = 0
-    , rowHeaderTable    = []
-    }
-  init = runGet (get >>= \ (VarWord35 w) -> loop w w 0 id) (BLazy.fromStrict bytes)
-  loop w nelems off elems = if nelems <= 0
-    then do
-      hdrsiz <- bytesRead
-      bytes  <- getRemainingLazyByteString
-      return
-        ( RowHeader
-          { rowHeaderLength   = fromIntegral w
-          , rowHeaderByteSize = fromIntegral hdrsiz
-          , rowHeaderTable    = elems []
-          }
-        , bytes
-        )
-    else do
-     elem <- get
-     let siz = indexElemTypeSize elem + off
-     loop w (nelems - 1) (off + siz) $ elems . ((elem, off, siz) :)
-
--- | Where N is an 'Int', obtain the N'th index in the 'RowHeader', along with the index in the
--- byte string at which the serialized object is stored, and the stored object size.
-indexHeader :: RowHeader -> Int -> Select (IndexElem, RowElemOffset, RowElemLength)
-indexHeader hdr i = maybe mzero return $ lookup i $ zip [0 ..] $ rowHeaderTable hdr
 
 ----------------------------------------------------------------------------------------------------
 
 class IsPrimitive a where
   -- | A 'Data.Binary.Put.Put'-ter that does the work of actually serializing the value of @a@.
   -- Returns a 'PrimElemType' that reflects the type @a@.
-  putPrimitive  :: a -> PutM IndexElem
+  putPrimitive  :: a -> PutM RowTag
   -- | A 'Data.Binary.Get.Get'-ter that does the work of deserializing value of type @a@ assuming
   -- the 'PrimElemType' matches the type element currently under the cursor in the header of the
-  -- 'Row'.
-  getPrimitive  :: IndexElem -> Get a
+  -- 'TaggedRow'.
+  getPrimitive  :: RowTag -> Get a
 
 instance IsPrimitive Char   where
   putPrimitive = putNumericPrimitive $ \ char -> do
@@ -460,10 +413,10 @@ instance IsPrimitive Double where
 instance IsPrimitive UTF8Lazy.ByteString where
   putPrimitive str = do
     putLazyByteString str
-    return $ UTF8String $ varWord40Length "Lazy UTF8 ByteString" $ fromIntegral $
+    return $ UTF8String $ varWord40Length "Lazy UTF8 ByteString" $
       BLazy.length str -- NOTE: this must be 'BLazy.length', and NOT 'UTF8Lazy.length'
   getPrimitive     = \ case
-    UTF8String (VarWord40 siz) -> getLazyByteString $ fromIntegral siz
+    UTF8String (VarWord40 siz) -> getLazyByteString siz
     _                          -> mzero
 
 instance IsPrimitive UTF8Strict.ByteString where
@@ -479,9 +432,9 @@ instance IsPrimitive String where
   putPrimitive str = do
     let bin = runPut $ putStringUtf8 str
     putLazyByteString bin
-    return $ UTF8String $ varWord40Length "String" $ fromIntegral $ BLazy.length bin
+    return $ UTF8String $ varWord40Length "String" $ BLazy.length bin
   getPrimitive     = \ case
-    UTF8String (VarWord40 siz) -> UTF8Lazy.toString <$> getLazyByteString (fromIntegral siz)
+    UTF8String (VarWord40 siz) -> UTF8Lazy.toString <$> getLazyByteString siz
     _                          -> mzero
 
 instance IsPrimitive TLazy.Text where
@@ -497,7 +450,7 @@ instance IsPrimitive TStrict.Text where
 -- instances for IsPrimitive unboxed vector types
 -- instances for string types
 
-varWord40Length :: String -> Word64 -> VarWord40
+varWord40Length :: String -> Int64 -> VarWord40
 varWord40Length typmsg len =
   let (VarWord40 max) = maxBound
   in  if VarWord40 len <= maxBound then VarWord40 len else error $
@@ -506,31 +459,100 @@ varWord40Length typmsg len =
 
 -- | Like 'indexElemType' but only works for any type that instantiates 'IsNumericPrimitive', and
 -- always produces a value of 'NumericPrimitive'.
-putNumericPrimitive :: forall a . IsNumericPrimitive a => (a -> Put) -> a -> PutM IndexElem
+putNumericPrimitive :: forall a . IsNumericPrimitive a => (a -> Put) -> a -> PutM RowTag
 putNumericPrimitive put a =
   put a >> return (NumericPrimitive $ numericPrimitiveType (Proxy :: Proxy a))
 
 ----------------------------------------------------------------------------------------------------
 
--- | Inspect a 'Row' header (the list of 'IndexElem's that mark the size of each serialized
--- elements) and use this to decide whether this Row should be decoded. Then deserialize the
+-- | This data type expresses a 'TaggedRow' element in compressed form. It is byte string lazily
+-- copied from the 'TaggedRow's serialized byte string.
+newtype RowTagBytes = RowTagBytes { rowElemBytes :: BLazy.ByteString }
+  deriving (Eq, Ord)
+
+type RowElemOffset  = Int64
+type RowElemLength  = Int64
+
+data RowHeaderElem
+  = RowHeaderElem
+    { headerItemType   :: RowTag
+    , headerItemOffset :: RowElemOffset
+    , headerItemLength :: RowElemLength
+    }
+  deriving (Eq, Ord)
+
+type RowHeaderTable = [RowHeaderElem]
+
+-- | A serialized row header contains several 'RowTag's, each one of variable size. This
+-- 'RowHeader' type is an un-serialized form of the row header, where each 'RowTag' takes 6
+-- bytes regardless of it's value. This allows for faster indexing and decoding.
+data RowHeader
+  = RowHeader
+    { rowHeaderLength   :: !Int
+      -- ^ Get the number of elements in this 'Row'.
+    , rowHeaderByteSize :: !Word64
+    , rowHeaderTable    :: RowHeaderTable
+    }
+  deriving (Eq, Ord)
+
+-- | Split the 'RowHeader' from a 'TaggedRow' and return the header along with the content without
+-- inspecting the content or performing any deserialization. Use this if you want just the header
+-- alone.
+rowHeader :: TaggedRow -> (RowHeader, BLazy.ByteString)
+rowHeader (TaggedRow bytes) = if BStrict.null bytes then (emptyHeader, mempty) else init where
+  emptyHeader = RowHeader
+    { rowHeaderLength   = 0
+    , rowHeaderByteSize = 0
+    , rowHeaderTable    = []
+    }
+  init = runGet (Bin.get >>= \ (VarWord35 w) -> loop w w 0 id) (BLazy.fromStrict bytes)
+  loop w nelems off elems = if nelems <= 0
+    then do
+      hdrsiz <- bytesRead
+      bytes  <- getRemainingLazyByteString
+      return
+        ( RowHeader
+          { rowHeaderLength   = fromIntegral w
+          , rowHeaderByteSize = fromIntegral hdrsiz
+          , rowHeaderTable    = elems []
+          }
+        , bytes
+        )
+    else do
+     item <- Bin.get
+     let siz  = indexElemTypeSize item + off
+     let elem = RowHeaderElem{ headerItemType=item, headerItemOffset=off, headerItemLength=siz }
+     loop w (nelems - 1) (off + siz) $ elems . (elem :)
+
+-- | Where N is an 'Int', obtain the N'th index in the 'RowHeader', along with the index in the
+-- byte string at which the serialized object is stored, and the stored object size.
+indexHeaderTag :: RowHeader -> Int -> Select RowHeaderElem
+indexHeaderTag hdr i = maybe mzero return $ lookup i $ zip [0 ..] $ rowHeaderTable hdr
+
+----------------------------------------------------------------------------------------------------
+
+-- | Inspect a 'TaggedRow' header (the list of 'RowTag's that mark the size of each serialized
+-- elements) and use this to decide whether this TaggedRow should be decoded. Then deserialize the
 -- relevant elements to construct a value of type @a@.
 newtype Select a
-  = Select { unwrapSelect :: ReaderT SelectEnv (StateT RowHeaderTable (Except SelectAnomaly)) a}
+  = Select
+    { unwrapSelect ::
+        ReaderT SelectEnv (StateT RowHeaderTable (Except SelectAnomaly)) a
+    }
   deriving (Functor, Applicative, Monad)
 
 data SelectEnv
   = SelectEnv
     { selectRowHeader :: RowHeader
-    , selectRow       :: Row
+    , selectRow       :: TaggedRow
     }
 
 data SelectAnomaly
   = SelectUnmatched
     -- ^ Ignore this row, it does not match.
-  | CorruptRow !Row !TStrict.Text
+  | CorruptRow !TaggedRow !TStrict.Text
     -- ^ There seems to be something wrong with the data, halt immediately.
-  | UnknownError !TStrict.Text (Maybe Row)
+  | UnknownError !TStrict.Text (Maybe TaggedRow)
     -- ^ A catch-all exception.
   deriving (Eq, Ord)
 
@@ -547,45 +569,62 @@ instance MonadPlus Select where
     SelectUnmatched -> b
     err             -> throwError err
 
+instance MonadReader SelectEnv Select where
+  ask = Select ask
+  local f (Select m) = Select $ local f m
+  
+instance MonadState RowHeaderTable Select where
+  state = Select . lift . state
+
 instance                Alternative Select    where { empty = mzero; (<|>) = mplus; }
 instance Semigroup a => Semigroup  (Select a) where { a <> b = (<>) <$> a <*> b; }
-instance Monoid    a => Monoid     (Select a) where { mempty = pure mempty; mappend = (<>); }
+instance Monoid    a => Monoid     (Select a) where
+  mempty      = pure mempty
+  mappend a b = mappend <$> a <*> b
 
--- | Step to the next 'RowElem', is 'Control.Monad.mzero' if there are no elements left.
-nextRowElem :: Select ()
-nextRowElem = Select $ ReaderT $ const $
-  StateT $ \ case { [] -> mzero; _:elems -> return ((), elems); }
+-- | Step to the next 'RowTagBytes', is 'Control.Monad.mzero' if there are no elements left.
+nextRowTag :: Select ()
+nextRowTag = join $ gets $ \ case { [] -> mzero; _:elems -> put elems; }
 
--- | Skip to the 'RowElem' matching the given predicate.
-skipToRowElem :: (IndexElem -> Bool) -> Select IndexElem
-skipToRowElem find = Select (lift $ gets $ dropWhile $ not . find . \ (a, _, _) -> a) >>= \ case
-  []                  -> mzero
-  elems@((e, _, _):_) -> Select $ lift $ state $ const (e, elems)
+-- | Skip to the 'RowTagBytes' matching the given predicate.
+skipToRowElem :: (RowTag -> Bool) -> Select RowHeaderElem
+skipToRowElem found = join $ gets $ dropWhile (not . found . headerItemType) >>> \ case
+  []      -> mzero
+  e:elems -> state $ const (e, elems)
 
--- | Fail unless we have consumed all of the 'RowElem's by this point.
+-- | Fail unless we have consumed all of the 'RowTagBytes's by this point.
 expectRowEndWith :: SelectAnomaly -> Select ()
 expectRowEndWith err = Select (lift get) >>= \ case { [] -> pure (); _ -> throwError err; }
 
--- | Extract the current 'RowElem' under the cursor, then advance the cursor.
-rowElem :: Select (IndexElem, RowElem)
-rowElem = Select (lift get) >>= \ case
-  []                        -> mzero
-  (idxelem, off, siz):elems -> do
-    lift $ put elems
-    (Row bytes) <- asks selectRow
-    return (idxelem, RowElem $ BLazy.fromStrict $ BStrict.take siz $ BStrict.drop off bytes)
+-- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
+rowElem :: Select (RowTag, RowTagBytes)
+rowElem = join $ gets $ \ case
+  []      -> mzero
+  ( RowHeaderElem
+    { headerItemType   =  idxelem
+    , headerItemOffset = off
+    , headerItemLength = siz
+    }):elems -> do
+        put elems
+        (TaggedRow bytes) <- asks selectRow
+        return
+          ( idxelem
+          , RowTagBytes $ BLazy.fromStrict $
+              BStrict.take (fromIntegral siz) $
+              BStrict.drop (fromIntegral off) bytes
+          )
 
 -- | Use a 'Data.Binary.Get.Get' function from the "Data.Binary.Get" module to unpack the current
 -- row element retrieved from 'rowElem'.
-unpackRowElem :: Get a -> Select a
-unpackRowElem unpack = rowElem >>= \ (idx, RowElem bytes) -> pure (idx, runGet unpack bytes)
+unpackRowElem :: Get a -> Select (RowTag, a)
+unpackRowElem unpack = rowElem >>= \ (idx, RowTagBytes bytes) -> pure (idx, runGet unpack bytes)
 
 -- | Match the value of any type @a@ that instantiates 'IsPrimitive' with the current 'rowElem'
 -- under the cursor.
 readRowPrim :: forall a . IsPrimitive a => Select a
 readRowPrim = do
-  (idx, (RowElem bytes)) <- rowElem
-  case runGetOrFail getPrimitive $ BLazy.fromStrict bytes of
+  (idx, (RowTagBytes bytes)) <- rowElem
+  case runGetOrFail (getPrimitive idx) bytes of
     Right (_, _, a) -> return a
     Left{}          -> mzero
 
@@ -593,41 +632,43 @@ readRowPrim = do
 
 type RowBuilder = RowBuilderM ()
 
-newtype RowBuilderM a = RowBuilderM (State BuildRowState a)
+newtype RowBuilderM a = RowBuilderM (StateT BuildRowState PutM a)
   deriving (Functor, Applicative, Monad)
 
 data BuildRowState
   = BuildRowState
     { buildElemCount  :: !Int
     , buildRowHeader  :: Builder
-    , buildRowContent :: Builder
     }
 
 instance Semigroup BuildRowState where
-  (<>) (BuildRowState{buildElemCount=a,buildRowHeader=hdrA,buildRowContent=contA})
-       (BuildRowState{buildElemCount=b,buildRowHeader=hdrB,buildRowContent=contB}) = BuildRowState
-        { buildElemCount  =     a  +     b
-        , buildRowHeader  =  hdrA <>  hdrB
-        , buildRowContent = contA <> contB
+  (<>) (BuildRowState{buildElemCount=a,buildRowHeader=hdrA})
+       (BuildRowState{buildElemCount=b,buildRowHeader=hdrB}) = BuildRowState
+        { buildElemCount =    a  +    b
+        , buildRowHeader = hdrA <> hdrB
         }
 
 instance Monoid BuildRowState where
-  mempty  = BuildRowState{ buildRowHeader = mempty, buildRowContent = mempty }
+  mempty  = BuildRowState{ buildElemCount = 0, buildRowHeader = mempty }
   mappend = (<>)
 
 -- | Use the 'IsPrimitive' instance for data of type @a@ to store the information in @a@ into a
 -- 'RowBuilder'.
 writeRowPrim :: forall a . IsPrimitive a => a -> RowBuilder
-writeRowPrim a = RowBuilderM $ state $ \ st ->
-  st{ buildElemCount  = buildElemCount st + 1
-    , buildRowHeader  = buildRowHeader st <>
-        fromLazyByteString (execPut $ putIndexElem $ indexElemType (Proxy :: Proxy a))
-    , buildRowContent = buildRowContent st <> execPut (putPrimitive a)
-    }
+writeRowPrim a = RowBuilderM $ do
+  idxelem <- lift $ putPrimitive a
+  modify $ \ st ->
+    st{ buildElemCount  = buildElemCount  st + 1
+      , buildRowHeader  = buildRowHeader  st <> execPut (putIndexElem idxelem)
+      }
 
 ----------------------------------------------------------------------------------------------------
 
--- | The class of things that map to and from 'Row's in the Tiny Relation Database.
+-- | The class of things that map to and from 'TaggedRow's in the Tiny Relation Database. This class
+-- combines both query and update functions together. When performing queries and updates on a
+-- 'Table' of 'TaggedRow's, store values of types in the class 'DBMapped' into the rows. If you
+-- don't want 'TaggedRow's, if you instead want 'PlainRow's, store values of types in the class
+-- 'Bin.Binary'.
 class DBMapped a where
   writeRow :: a -> RowBuilder
   readRow  :: Select a
@@ -647,110 +688,50 @@ instance DBMapped Double where { writeRow = writeRowPrim; readRow = readRowPrim;
 
 ----------------------------------------------------------------------------------------------------
 
-newtype Row = Row { rowBytes :: BStrict.ByteString }
+-- | When using a database of 'BStrict.ByteString's where each 'BStrict.ByteString' contains
+-- multiple serialized elements, selecting an arbitrary element from this row is an @O(n*m)@ time
+-- complexity problem, where @n@ is the number of elements, and @m@ is the serialized size of each
+-- element.
+--
+-- A 'TaggedRow' is a 'BStrict.ByteString' that has each element in the byte string tagged and
+-- stored in a 'RowHeader'. The 'RowHeader' is also serialized and prepended to the
+-- 'BStrict.ByteString' row data. Each tag in the 'RowHeader' contains the position and size of each
+-- element in the 'BStrict.ByteString'. Finding the tag is an @O(n)@ complexity operation, but
+-- selecting the object associated with the tag is an @O(1)@ complexity operation.
+--
+-- Thus, with a 'TaggedRow', selecting an element from the row is an @O(n*1) = O(n)@ complexity
+-- operation, as opposed to using an untagged 'PlainRow' in which selecting an element is a @O(n*m)@
+-- time complexity operation.
+newtype TaggedRow = TaggedRow { taggedRowBytes :: BStrict.ByteString }
   deriving (Eq, Ord)
 
-newtype Doc = Doc{ docToSequence :: S.Seq Row }
-  deriving (Eq, Ord)
+-- | A 'PlainRow' is an un-taggeed table row, which is an alternative table storage format to
+-- 'TaggedRow'. Use a 'PlainRow' if you are sure you will view every element in the row every time
+-- the row is inspected.
+type PlainRow = BStrict.ByteString
 
-instance Semigroup Doc where { (Doc a) <> (Doc b) = Doc (a <> b); }
-instance Monoid    Doc where { mempty = Doc mempty; mappend = (<>); }
+-- | A table of stored elements. The @format@ of the 'Table' is either a 'TaggedRow' or a
+-- 'PlainRow'.
+newtype Table format = Table{ tableToSequence :: S.Seq format }
+  deriving (Eq, Ord, Functor)
 
-----------------------------------------------------------------------------------------------------
+instance Semigroup (Table format) where { (Table a) <> (Table b) = Table (a <> b); }
+instance Monoid    (Table format) where { mempty = Table mempty; mappend = (<>); }
 
-class Monad m => DocFolding f fold m where
-  toDocFold :: f -> Row -> DocFolder fold m ()
+-- | Fold from the top of the table to the bottom. This function is defined in terms of
+-- 'Data.Foldable.foldl'. The internal table type is a 'Data.Sequence.Seq' so runtime performance of
+-- both 'tableFoldUp' and 'tableFoldDown' are almost always the same.
+tableFoldDown
+  :: (format -> Maybe a)
+  -> (fold -> a -> fold) -> fold -> Table format -> fold
+tableFoldDown get fold init (Table seq) =
+  foldl (\ a bytes -> maybe a (fold a) $ get bytes) init seq
 
-newtype DocFolder fold m a = DocFolder{ unwrapDocFolder :: StateT fold m a }
-  deriving (Functor, Applicative, Monad, MonadIO)
-
-instance MonadTrans (DocFolder fold) where
-  lift = DocFolder . lift
-
-instance Monad m => MonadState fold (DocFolder fold m) where
-  state = DocFolder . state
-
-instance DocFolding (Row -> fold -> fold) fold Identity where
-  toDocFold f = modify . f
-
-instance DocFolding ([RowElem] -> fold -> fold) fold Identity where
-  toDocFold f = modify . f . (^. rowElems)
-
-instance Monad m => DocFolding (Row -> fold -> m fold) fold m where
-  toDocFold f row = get >>= lift . f row >>= put
-
-instance Monad m => DocFolding ([RowElem] -> fold -> m fold) fold m where
-  toDocFold f row = get >>= lift . f (row ^. rowElems) >>= put
-
-foldDocM :: DocFolding f fold m => f -> fold -> Doc -> m fold
-foldDocM f init (Doc doc) = execStateT (unwrapDocFolder $ mapM (toDocFold f) doc) init
-
-foldDoc :: DocFolding f fold Identity => f -> fold -> Doc -> fold
-foldDoc f init = runIdentity . foldDocM f init
-
-----------------------------------------------------------------------------------------------------
-
-class Monad m => DocMapping f m where
-  toDocMap :: Monad m => f -> Row -> DocMapper m Row
-
-data DocMapper m a
-  = DocMapperPure a
-  | DocMapperPause Row (Row -> DocMapper m a)
-  | DocMapperLift (m (DocMapper m a))
-  deriving Functor
-
-instance Show (DocMapper m a) where
-  show = \ case
-    DocMapperPure{} -> "Done."
-    DocMapperPause row _ -> "Paused on: "++show row
-    DocMapperLift{} -> "Working..."
-
-instance Monad m => Monad (DocMapper m) where
-  return = DocMapperPure
-  f >>= next = case f of
-    DocMapperPure      a -> next a
-    DocMapperPause row f -> DocMapperPause row $ (>>= next) <$> f
-    DocMapperLift      f -> DocMapperLift $ (>>= next) <$> f
-
-instance Applicative m => Applicative (DocMapper m) where
-  pure = DocMapperPure
-  f <*> a = case f of
-    DocMapperPure      f -> f <$> a
-    DocMapperPause row f -> DocMapperPause row $ (<*> a) <$> f
-    DocMapperLift      f -> DocMapperLift $ (<*> a) <$> f
-
-docMapperPause :: Monad m => Row -> DocMapper m Row
-docMapperPause row = DocMapperPause row return
-
--- | Check if a 'DocMapper' was paused, if so evaluate the given continuation. Otherwise evaluate
--- the next step and pause again.
-docMapperStep :: Monad m => DocMapper m a -> (Row -> m Row) -> m (DocMapper m a)
-docMapperStep f onPause = case f of
-  DocMapperPure      a -> return (DocMapperPure a)
-  DocMapperPause row f -> f <$> onPause row
-  DocMapperLift      a -> a
-
--- | Loop until completion, applying the given 'Row' function whenever a pause occurs.
-docMapperRun :: Monad m => DocMapper m a -> (Row -> m Row) -> m a
-docMapperRun f onPause = case f of
-  DocMapperPure      a -> return a
-  DocMapperPause row f -> onPause row >>= flip docMapperRun onPause . f
-  DocMapperLift      f -> f >>= flip docMapperRun onPause
-
--- | Map over a 'Doc' with a given mapping function, and also takes a pause function to be evaluated
--- whenever the mapping pauses.
-mapDocWithPauseM :: DocMapping f m => (Row -> m Row) -> f -> Doc -> m Doc
-mapDocWithPauseM onPause f (Doc doc) = loop S.empty doc where
-  loop back = \ case
-    S.Empty      -> return $ Doc back
-    a S.:<| more -> docMapperRun (toDocMap f a) onPause >>= flip loop more . (back S.|>)
-
--- | Like 'mapDocWithPauseM' but automatically resumes after every pause.
-mapDocM :: DocMapping f m => f -> Doc -> m Doc
-mapDocM = mapDocWithPauseM pure
-
-mapDocWithPause :: DocMapping f Identity => (Row -> Row) -> f -> Doc -> Doc
-mapDocWithPause onPause f = runIdentity . mapDocWithPauseM (pure . onPause) f
-
-mapDoc :: DocMapping f Identity => f -> Doc -> Doc
-mapDoc = mapDocWithPause id
+-- | Fold from the bottom of the table to the top. This function is defined in terms of
+-- 'Data.Foldable.foldr'. The internal table type is a 'Data.Sequence.Seq' so runtime performance of
+-- both 'tableFoldUp' and 'tableFoldDown' are almost always the same.
+tableFoldUp
+  :: (format -> Maybe a)
+  -> (a -> fold -> fold) -> fold -> Table format -> fold
+tableFoldUp get fold init (Table seq) =
+  foldr (\ bytes init -> maybe init (`fold` init) $ get bytes) init seq
