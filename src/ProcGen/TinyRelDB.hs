@@ -4,26 +4,25 @@
 -- binary CSV files, or on no files at all, everything can be done in memory only. This turns out to
 -- be a useful abstraction for pretty printers and text editors.
 module ProcGen.TinyRelDB
-  where
---  ( -- * Classes of Primitives
---    Str.IsString(..), IsNumericPrimitive(..), IsPrimitive(..),
---    putNumericPrimitive,
---    -- * Database Data Types
---    PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
---    -- * Mapping Haskell Data Types
---    DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
---    writeRowPrim, tableFoldDown, tableFoldUp,
---    nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
---    -- * Low-Level Row Formatting
---    RowTagBytes, rowElemBytes,
---    RowHeaderElem(..), RowElemOffset, RowElemLength, RowHeaderTable,
---    RowHeader, rowHeader, indexHeaderTag,
---    RowTag(..), indexElemTypeSize,
---    PrimElemType(..), primElemTypeSize,
---    aggregA, aggreg,
---    -- * Packed Vectors
---    PackedVectorElem, toByteString, (!?), (!), length, fromList, toList,
---  ) where
+  ( -- * Classes of Primitives
+    IsNumericPrimitive(..), IsPrimitive(..),
+    putNumericPrimitive,
+    -- * Database Data Types
+    PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
+    -- * Mapping Haskell Data Types
+    DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
+    writeRowPrim, tableFoldDown, tableFoldUp,
+    nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
+    -- * Low-Level Row Formatting
+    RowTagBytes, rowElemBytes,
+    RowHeaderElem(..), RowElemOffset, RowElemLength, RowHeaderTable,
+    RowHeader, rowHeader, indexHeaderTag,
+    RowTag(..), indexElemTypeSize,
+    PrimElemType(..), primElemTypeSize,
+    aggregA, aggreg,
+    -- * Packed Vectors
+    PackedVectorElem, toByteString, (!?), (!), length, fromList, toList,
+  ) where
 
 import           Prelude                     hiding (fail, length)
 
@@ -92,27 +91,27 @@ newtype VarWord35 = VarWord35 Int64
 
 instance Bounded VarWord35 where
   minBound = VarWord35 0
-  maxBound = VarWord35 0x00000007FFFFFFFF
+  maxBound = VarWord35 varWord35Mask
 
 instance Bin.Binary VarWord35 where
   put = binPutVarWord35
   get = binGetVarWord35
 
+varWord35Mask :: Int64
+varWord35Mask = 0x00000007FFFFFFFF
+
 binPutVarWord35 :: VarWord35 -> Bin.Put
-binPutVarWord35 (VarWord35 w) =
-  loop (a,b) $ loop (b,c) $ loop (c,d) $ loop (d,e) $ loop (e,0::Word8) $ pure ()
-  where
-    -- I'm going out of my way to tell the compiler to unroll this loop.
-    s = fromIntegral . (.&. 0x7F) . shift w . negate . (* 7) :: Int -> Word8
-    (a, b, c, d, e) = (s 4, s 3, s 2, s 1, s 0)
-    loop (a, b) next = if b == 0 then Bin.putWord8 a else Bin.putWord8 (a .|. 0x80) >> next
+binPutVarWord35 (VarWord35 w64) = if w64 > varWord35Mask then error ("binPutVarWord35 "++showHex w64 "") else loop 0 w64 (pure ()) where
+  loop mask w64 = let w8 = fromIntegral $ w64 .&. 0x7F in
+    if w64 < 0x80 then ((putWord8 $! w8 .|. mask) >>) else
+      (loop 0x80 $! shift w64 (-7)) . ((putWord8 $! mask .|. w8) >>)
 
 binGetVarWord35 :: Bin.Get VarWord35
-binGetVarWord35 = fmap VarWord35 $ loop $ loop $ loop $ loop $ loop $ pure 0 where
-  loop next = do
-    w8 <- Bin.getWord8
-    let w64 = fromIntegral $ w8 .&. 0x7F
-    if w8 .&. 0x80 == 0 then pure w64 else (.|.) (shift w64 7) <$> next
+binGetVarWord35 = VarWord35 <$> loop (0 :: Int) 0 where
+  loop i accum = if i > 5
+   then error "decoded VarWord35 byte string with more than 5 x 7-bit bytes"
+   else Bin.getWord8 >>= \ w8 -> (if w8 .&. 0x80 == 0 then pure else loop $! i + 1) $!
+          fromIntegral (w8 .&. 0x7F) .|. shift accum 7
 
 ----------------------------------------------------------------------------------------------------
 
@@ -766,6 +765,22 @@ newtype HexWord8 = HexWord8 Word8 deriving (Eq, Ord)
 instance Show HexWord8 where
   show (HexWord8 w) = '0' : 'x' : (if w < 0x10 then ('0' :) else id) (showHex w "")
 
+showBase2 :: FiniteBits w => w -> String
+showBase2 w = let bz = finiteBitSize w - 1 in
+  [if testBit w i then '*' else '-' | i <- [bz, bz - 1 .. 0]]
+
+showPutBase2 :: Put -> String
+showPutBase2 = BLazy.unpack . runPut >=> showBase2
+
+regularSpacesR :: Int -> String -> String
+regularSpacesR n = reverse . regularSpacesL n . reverse
+
+regularSpacesL :: Int -> String -> String
+regularSpacesL n = loop where
+  loop  str = case splitAt n str of
+    ("" , ""  ) -> ""
+    (str, more) -> str ++ ' ' : loop more
+
 newtype RunTest a
   = RunTest{ unwrapRunTest :: ExceptT TESTError Get a }
   deriving (Functor, Applicative, Monad)
@@ -830,6 +845,7 @@ getTEST orig bytes = execTest bytes $ liftBinGet Bin.get >>= \ (VarWord35 a) ->
 test_getPutVarWord35 :: IO ()
 test_getPutVarWord35 = forM_ (loop (0::Int) p) $ \ (n, group) -> do
   print n
+  putStrLn $ "max bound: " ++ show (maximum $ p1 ++ p2 ++ p3)
   forM_ group $ \ (orig, serialized, deserialized) -> case deserialized of
     Right{}  -> return ()
     Left err -> do
@@ -852,11 +868,12 @@ test_getPutVarWord35 = forM_ (loop (0::Int) p) $ \ (n, group) -> do
           putStrLn $ "   extra: " ++ showBytes bytes
       fail "Tests failed."
   where
-    p1 = 0 : 1 : (fromIntegral <$> Unboxed.toList all16BitPrimes)
-    p2 = (\a ->   a * a  ) <$> p1
-    p3 = (\a -> a * a * a) <$> p1
-    p  = do
-      (a, b, c) <- zip3 ((*) <$> p1 <*> p2) ((*) <$> p2 <*> p3) ((*) <$> p3 <*> p1)
+    lim = flip mod (varWord35Mask + 1)
+    p1  = 0 : 1 : (fromIntegral <$> Unboxed.toList all16BitPrimes)
+    p2  = (\a -> lim $  a * a  ) <$> p1
+    p3  = (\a -> lim $ a * a * a) <$> p1
+    p   = do
+      (a, b, c) <- zip3 p1 p2 p3
       orig <- [T1 c, T2 a b, T3 a b c, T4 0 a b c, T4 a 0 b c, T4 a b 0 c, T4 a b c 0]
       let serialized = putTEST orig
       [(orig, serialized, getTEST orig $ BLazy.fromStrict serialized)]
