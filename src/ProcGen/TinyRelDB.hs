@@ -20,6 +20,8 @@ module ProcGen.TinyRelDB
     RowTag(..), indexElemTypeSize,
     PrimElemType(..), primElemTypeSize,
     aggregA, aggreg,
+    -- * 35-Bit Variable-Width Word
+    VarWord35, varWord35, unVarWord35, varWord35Mask, binGetVarWord35, binPutVarWord35,
     -- * Packed Vectors
     PackedVectorElem, toByteString, (!?), (!), length, fromList, toList,
   ) where
@@ -50,12 +52,9 @@ import qualified Data.Sequence               as S
 import           Data.Semigroup
 import qualified Data.Text                   as TStrict
 import qualified Data.Text.Lazy              as TLazy
-import qualified Data.Vector.Unboxed         as Unboxed
---import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
 
-import ProcGen.PrimeNumbers
-import Numeric
+import           Numeric                     (showHex)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -81,13 +80,20 @@ aggreg def add ax bx = runIdentity $ aggregA def (\ a -> pure . add a) ax bx
 ----------------------------------------------------------------------------------------------------
 
 -- | A variable-length unsigned integer used to record binary blob sizes in element indicies. A
--- 'VarWord35' consists of up to 5*7 = 35 bits, and since 2^35 is 32 Gibibytes, this will cover all
--- practical blob sizes for the forseeable future. The serialized form of this number is big-endian
--- 'Data.Word.Word8' values with the highest significant bit of each 'Data.Word.Word8' set to 1 if
--- it is not the final value in the number. The remaining 7 bits (the septet) are the content of the
--- value. There are up to 5 septets, however many are necessary to store the full numerical value.
-newtype VarWord35 = VarWord35 Int64
-  deriving (Eq, Ord, Show)
+-- 'VarWord35' consists of up to @5*7 = 35@ bits, and since @2^35@ is 32 Gibibytes, this will cover
+-- all practical blob sizes for the forseeable future. The serialized form of this number is
+-- big-endian 'Data.Word.Word8' values with the highest significant bit of each 'Data.Word.Word8'
+-- octat set to 1 if it is not the final value in the number, and set to 0 if it is the final value
+-- of the number. The remaining lower 7 bits (the septet) are the content of the value. There are up
+-- to 5 septets, however many are necessary to store the full numerical value. Constructing a
+-- 'BStrict.ByteString' with more than 5 octets with the highest significant bit set and parsing a
+-- 'VarWord35 will evaluate to an error, regardless of the content of the lower septet bits of the
+-- octet.
+newtype VarWord35 = VarWord35{ unVarWord35 :: Int64 }
+  deriving (Eq, Ord)
+
+instance Show VarWord35 where
+  showsPrec p (VarWord35 a) = showParen (p > 10) $ ("varWord35 " ++) . showsPrec p a
 
 instance Bounded VarWord35 where
   minBound = VarWord35 0
@@ -97,15 +103,29 @@ instance Bin.Binary VarWord35 where
   put = binPutVarWord35
   get = binGetVarWord35
 
+-- | Construct a 'VarWord35'. Takes any 'Prelude.Integral' data type modulo the 'varWord35Mask'.
+varWord35 :: Integral i => i -> VarWord35
+varWord35 = VarWord35 . (.&. varWord35Mask) . fromIntegral
+
+-- | This bit mask (expressed as a 64-bit integer) is bitwise-ANDed with an arbitrary
+-- 'Data.Int.Int64' value to construct a 'VarWord35'.
 varWord35Mask :: Int64
 varWord35Mask = 0x00000007FFFFFFFF
 
+-- | This function is used to instantiate 'Bin.put' in the 'Bin.Binary' typeclass. It is exported
+-- here under a more specific name and type.
 binPutVarWord35 :: VarWord35 -> Bin.Put
-binPutVarWord35 (VarWord35 w64) = if w64 > varWord35Mask then error ("binPutVarWord35 "++showHex w64 "") else loop 0 w64 (pure ()) where
-  loop mask w64 = let w8 = fromIntegral $ w64 .&. 0x7F in
-    if w64 < 0x80 then ((putWord8 $! w8 .|. mask) >>) else
-      (loop 0x80 $! shift w64 (-7)) . ((putWord8 $! mask .|. w8) >>)
+binPutVarWord35 (VarWord35 w64) =
+  if w64 <= varWord35Mask
+   then loop 0 w64 (pure ())
+   else error ("binPutVarWord35 "++showHex w64 "")
+  where
+    loop mask w64 = let w8 = fromIntegral $ w64 .&. 0x7F in
+      if w64 < 0x80 then ((putWord8 $! w8 .|. mask) >>) else
+        (loop 0x80 $! shift w64 (-7)) . ((putWord8 $! mask .|. w8) >>)
 
+-- | This function is used to instantiate 'Bin.get' in the 'Bin.Binary' typeclass. It is exported
+-- here under a more specific name and type.
 binGetVarWord35 :: Bin.Get VarWord35
 binGetVarWord35 = VarWord35 <$> loop (0 :: Int) 0 where
   loop i accum = if i > 5
@@ -632,8 +652,13 @@ readRowPrim = do
 
 ----------------------------------------------------------------------------------------------------
 
+-- | The type @'RowBuilderM' ()@ is used often so it helps to have a type synonym for it.
 type RowBuilder = RowBuilderM ()
 
+-- | This is a function for constructing 'TaggedRow's. The 'writeRowPrim' function works like the
+-- serializing function 'Bin.put', and the 'RowBuilderM' function type works similar to the
+-- 'Bin.Put' function type. The difference is that the type that is serialized must be a type in the
+-- class 'IsPrimitive'. Evaluating this function with 'buildRow' will produce a 'TaggedRow'.
 newtype RowBuilderM a = RowBuilderM (StateT BuildRowState PutM a)
   deriving (Functor, Applicative, Monad)
 
@@ -738,145 +763,3 @@ tableFoldUp
 tableFoldUp get fold init (Table seq) =
   foldr (\ bytes init -> maybe init (`fold` init) $ get bytes) init seq
 
-----------------------------------------------------------------------------------------------------
-----------------------------------------------------------------------------------------------------
-
-data TEST a = T1 a | T2 a a | T3 a a a | T4 a a a a
-  deriving (Eq, Ord, Show)
-
-data TESTError
-  = Decoder_failed
-    { remaining_bytes     :: !BStrict.ByteString
-    , consumed_byte_count :: !ByteOffset
-    , fail_message        :: !TStrict.Text
-    }
-  | Decoded_value_is_wrong
-    { decoded_value       :: !(TEST Int64)
-    , expected_value      :: !(TEST Int64)
-    }
-  | Unused_bytes
-    { decoded_value       :: !(TEST Int64)
-    , consumed_byte_count :: !ByteOffset
-    , remaining_bytes     :: !BStrict.ByteString
-    }
-  deriving Show
-
-newtype HexWord8 = HexWord8 Word8 deriving (Eq, Ord)
-instance Show HexWord8 where
-  show (HexWord8 w) = '0' : 'x' : (if w < 0x10 then ('0' :) else id) (showHex w "")
-
-showBase2 :: FiniteBits w => w -> String
-showBase2 w = let bz = finiteBitSize w - 1 in
-  [if testBit w i then '*' else '-' | i <- [bz, bz - 1 .. 0]]
-
-showPutBase2 :: Put -> String
-showPutBase2 = BLazy.unpack . runPut >=> showBase2
-
-regularSpacesR :: Int -> String -> String
-regularSpacesR n = reverse . regularSpacesL n . reverse
-
-regularSpacesL :: Int -> String -> String
-regularSpacesL n = loop where
-  loop  str = case splitAt n str of
-    ("" , ""  ) -> ""
-    (str, more) -> str ++ ' ' : loop more
-
-newtype RunTest a
-  = RunTest{ unwrapRunTest :: ExceptT TESTError Get a }
-  deriving (Functor, Applicative, Monad)
-
-instance Alternative RunTest where { (<|>) = mplus; empty = mzero; }
-
-instance MonadPlus RunTest where
-  mzero = RunTest $ ExceptT mzero
-  mplus (RunTest (ExceptT a)) (RunTest (ExceptT b)) = RunTest $ ExceptT $ mplus a b
-
-instance MonadError TESTError RunTest where
-  throwError = RunTest . throwError
-  catchError (RunTest try) catch = RunTest $ catchError try $ unwrapRunTest . catch
-
-showBytes :: BStrict.ByteString -> String
-showBytes = show . fmap HexWord8 . BStrict.unpack
-
-liftBinGet :: Get a -> RunTest a
-liftBinGet get = RunTest $ ExceptT $ Right <$> get
-
-execTest
-  :: BLazy.ByteString -> RunTest a
-  -> Either TESTError (BLazy.ByteString, ByteOffset, a)
-execTest bytes (RunTest f) = case test of
-  Left (bytes, off, err) -> Left $
-    Decoder_failed (BLazy.toStrict bytes) off (TStrict.pack err)
-  Right (bytes, off, a) -> case a of
-    Left err -> Left err
-    Right  a -> Right (bytes, off, a)
-  where
-    test = flip runGetOrFail bytes $ runExceptT f
-
-putTEST :: TEST Int64 -> BStrict.ByteString
-putTEST = BLazy.toStrict . runPut . \ case
-  T1 a       -> p a
-  T2 a b     -> p a >> p b
-  T3 a b c   -> p a >> p b >> p c
-  T4 a b c d -> p a >> p b >> p c >> p d
-  where
-    p = binPutVarWord35 . VarWord35
-
-getTEST
-  :: TEST Int64
-  -> BLazy.ByteString
-  -> Either TESTError
-            (BLazy.ByteString, ByteOffset, TEST Int64)
-getTEST orig bytes = execTest bytes $ liftBinGet Bin.get >>= \ (VarWord35 a) ->
-  check (T1 a)     $ \ (VarWord35 b) -> 
-  check (T2 a b)   $ \ (VarWord35 c) -> 
-  check (T3 a b c) $ \ (VarWord35 d) -> done (T4 a b c d)
-  where
-    check t next = mplus (liftBinGet Bin.get >>= next) (done t)
-    done  t = do
-      rem <- liftBinGet getRemainingLazyByteString
-      off <- liftBinGet bytesRead
-      if t == orig
-       then if BLazy.null rem
-             then return t
-             else throwError $ Unused_bytes t off $ BLazy.toStrict rem
-       else throwError $ Decoded_value_is_wrong orig t
-
-test_getPutVarWord35 :: IO ()
-test_getPutVarWord35 = forM_ (loop (0::Int) p) $ \ (n, group) -> do
-  print n
-  putStrLn $ "max bound: " ++ show (maximum $ p1 ++ p2 ++ p3)
-  forM_ group $ \ (orig, serialized, deserialized) -> case deserialized of
-    Right{}  -> return ()
-    Left err -> do
-      case err of
-        Decoder_failed remainder offset message -> do
-          putStrLn $ "ERROR: " ++ TStrict.unpack message
-          putStrLn $ "     test: " ++ show (orig :: TEST Int64)
-          putStrLn $ " original: " ++ showBytes serialized
-          putStrLn $ "remainder: " ++ showBytes remainder
-          putStrLn $ "           " ++ replicate (1 + 5 * fromIntegral offset) ' ' ++ "^"
-          putStrLn $ "   offset: " ++ show offset
-        Decoded_value_is_wrong original decoded -> do
-          putStrLn $ "ERROR: decoder succeeded with wrong result"
-          putStrLn $ "original: " ++ show original
-          putStrLn $ " decoded: " ++ show decoded
-        Unused_bytes decoded offset bytes -> do
-          putStrLn $ "ERROR: decoded correctly, but left undecoded bytes"
-          putStrLn $ " decoded: " ++ show decoded
-          putStrLn $ "  offset: " ++ show offset
-          putStrLn $ "   extra: " ++ showBytes bytes
-      fail "Tests failed."
-  where
-    lim = flip mod (varWord35Mask + 1)
-    p1  = 0 : 1 : (fromIntegral <$> Unboxed.toList all16BitPrimes)
-    p2  = (\a -> lim $  a * a  ) <$> p1
-    p3  = (\a -> lim $ a * a * a) <$> p1
-    p   = do
-      (a, b, c) <- zip3 p1 p2 p3
-      orig <- [T1 c, T2 a b, T3 a b c, T4 0 a b c, T4 a 0 b c, T4 a b 0 c, T4 a b c 0]
-      let serialized = putTEST orig
-      [(orig, serialized, getTEST orig $ BLazy.fromStrict serialized)]
-    loop n p = seq n $! case splitAt (7*1024) p of
-      ([],   []) -> []
-      (group, p) -> (n, group) : loop (n + 7*1024) p
