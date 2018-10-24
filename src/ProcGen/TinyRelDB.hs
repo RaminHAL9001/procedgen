@@ -8,6 +8,8 @@ module ProcGen.TinyRelDB
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
     -- * Mapping Haskell Data Types
     DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
+    putPrimLazyUTF8String, getPrimLazyUTF8String,
+    putPrimStrictUTF8String, getPrimStrictUTF8String,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
     -- * Classes of Primitives
@@ -24,7 +26,7 @@ module ProcGen.TinyRelDB
     -- * 35-Bit Variable-Width Word
     VarWord35, varWord35, unVarWord35, varWord35Mask, binGetVarWord35, binPutVarWord35,
     -- * Packed Vectors
-    PackedVectorElem, toByteString, (!?), (!), length, fromList, toList,
+    toByteString, (!?), (!), length, fromList, toList,
   ) where
 
 import           Prelude                     hiding (fail, length)
@@ -196,6 +198,7 @@ data RowTag
   | UTF8String       !VarWord40
     -- ^ A string with non-uniform character elements.
   | BinaryBlob       !VarWord40
+    -- ^ Any 'BStrict.ByteString'
   deriving (Eq, Ord, Show)
 
 instance Bin.Binary RowTag where
@@ -351,64 +354,6 @@ instance IsNumericPrimitive Double where
 
 ----------------------------------------------------------------------------------------------------
 
--- | If an object has a fixed sized for all possible values when serialized, it can instantiate this
--- class by simply returning that size. For example a 'Data.Word64.Word64' is always 8 bytes,
--- whether it is zero or 'Prelude.maxBound', so @'elemUnitSize' ('Data.Proxy.Proxy' ::
--- 'Data.Proxy.Proxy' 'Data.Word.Word64')@ will always return 8.
---
--- Another example would be a hyptothetical fixed-length ASCII character strings that are always 32
--- characters long. This data type would always be padded with '\NUL' bytes for strings less than
--- 32 characters, and would truncate strings longer than 32-characters.
---
--- Tuples of 'PackedVectorElem's will work just as well.
-class Bin.Binary elem => PackedVectorElem elem where { elemUnitSize :: Proxy elem -> Int; }
-
-instance
-  (Bin.Binary a, Bin.Binary b,
-   PackedVectorElem a, PackedVectorElem b
-   ) => PackedVectorElem (a, b) where
-  elemUnitSize Proxy =
-    elemUnitSize (Proxy :: Proxy a) +
-    elemUnitSize (Proxy :: Proxy b)
-
-instance
-  (Bin.Binary a, Bin.Binary b, Bin.Binary c,
-   PackedVectorElem a, PackedVectorElem b, PackedVectorElem c
-   ) => PackedVectorElem (a, b, c) where
-  elemUnitSize Proxy =
-    elemUnitSize (Proxy :: Proxy a) +
-    elemUnitSize (Proxy :: Proxy b) +
-    elemUnitSize (Proxy :: Proxy c)
-
-instance
-  (Bin.Binary a, Bin.Binary b, Bin.Binary c, Bin.Binary d,
-   PackedVectorElem a, PackedVectorElem b, PackedVectorElem c, PackedVectorElem d
-   ) => PackedVectorElem (a, b, c, d) where
-  elemUnitSize Proxy =
-    elemUnitSize (Proxy :: Proxy a) +
-    elemUnitSize (Proxy :: Proxy b) +
-    elemUnitSize (Proxy :: Proxy c) +
-    elemUnitSize (Proxy :: Proxy d)
-
-instance PackedVectorElem UTF8Char where { elemUnitSize Proxy = 3; }
-instance PackedVectorElem Word     where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Word8    where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Word16   where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Word32   where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Word64   where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Int      where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Int8     where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Int16    where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Int32    where { elemUnitSize = bitSizePackVecElem; }
-instance PackedVectorElem Int64    where { elemUnitSize = bitSizePackVecElem; }
-
-bitSizePackVecElem :: forall a . (FiniteBits a, Bin.Binary a) => Proxy a -> Int
-bitSizePackVecElem Proxy = finiteBitSize (error msg :: a) where
-  msg = "'ProcGen.TinyRelDB.bitSizePackVecElem': " ++
-        "'finiteBitSize' evaluated it's undefined argument"
-
-----------------------------------------------------------------------------------------------------
-
 -- | This is a vector with elements packed into a strict 'BStrict.ByteString'.
 newtype PackedVector elem = PackedVector { toByteString :: BStrict.ByteString }
   deriving (Eq, Ord)
@@ -421,29 +366,30 @@ instance Monoid (PackedVector elem) where
   mappend = (<>)
 
 (!?) :: forall elem
-     . (PackedVectorElem elem, Bin.Binary elem)
+     . (IsNumericPrimitive elem, Bin.Binary elem)
      => PackedVector elem -> Int -> Maybe elem
 (!?) (PackedVector bytes) i = case decoder of
   Done _ _ a -> Just a
   _          -> Nothing
   where
-    u = elemUnitSize (Proxy :: Proxy elem)
+    u = fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem)
     decoder = pushChunk (runGetIncremental $ isolate u Bin.get) $
       BStrict.take u $ BStrict.drop (i * u) bytes
 
-(!) :: (PackedVectorElem elem, Bin.Binary elem) => PackedVector elem -> Int -> elem
+(!) :: (IsNumericPrimitive elem, Bin.Binary elem) => PackedVector elem -> Int -> elem
 (!) vec i = maybe (error msg) id $ vec !? i where
   msg = "PackedVector of length "++show (ProcGen.TinyRelDB.length vec)++" indexed with "++show i
 
-length :: forall elem . PackedVectorElem elem => PackedVector elem -> Int
-length (PackedVector bytes) = BStrict.length bytes `div` elemUnitSize (Proxy :: Proxy elem)
+length :: forall elem . IsNumericPrimitive elem => PackedVector elem -> Int
+length (PackedVector bytes) = BStrict.length bytes `div`
+  (fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem))
 
-fromList :: forall elem . (PackedVectorElem elem, Bin.Binary elem) => [elem] -> PackedVector elem
+fromList :: forall elem . (IsNumericPrimitive elem, Bin.Binary elem) => [elem] -> PackedVector elem
 fromList elems = PackedVector $ BLazy.toStrict $ runPut (mapM_ Bin.put elems)
 
-toList :: forall elem . (PackedVectorElem elem, Bin.Binary elem) => PackedVector elem -> [elem]
+toList :: forall elem . (IsNumericPrimitive elem, Bin.Binary elem) => PackedVector elem -> [elem]
 toList (PackedVector bytes) = loop  bytes where
-  u = elemUnitSize (Proxy :: Proxy elem)
+  u = fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem)
   loop bytes = case runGetIncremental (isolate u Bin.get) `pushChunk` bytes of
     Done bytes _ a -> a : loop bytes
     _              -> []
@@ -511,24 +457,6 @@ instance IsPrimitive Double where
   putPrimitive   = putNumericPrimitive putDoublele
   getPrimitive _ = getDoublele
 
-instance IsPrimitive UTF8Lazy.ByteString where
-  putPrimitive str = do
-    putLazyByteString str
-    return $ UTF8String $ varWord40Length "Lazy UTF8 ByteString" $
-      BLazy.length str -- NOTE: this must be 'BLazy.length', and NOT 'UTF8Lazy.length'
-  getPrimitive     = \ case
-    UTF8String (VarWord40 siz) -> getLazyByteString siz
-    _                          -> mzero
-
-instance IsPrimitive UTF8Strict.ByteString where
-  putPrimitive str = do
-    putByteString str
-    return $ UTF8String $ varWord40Length "Strict UTF8 ByteString" $ fromIntegral $
-      BStrict.length str -- NOTE: this must be 'BStrict.length', and NOT 'UTF8Strict.length'
-  getPrimitive     = \ case
-    UTF8String (VarWord40 siz) -> getByteString $ fromIntegral siz
-    _                          -> mzero
-
 instance IsPrimitive String where
   putPrimitive str = do
     let bin = runPut $ putStringUtf8 str
@@ -546,10 +474,38 @@ instance IsPrimitive TStrict.Text where
   putPrimitive = putPrimitive . TStrict.unpack
   getPrimitive = fmap TStrict.pack . getPrimitive
 
--- TODO
--- TODO
--- instances for IsPrimitive unboxed vector types
--- instances for string types
+instance IsNumericPrimitive elem => IsPrimitive (PackedVector elem) where
+  putPrimitive (PackedVector bytes) = do
+    putByteString bytes
+    let (VarWord35 max) = maxBound
+        len = fromIntegral (BStrict.length bytes) `div`
+          (numericPrimitiveSize (Proxy :: Proxy elem))
+    if fromIntegral len <= max
+     then return $ HomoArray (numericPrimitiveType (Proxy :: Proxy elem)) (VarWord35 len)
+     else error $ "'ProcGen.TinyRelDB.putPrimitive' cannot put array with "++show len++
+                  " elements, maximum number of elements is "++show max
+  getPrimitive = \ case
+    HomoArray typ (VarWord35 len) | typ == numericPrimitiveType (Proxy :: Proxy elem) ->
+      PackedVector . BLazy.toStrict <$>
+      getLazyByteString (len * numericPrimitiveSize (Proxy :: Proxy elem))
+    _ -> mzero
+
+instance IsPrimitive BLazy.ByteString where
+  putPrimitive bytes = do
+    putLazyByteString bytes
+    let len = BLazy.length bytes
+    let (VarWord40 max) = maxBound
+    if len <= max
+     then return $ BinaryBlob $ VarWord40 len
+     else error $ "'ProcGen.TinyRelDB.putPrimitive' cannot put binary blob with "++show len++
+                  " elements, maximum number of elements is "++show max
+  getPrimitive = \ case
+    BinaryBlob (VarWord40 len) -> getLazyByteString len
+    _ -> mzero
+
+instance IsPrimitive BStrict.ByteString where
+  putPrimitive = putPrimitive . BLazy.fromStrict
+  getPrimitive = fmap BLazy.toStrict . getPrimitive
 
 varWord40Length :: String -> Int64 -> VarWord40
 varWord40Length typmsg len =
@@ -591,22 +547,19 @@ data RowHeader
   = RowHeader
     { rowHeaderLength   :: !Int
       -- ^ Get the number of elements in this 'Row'.
-    , rowHeaderByteSize :: !Word64
+    , rowHeaderByteSize :: !Int64
     , rowHeaderTable    :: RowHeaderTable
     }
   deriving (Eq, Ord)
 
--- | Split the 'RowHeader' from a 'TaggedRow' and return the header along with the content without
--- inspecting the content or performing any deserialization. Use this if you want just the header
--- alone.
-rowHeader :: TaggedRow -> (RowHeader, BLazy.ByteString)
-rowHeader (TaggedRow bytes) = if BStrict.null bytes then (emptyHeader, mempty) else init where
-  emptyHeader = RowHeader
-    { rowHeaderLength   = 0
-    , rowHeaderByteSize = 0
-    , rowHeaderTable    = []
-    }
-  init = runGet (Bin.get >>= \ (VarWord35 w) -> loop w w 0 id) (BLazy.fromStrict bytes)
+getRowHeaderElem :: Get RowHeaderElem
+getRowHeaderElem = do
+   item <- Bin.get
+   let siz  = indexElemTypeSize item 
+   return RowHeaderElem{ headerItemType=item, headerItemOffset=0, headerItemLength=siz }
+
+getRowHeader :: Get (RowHeader, BLazy.ByteString)
+getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
   loop w nelems off elems = if nelems <= 0
     then do
       hdrsiz <- bytesRead
@@ -614,16 +567,45 @@ rowHeader (TaggedRow bytes) = if BStrict.null bytes then (emptyHeader, mempty) e
       return
         ( RowHeader
           { rowHeaderLength   = fromIntegral w
-          , rowHeaderByteSize = fromIntegral hdrsiz
+          , rowHeaderByteSize = hdrsiz
           , rowHeaderTable    = elems []
           }
         , bytes
         )
     else do
-     item <- Bin.get
-     let siz  = indexElemTypeSize item + off
-     let elem = RowHeaderElem{ headerItemType=item, headerItemOffset=off, headerItemLength=siz }
-     loop w (nelems - 1) (off + siz) $ elems . (elem :)
+     elem <- getRowHeaderElem
+     loop w (nelems - 1) (off + headerItemLength elem) $ elems . ((elem{headerItemOffset = off}) :)
+
+putRowHeader :: RowHeader -> Put
+putRowHeader h = do
+  let (VarWord35 max) = maxBound
+  let len = fromIntegral $ rowHeaderLength h
+  let bytelen = sum $ headerItemLength <$> rowHeaderTable h
+  if len <= max
+   then
+    if bytelen <= max
+     then do
+        Bin.put $ VarWord35 len
+        mapM_ (Bin.put . headerItemType) $ rowHeaderTable h
+     else error $ "'ProcGen.TinyRelDB.RowHeader' content would require "++show bytelen++
+                  "bytes, maximum allowable content size is "++show max++" bytes"
+   else error $ "'ProcGen.TinyRelDB.RowHeader' contains "++show len++" elements, "++
+                "the maximum allowable number of elements is "++show max
+
+-- | Split the 'RowHeader' from a 'TaggedRow' and return the header along with the content without
+-- inspecting the content or performing any deserialization. Use this if you want just the header
+-- alone.
+rowHeader :: TaggedRow -> (RowHeader, BLazy.ByteString)
+rowHeader (TaggedRow bytes) =
+  if BStrict.null bytes
+   then (emptyHeader, mempty)
+   else runGet getRowHeader $ BLazy.fromStrict bytes
+  where
+    emptyHeader = RowHeader
+      { rowHeaderLength   = 0
+      , rowHeaderByteSize = 0
+      , rowHeaderTable    = []
+      }
 
 -- | Where N is an 'Int', obtain the N'th index in the 'RowHeader', along with the index in the
 -- byte string at which the serialized object is stored, and the stored object size.
@@ -761,8 +743,11 @@ instance Monoid BuildRowState where
 -- | Use the 'IsPrimitive' instance for data of type @a@ to store the information in @a@ into a
 -- 'RowBuilder'.
 writeRowPrim :: forall a . IsPrimitive a => a -> RowBuilder
-writeRowPrim a = RowBuilderM $ do
-  idxelem <- lift $ putPrimitive a
+writeRowPrim = writeRowPrimWith putPrimitive 
+
+writeRowPrimWith :: (a -> PutM RowTag) -> a -> RowBuilder
+writeRowPrimWith putPrim a = RowBuilderM $ do
+  idxelem <- lift $ putPrim a
   modify $ \ st ->
     st{ buildElemCount  = buildElemCount  st + 1
       , buildRowHeader  = buildRowHeader  st <> execPut (putIndexElem idxelem)
@@ -791,6 +776,42 @@ instance DBMapped Word16   where { writeRow = writeRowPrim; readRow = readRowPri
 instance DBMapped Word32   where { writeRow = writeRowPrim; readRow = readRowPrim; }
 instance DBMapped Float    where { writeRow = writeRowPrim; readRow = readRowPrim; }
 instance DBMapped Double   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+
+instance DBMapped TaggedRow where
+  writeRow (TaggedRow bytes) = writeRowPrim bytes
+  readRow = TaggedRow <$> readRowPrim
+
+-- | A UTF8-encoded 'UTF8Lazy.ByteString' is just a plain lazy 'BLazy.ByteString', but it can be
+-- encoded with a different 'RowTag' type tag so that any string will match it when using a 'Select'
+-- statement. Use this function to encode a lazy 'BLazy.ByteString' with a string tag in the
+-- 'RowHeader' of a 'TaggedRow'. Use 'getPrimLazyUTF8String' to retrieve the exact data you put in.
+putPrimLazyUTF8String :: UTF8Lazy.ByteString -> PutM RowTag
+putPrimLazyUTF8String str = do
+  putLazyByteString str
+  return $ UTF8String $ varWord40Length "Lazy UTF8 ByteString" $
+    BLazy.length str -- NOTE: this must be 'BLazy.length', and NOT 'UTF8Lazy.length'
+
+-- | Retrieve a string object from a 'TaggedRow' as a lazy 'BLazy.ByteString'.
+getPrimLazyUTF8String :: RowTag -> Get UTF8Lazy.ByteString
+getPrimLazyUTF8String = \ case
+  UTF8String (VarWord40 siz) -> getLazyByteString siz
+  _                          -> mzero
+
+-- | A UTF8-encoded 'UTF8Strict.ByteString' is just a plain strict 'BStrict.ByteString', but it can be
+-- encoded with a different 'RowTag' type tag so that any string will match it when using a 'Select'
+-- statement. Use this function to encode a strict 'BStrict.ByteString' with a string tag in the
+-- 'RowHeader' of a 'TaggedRow'. Use 'getPrimStrictUTF8String' to retrieve the exact data you put in.
+putPrimStrictUTF8String :: UTF8Strict.ByteString -> PutM RowTag
+putPrimStrictUTF8String str = do
+  putByteString str
+  return $ UTF8String $ varWord40Length "Strict UTF8 ByteString" $ fromIntegral $
+    BStrict.length str -- NOTE: this must be 'BStrict.length', and NOT 'UTF8Strict.length'
+
+-- | Retrieve a string object from a 'TaggedRow' as a strict 'BStrict.ByteString'.
+getPrimStrictUTF8String :: RowTag -> Get UTF8Strict.ByteString
+getPrimStrictUTF8String = \ case
+  UTF8String (VarWord40 siz) -> getByteString $ fromIntegral siz
+  _                          -> mzero
 
 ----------------------------------------------------------------------------------------------------
 
@@ -824,6 +845,12 @@ newtype Table format = Table{ tableToSequence :: S.Seq format }
 instance Semigroup (Table format) where { (Table a) <> (Table b) = Table (a <> b); }
 instance Monoid    (Table format) where { mempty = Table mempty; mappend = (<>); }
 
+instance Bin.Binary TaggedRow where
+  put (TaggedRow bytes) = putByteString bytes
+  get = do
+    (header, bytes) <- getRowHeader
+    return $ TaggedRow $ BLazy.toStrict $ runPut (putRowHeader header) <> bytes
+
 -- | Fold from the top of the table to the bottom. This function is defined in terms of
 -- 'Data.Foldable.foldl'. The internal table type is a 'Data.Sequence.Seq' so runtime performance of
 -- both 'tableFoldUp' and 'tableFoldDown' are almost always the same.
@@ -841,4 +868,3 @@ tableFoldUp
   -> (a -> fold -> fold) -> fold -> Table format -> fold
 tableFoldUp get fold init (Table seq) =
   foldr (\ bytes init -> maybe init (`fold` init) $ get bytes) init seq
-
