@@ -4,15 +4,16 @@
 -- binary CSV files, or on no files at all, everything can be done in memory only. This turns out to
 -- be a useful abstraction for pretty printers and text editors.
 module ProcGen.TinyRelDB
-  ( -- * Classes of Primitives
-    IsNumericPrimitive(..), IsPrimitive(..),
-    putNumericPrimitive,
-    -- * Database Data Types
+  ( -- * Database Data Types
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
     -- * Mapping Haskell Data Types
     DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
+    -- * Classes of Primitives
+    IsNumericPrimitive(..), IsPrimitive(..),
+    putNumericPrimitive,
+    UTF8Char(..),
     -- * Low-Level Row Formatting
     RowTagBytes, rowElemBytes,
     RowHeaderElem(..), RowElemOffset, RowElemLength, RowHeaderTable,
@@ -76,6 +77,35 @@ aggregA def add ax bx = loop (ax, bx) where
 -- | A pure version of 'aggregA'.
 aggreg :: row -> (row -> row -> fold) -> [row] -> [row] -> [fold]
 aggreg def add ax bx = runIdentity $ aggregA def (\ a -> pure . add a) ax bx
+
+----------------------------------------------------------------------------------------------------
+
+-- | A wrapper around an ordinary 'Prelude.Char' type that instantiates 'Bin.Binary' such that when
+-- it is serialized, it always consumes exactly 3-bytes. 'UTF8Char' also instantiates 'IsPrimitive'
+-- and 'PackedVectorElem'.
+newtype UTF8Char = UTF8Char{ unUTF8Char :: Char }
+  deriving (Eq, Ord)
+
+instance Show UTF8Char where
+  showsPrec p (UTF8Char c) = showsPrec p c
+  showList = showList . fmap unUTF8Char
+
+instance Bin.Binary UTF8Char where
+  put = putUTF8Char
+  get = getUTF8Char
+
+putUTF8Char :: UTF8Char -> Put
+putUTF8Char (UTF8Char char) = do
+  let c = ord char
+  let w = fromIntegral . (.&. 0xFF) :: Int -> Word8
+  b <- pure $ shift c 8
+  a <- pure $ shift b 8
+  putWord8 (w a) >> putWord8 (w b) >> putWord8 (w c)
+
+getUTF8Char :: Get UTF8Char
+getUTF8Char = do
+  let w i = (`shift` i) . fromIntegral :: Word8 -> Int
+  (\ a b c -> UTF8Char $ chr $ w 16 a * w 8 b * w 0 c) <$> getWord8 <*> getWord8 <*> getWord8
 
 ----------------------------------------------------------------------------------------------------
 
@@ -267,7 +297,7 @@ class IsNumericPrimitive a where
   numericPrimitiveType :: Proxy a -> PrimElemType
   numericPrimitiveSize :: Proxy a -> Int64
 
-instance IsNumericPrimitive Char where
+instance IsNumericPrimitive UTF8Char where
   numericPrimitiveType Proxy = PrimTypeUTFChar
   numericPrimitiveSize Proxy = primTypeUTFCharSize
 
@@ -321,7 +351,63 @@ instance IsNumericPrimitive Double where
 
 ----------------------------------------------------------------------------------------------------
 
-class PackedVectorElem elem where { elemUnitSize :: Proxy elem -> Int; }
+-- | If an object has a fixed sized for all possible values when serialized, it can instantiate this
+-- class by simply returning that size. For example a 'Data.Word64.Word64' is always 8 bytes,
+-- whether it is zero or 'Prelude.maxBound', so @'elemUnitSize' ('Data.Proxy.Proxy' ::
+-- 'Data.Proxy.Proxy' 'Data.Word.Word64')@ will always return 8.
+--
+-- Another example would be a hyptothetical fixed-length ASCII character strings that are always 32
+-- characters long. This data type would always be padded with '\NUL' bytes for strings less than
+-- 32 characters, and would truncate strings longer than 32-characters.
+--
+-- Tuples of 'PackedVectorElem's will work just as well.
+class Bin.Binary elem => PackedVectorElem elem where { elemUnitSize :: Proxy elem -> Int; }
+
+instance
+  (Bin.Binary a, Bin.Binary b,
+   PackedVectorElem a, PackedVectorElem b
+   ) => PackedVectorElem (a, b) where
+  elemUnitSize Proxy =
+    elemUnitSize (Proxy :: Proxy a) +
+    elemUnitSize (Proxy :: Proxy b)
+
+instance
+  (Bin.Binary a, Bin.Binary b, Bin.Binary c,
+   PackedVectorElem a, PackedVectorElem b, PackedVectorElem c
+   ) => PackedVectorElem (a, b, c) where
+  elemUnitSize Proxy =
+    elemUnitSize (Proxy :: Proxy a) +
+    elemUnitSize (Proxy :: Proxy b) +
+    elemUnitSize (Proxy :: Proxy c)
+
+instance
+  (Bin.Binary a, Bin.Binary b, Bin.Binary c, Bin.Binary d,
+   PackedVectorElem a, PackedVectorElem b, PackedVectorElem c, PackedVectorElem d
+   ) => PackedVectorElem (a, b, c, d) where
+  elemUnitSize Proxy =
+    elemUnitSize (Proxy :: Proxy a) +
+    elemUnitSize (Proxy :: Proxy b) +
+    elemUnitSize (Proxy :: Proxy c) +
+    elemUnitSize (Proxy :: Proxy d)
+
+instance PackedVectorElem UTF8Char where { elemUnitSize Proxy = 3; }
+instance PackedVectorElem Word     where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Word8    where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Word16   where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Word32   where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Word64   where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Int      where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Int8     where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Int16    where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Int32    where { elemUnitSize = bitSizePackVecElem; }
+instance PackedVectorElem Int64    where { elemUnitSize = bitSizePackVecElem; }
+
+bitSizePackVecElem :: forall a . (FiniteBits a, Bin.Binary a) => Proxy a -> Int
+bitSizePackVecElem Proxy = finiteBitSize (error msg :: a) where
+  msg = "'ProcGen.TinyRelDB.bitSizePackVecElem': " ++
+        "'finiteBitSize' evaluated it's undefined argument"
+
+----------------------------------------------------------------------------------------------------
 
 -- | This is a vector with elements packed into a strict 'BStrict.ByteString'.
 newtype PackedVector elem = PackedVector { toByteString :: BStrict.ByteString }
@@ -373,16 +459,9 @@ class IsPrimitive a where
   -- 'TaggedRow'.
   getPrimitive  :: RowTag -> Get a
 
-instance IsPrimitive Char   where
-  putPrimitive = putNumericPrimitive $ \ char -> do
-    let c = ord char
-    let w = fromIntegral . (.&. 0xFF) :: Int -> Word8
-    b <- pure $ shift c 8
-    a <- pure $ shift b 8
-    putWord8 (w a) >> putWord8 (w b) >> putWord8 (w c)
-  getPrimitive _ = do
-    let w i = (`shift` i) . fromIntegral :: Word8 -> Int
-    (\ a b c -> chr $ w 16 a * w 8 b * w 0 c) <$> getWord8 <*> getWord8 <*> getWord8
+instance IsPrimitive UTF8Char   where
+  putPrimitive   = putNumericPrimitive putUTF8Char
+  getPrimitive _ = getUTF8Char
 
 instance IsPrimitive Int    where
   putPrimitive   = putNumericPrimitive putInthost
@@ -700,18 +779,18 @@ class DBMapped a where
   writeRow :: a -> RowBuilder
   readRow  :: Select a
 
-instance DBMapped Char   where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int8   where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int16  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int32  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int64  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word   where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word8  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word16 where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word32 where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Float  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Double where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped UTF8Char where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Int      where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Int8     where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Int16    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Int32    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Int64    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Word     where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Word8    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Word16   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Word32   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Float    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped Double   where { writeRow = writeRowPrim; readRow = readRowPrim; }
 
 ----------------------------------------------------------------------------------------------------
 
