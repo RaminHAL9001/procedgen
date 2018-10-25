@@ -3,6 +3,7 @@ module Main where
 
 import           Prelude                     hiding (fail, length)
 
+import           ProcGen.Arbitrary
 import           ProcGen.TinyRelDB
 import           ProcGen.PrimeNumbers
 
@@ -16,9 +17,11 @@ import           Data.Binary.Get
 import           Data.Binary.Put
 import           Data.Bits
 import qualified Data.ByteString             as BStrict
+import qualified Data.ByteString.UTF8        as UTF8Strict
 import qualified Data.ByteString.Lazy        as BLazy
 import           Data.Int
 import qualified Data.Text                   as TStrict
+import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import           Data.Word
 
@@ -184,31 +187,31 @@ data AnyPrim
   deriving (Eq, Ord)
 
 instance Show AnyPrim where
-  showsPrec p = showParen (p > 10) \ case
+  showsPrec p = showParen (p > 10) . \ case
     Prim_UTFChar a -> ("UTFChar " ++) . showsPrec p a
-    Prim_Int     a -> ("Int " ++) . showsPrec p a
-    Prim_Int8    a -> ("Int8 " ++) . showsPrec p a
-    Prim_Int16   a -> ("Int16 " ++) . showsPrec p a
-    Prim_Int32   a -> ("Int32 " ++) . showsPrec p a
-    Prim_Int64   a -> ("Int64 " ++) . showsPrec p a
-    Prim_Word    a -> ("Word " ++) . showsPrec p a
-    Prim_Word8   a -> ("Word8 " ++) . showsPrec p a
-    Prim_Word16  a -> ("Word16 " ++) . showsPrec p a
-    Prim_Word32  a -> ("Word32 " ++) . showsPrec p a
-    Prim_Word64  a -> ("Word64 " ++) . showsPrec p a
-    Prim_Float   a -> ("Float " ++) . showsPrec p a
-    Prim_Double  a -> ("Double " ++) . showsPrec p a
-    Prim_String  a -> ("Str0 " ++) . showsPrec p a
+    Prim_Int     a -> ("Int "     ++) . showsPrec p a
+    Prim_Int8    a -> ("Int8 "    ++) . showsPrec p a
+    Prim_Int16   a -> ("Int16 "   ++) . showsPrec p a
+    Prim_Int32   a -> ("Int32 "   ++) . showsPrec p a
+    Prim_Int64   a -> ("Int64 "   ++) . showsPrec p a
+    Prim_Word    a -> ("Word "    ++) . showsPrec p a
+    Prim_Word8   a -> ("Word8 "   ++) . showsPrec p a
+    Prim_Word16  a -> ("Word16 "  ++) . showsPrec p a
+    Prim_Word32  a -> ("Word32 "  ++) . showsPrec p a
+    Prim_Word64  a -> ("Word64 "  ++) . showsPrec p a
+    Prim_Float   a -> ("Float "   ++) . showsPrec p a
+    Prim_Double  a -> ("Double "  ++) . showsPrec p a
+    Prim_String  a -> ("Str0 "    ++) . showsPrec p a
 
-primUTFChar :: AnyPrim
+primUTFChar :: Char -> AnyPrim
 primUTFChar = Prim_UTFChar . UTFChar
 
-primBounded :: forall . (Num a, Bounded a) => (a -> AnyPrim) -> [AnyPrim]
+primBounded :: forall a . (Eq a, Num a, Bounded a) => (a -> AnyPrim) -> [AnyPrim]
 primBounded constr = (if (minBound :: a) == 0 then id else ((constr 0) :))
-  [constr minBound, constrMaxBound]
+  [constr minBound, constr maxBound]
 
-primValues :: [[AnyPrim]]
-primValues =
+primValues :: Boxed.Vector (Boxed.Vector AnyPrim)
+primValues = Boxed.fromList $ Boxed.fromList <$>
   [ primUTFChar <$> ['\0', 'A', '\x7F', '\x3BB']
   , primBounded Prim_Int
   , primBounded Prim_Int8
@@ -220,25 +223,82 @@ primValues =
   , primBounded Prim_Word16
   , primBounded Prim_Word32
   , primBounded Prim_Word64
-  , primBounded Prim_Float
-  , primBounded Prim_Double
-  , Prim_String . BStrict.pack <$> ["", s2, s7_1, s7, s14_1, s14]
+  , [Prim_Float  0.0, Prim_Float  1.0e999, Prim_Float  1.0e-999]
+  , [Prim_Double 0.0, Prim_Double 1.0e999, Prim_Double 1.0e-999]
+  , Prim_String . UTF8Strict.fromString <$> ["", s2, s7_1, s7, s14_1, s14]
   ] where
+    pow :: String -> Int -> String
     pow s i = mconcat $ replicate (2 ^ i) s
     s2 :: String
     s2    = "ABC "
     s7    = pow s2 5
-    s7_1  = take (2^7 - 1) s7
-    s14   = pos s7 7
-    s14_1 = take (s^14 - 1) s14
+    s7_1  = take (2^(7::Int) - 1 :: Int) s7
+    s14   = pow s7 7
+    s14_1 = take (2^(14::Int) - 1 :: Int) s14
 
-test_primitive_primitive :: IO ()
-test_primitive_primitive = do
-  
+writeAnyPrimToRow :: AnyPrim -> RowBuilder
+writeAnyPrimToRow = \ case
+  Prim_UTFChar a -> writeRowPrim a
+  Prim_Int     a -> writeRowPrim a
+  Prim_Int8    a -> writeRowPrim a
+  Prim_Int16   a -> writeRowPrim a
+  Prim_Int32   a -> writeRowPrim a
+  Prim_Int64   a -> writeRowPrim a
+  Prim_Word    a -> writeRowPrim a
+  Prim_Word8   a -> writeRowPrim a
+  Prim_Word16  a -> writeRowPrim a
+  Prim_Word32  a -> writeRowPrim a
+  Prim_Word64  a -> writeRowPrim a
+  Prim_Float   a -> writeRowPrim a
+  Prim_Double  a -> writeRowPrim a
+  Prim_String  a -> writeRowPrim a
+
+readAnyPrimMatching :: AnyPrim -> Select AnyPrim
+readAnyPrimMatching = \ case
+  Prim_UTFChar a -> read Prim_UTFChar a
+  Prim_Int     a -> read Prim_Int     a
+  Prim_Int8    a -> read Prim_Int8    a
+  Prim_Int16   a -> read Prim_Int16   a
+  Prim_Int32   a -> read Prim_Int32   a
+  Prim_Int64   a -> read Prim_Int64   a
+  Prim_Word    a -> read Prim_Word    a
+  Prim_Word8   a -> read Prim_Word8   a
+  Prim_Word16  a -> read Prim_Word16  a
+  Prim_Word32  a -> read Prim_Word32  a
+  Prim_Word64  a -> read Prim_Word64  a
+  Prim_Float   a -> read Prim_Float   a
+  Prim_Double  a -> read Prim_Double  a
+  Prim_String  a -> read Prim_String  a
+  where
+    read :: (IsPrimitive a, Show a, Eq a) => (a -> AnyPrim) -> a -> Select AnyPrim
+    read constr a = readRowPrim >>= \ b -> if a == b then return $ constr b else do
+      taggedrow <- currentTaggedRow
+      throwError $ CorruptRow taggedrow $ TStrict.pack $
+        "'Select' failed.\nexpected value: "++show a++"\nselected value: "++show b
+
+test_primitive_protocol :: IO ()
+test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [0::Int .. numTests] $ \ i -> do
+  when (mod i 100 == 99) $ liftIO $ putStrLn $ "Completed "++show (i+1)++" tests..."
+  let elem  = randSelect primValues
+  let unbox = Boxed.toList
+  (a, b, c, d) <- (,,,) <$> elem <*> elem <*> elem <*> elem
+  runTest (unbox a)
+  mapM_ runTest $ (\ a b c d -> [a,b,c,d]) <$> unbox a <*> unbox b <*> unbox c <*> unbox d
+  where
+    numTests = 10000
+    runTest elems = do
+      let serialized   = execRowBuilder $ mapM_ writeAnyPrimToRow elems
+      let deserialized = runRowSelect (mapM readAnyPrimMatching elems) serialized
+      case deserialized of
+        Left  err          -> liftIO $ fail $ show err
+        Right deserialized -> unless (elems == deserialized) $ liftIO $ fail $
+          "    original: "++show elems++
+          "\ndeserialized: "++show deserialized++
+          "\n('Select' function succeeded but read elements do not match original elements)\n"
 
 main :: IO ()
 main = do
   putStrLn "Testing the VarWord35 bit serialization protocol..."
   test_VarWord35_protocol
-  putStrLn "Testing the primitive value serialization protocol...
+  putStrLn "Testing the primitive value serialization protocol..."
   test_primitive_protocol
