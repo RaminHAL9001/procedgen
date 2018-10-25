@@ -121,14 +121,12 @@ getTEST orig bytes = execTest bytes $ unVarWord35 <$> liftBinGet Bin.get >>= \ a
     done  t = do
       rem <- liftBinGet getRemainingLazyByteString
       off <- liftBinGet bytesRead
-      if t == orig
-       then if BLazy.null rem
-             then return t
-             else throwError $ Unused_bytes t off $ BLazy.toStrict rem
-       else throwError $ Decoded_value_is_wrong orig t
+      if t /= orig then throwError $ Decoded_value_is_wrong orig t else
+        if BLazy.null rem then return t else
+          throwError $ Unused_bytes t off $ BLazy.toStrict rem
 
-main :: IO ()
-main = forM_ (loop (0::Int) p) $ \ (n, group) -> do
+test_VarWord35_protocol :: IO ()
+test_VarWord35_protocol = forM_ (loop (0::Int) p) $ \ (n, group) -> do
   print n
   putStrLn $ "max bound: " ++ show (maximum $ p1 ++ p2 ++ p3)
   forM_ group $ \ (orig, serialized, deserialized) -> case deserialized of
@@ -165,3 +163,82 @@ main = forM_ (loop (0::Int) p) $ \ (n, group) -> do
     loop n p = seq n $! case splitAt (7*1024) p of
       ([],   []) -> []
       (group, p) -> (n, group) : loop (n + 7*1024) p
+
+----------------------------------------------------------------------------------------------------
+
+data AnyPrim
+  = Prim_UTFChar UTFChar
+  | Prim_Int     Int
+  | Prim_Int8    Int8
+  | Prim_Int16   Int16
+  | Prim_Int32   Int32
+  | Prim_Int64   Int64
+  | Prim_Word    Word
+  | Prim_Word8   Word8
+  | Prim_Word16  Word16
+  | Prim_Word32  Word32
+  | Prim_Word64  Word64
+  | Prim_Float   Float
+  | Prim_Double  Double
+  | Prim_String  BStrict.ByteString
+  deriving (Eq, Ord)
+
+instance Show AnyPrim where
+  showsPrec p = showParen (p > 10) \ case
+    Prim_UTFChar a -> ("UTFChar " ++) . showsPrec p a
+    Prim_Int     a -> ("Int " ++) . showsPrec p a
+    Prim_Int8    a -> ("Int8 " ++) . showsPrec p a
+    Prim_Int16   a -> ("Int16 " ++) . showsPrec p a
+    Prim_Int32   a -> ("Int32 " ++) . showsPrec p a
+    Prim_Int64   a -> ("Int64 " ++) . showsPrec p a
+    Prim_Word    a -> ("Word " ++) . showsPrec p a
+    Prim_Word8   a -> ("Word8 " ++) . showsPrec p a
+    Prim_Word16  a -> ("Word16 " ++) . showsPrec p a
+    Prim_Word32  a -> ("Word32 " ++) . showsPrec p a
+    Prim_Word64  a -> ("Word64 " ++) . showsPrec p a
+    Prim_Float   a -> ("Float " ++) . showsPrec p a
+    Prim_Double  a -> ("Double " ++) . showsPrec p a
+    Prim_String  a -> ("Str0 " ++) . showsPrec p a
+
+primUTFChar :: AnyPrim
+primUTFChar = Prim_UTFChar . UTFChar
+
+primBounded :: forall . (Num a, Bounded a) => (a -> AnyPrim) -> [AnyPrim]
+primBounded constr = (if (minBound :: a) == 0 then id else ((constr 0) :))
+  [constr minBound, constrMaxBound]
+
+primValues :: [[AnyPrim]]
+primValues =
+  [ primUTFChar <$> ['\0', 'A', '\x7F', '\x3BB']
+  , primBounded Prim_Int
+  , primBounded Prim_Int8
+  , primBounded Prim_Int16
+  , primBounded Prim_Int32
+  , primBounded Prim_Int64
+  , primBounded Prim_Word
+  , primBounded Prim_Word8
+  , primBounded Prim_Word16
+  , primBounded Prim_Word32
+  , primBounded Prim_Word64
+  , primBounded Prim_Float
+  , primBounded Prim_Double
+  , Prim_String . BStrict.pack <$> ["", s2, s7_1, s7, s14_1, s14]
+  ] where
+    pow s i = mconcat $ replicate (2 ^ i) s
+    s2 :: String
+    s2    = "ABC "
+    s7    = pow s2 5
+    s7_1  = take (2^7 - 1) s7
+    s14   = pos s7 7
+    s14_1 = take (s^14 - 1) s14
+
+test_primitive_primitive :: IO ()
+test_primitive_primitive = do
+  
+
+main :: IO ()
+main = do
+  putStrLn "Testing the VarWord35 bit serialization protocol..."
+  test_VarWord35_protocol
+  putStrLn "Testing the primitive value serialization protocol...
+  test_primitive_protocol
