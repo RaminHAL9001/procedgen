@@ -8,15 +8,18 @@ module ProcGen.TinyRelDB
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence,
     -- * Mapping Haskell Data Types
     DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
+    runRowSelect, selectedElemCount, execRowBuilder, runRowBuilder,
+    writtenElemCount,
     putPrimLazyUTF8String, getPrimLazyUTF8String,
     putPrimStrictUTF8String, getPrimStrictUTF8String,
     putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
+    currentTaggedRow,
     -- * Classes of Primitives
     IsNumericPrimitive(..), IsPrimitive(..),
     putNumericPrimitive,
-    UTF8Char(..),
+    UTFChar(..),
     -- * Low-Level Row Formatting
     RowTagBytes, rowElemBytes,
     RowHeaderElem(..), RowElemOffset, RowElemLength, RowHeaderTable,
@@ -88,29 +91,29 @@ aggreg def add ax bx = runIdentity $ aggregA def (\ a -> pure . add a) ax bx
 -- | A wrapper around an ordinary 'Prelude.Char' type that instantiates 'Bin.Binary' such that when
 -- it is serialized, it always consumes exactly 3-bytes. 'UTF8Char' also instantiates 'IsPrimitive'
 -- and 'PackedVectorElem'.
-newtype UTF8Char = UTF8Char{ unUTF8Char :: Char }
+newtype UTFChar = UTFChar{ unUTFChar :: Char }
   deriving (Eq, Ord)
 
-instance Show UTF8Char where
-  showsPrec p (UTF8Char c) = showsPrec p c
-  showList = showList . fmap unUTF8Char
+instance Show UTFChar where
+  showsPrec p (UTFChar c) = showsPrec p c
+  showList = showList . fmap unUTFChar
 
-instance Bin.Binary UTF8Char where
-  put = putUTF8Char
-  get = getUTF8Char
+instance Bin.Binary UTFChar where
+  put = putUTFChar
+  get = getUTFChar
 
-putUTF8Char :: UTF8Char -> Put
-putUTF8Char (UTF8Char char) = do
+putUTFChar :: UTFChar -> Put
+putUTFChar (UTFChar char) = do
   let c = ord char
   let w = fromIntegral . (.&. 0xFF) :: Int -> Word8
   b <- pure $ shift c 8
   a <- pure $ shift b 8
   putWord8 (w a) >> putWord8 (w b) >> putWord8 (w c)
 
-getUTF8Char :: Get UTF8Char
-getUTF8Char = do
+getUTFChar :: Get UTFChar
+getUTFChar = do
   let w i = (`shift` i) . fromIntegral :: Word8 -> Int
-  (\ a b c -> UTF8Char $ chr $ w 16 a * w 8 b * w 0 c) <$> getWord8 <*> getWord8 <*> getWord8
+  (\ a b c -> UTFChar $ chr $ w 16 a * w 8 b * w 0 c) <$> getWord8 <*> getWord8 <*> getWord8
 
 ----------------------------------------------------------------------------------------------------
 
@@ -303,7 +306,7 @@ class IsNumericPrimitive a where
   numericPrimitiveType :: Proxy a -> PrimElemType
   numericPrimitiveSize :: Proxy a -> Int64
 
-instance IsNumericPrimitive UTF8Char where
+instance IsNumericPrimitive UTFChar where
   numericPrimitiveType Proxy = PrimTypeUTFChar
   numericPrimitiveSize Proxy = primTypeUTFCharSize
 
@@ -408,9 +411,9 @@ class IsPrimitive a where
   -- 'TaggedRow'.
   getPrimitive  :: RowTag -> Get a
 
-instance IsPrimitive UTF8Char   where
-  putPrimitive   = putNumericPrimitive putUTF8Char
-  getPrimitive _ = getUTF8Char
+instance IsPrimitive UTFChar   where
+  putPrimitive   = putNumericPrimitive putUTFChar
+  getPrimitive _ = getUTFChar
 
 instance IsPrimitive Int    where
   putPrimitive   = putNumericPrimitive putInthost
@@ -541,7 +544,7 @@ data RowHeaderElem
     }
   deriving (Eq, Ord)
 
-type RowHeaderTable = [RowHeaderElem]
+type RowHeaderTable = [(Int, RowHeaderElem)]
 
 -- | A serialized row header contains several 'RowTag's, each one of variable size. This
 -- 'RowHeader' type is an un-serialized form of the row header, where each 'RowTag' takes 6
@@ -571,7 +574,7 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
         ( RowHeader
           { rowHeaderLength   = fromIntegral w
           , rowHeaderByteSize = hdrsiz
-          , rowHeaderTable    = elems []
+          , rowHeaderTable    = zip [0 ..] $ elems []
           }
         , bytes
         )
@@ -583,13 +586,13 @@ putRowHeader :: RowHeader -> Put
 putRowHeader h = do
   let (VarWord35 max) = maxBound
   let len = fromIntegral $ rowHeaderLength h
-  let bytelen = sum $ headerItemLength <$> rowHeaderTable h
+  let bytelen = sum $ headerItemLength . snd <$> rowHeaderTable h
   if len <= max
    then
     if bytelen <= max
      then do
-        Bin.put $ VarWord35 len
-        mapM_ (Bin.put . headerItemType) $ rowHeaderTable h
+        binPutVarWord35 $ VarWord35 len
+        mapM_ (Bin.put . headerItemType . snd) $ rowHeaderTable h
      else error $ "'ProcGen.TinyRelDB.RowHeader' content would require "++show bytelen++
                   "bytes, maximum allowable content size is "++show max++" bytes"
    else error $ "'ProcGen.TinyRelDB.RowHeader' contains "++show len++" elements, "++
@@ -613,7 +616,7 @@ rowHeader (TaggedRow bytes) =
 -- | Where N is an 'Int', obtain the N'th index in the 'RowHeader', along with the index in the
 -- byte string at which the serialized object is stored, and the stored object size.
 indexHeaderTag :: RowHeader -> Int -> Select RowHeaderElem
-indexHeaderTag hdr i = maybe mzero return $ lookup i $ zip [0 ..] $ rowHeaderTable hdr
+indexHeaderTag hdr i = maybe mzero return $ lookup i $ rowHeaderTable hdr
 
 ----------------------------------------------------------------------------------------------------
 
@@ -642,6 +645,12 @@ data SelectAnomaly
     -- ^ A catch-all exception.
   deriving (Eq, Ord)
 
+instance Show SelectAnomaly where
+  show = \ case
+    SelectUnmatched    -> "Row does not match the evaluated 'Select' function."
+    CorruptRow   _ msg -> "Row appears to be corrupted: "++TStrict.unpack msg
+    UnknownError msg _ -> "Failed to select elements from row: "++TStrict.unpack msg
+
 instance MonadFail Select where
   fail = throwError . flip UnknownError Nothing . TStrict.pack
 
@@ -668,37 +677,53 @@ instance Monoid    a => Monoid     (Select a) where
   mempty      = pure mempty
   mappend a b = mappend <$> a <*> b
 
+runRowSelect :: Select a -> TaggedRow -> Either SelectAnomaly a
+runRowSelect (Select f) row =
+  runExcept $ evalStateT (runReaderT f env) (rowHeaderTable header) where
+    env = SelectEnv{ selectRowHeader = header, selectRow = row }
+    (header, _) = rowHeader row
+
+-- | Return a pair, the number of elements selected so far, and the number of elements that this row
+-- contains.
+selectedElemCount :: Select (Int, Int)
+selectedElemCount = Select $ do
+  count <- asks (rowHeaderLength . selectRowHeader)
+  get >>= \ case
+    []       -> pure (count, count)
+    (i, _):_ -> pure (i    , count)
+
 -- | Step to the next 'RowTagBytes', is 'Control.Monad.mzero' if there are no elements left.
 nextRowTag :: Select ()
-nextRowTag = join $ gets $ \ case { [] -> mzero; _:elems -> put elems; }
+nextRowTag = Select get >>= \ case { [] -> mzero; _:elems -> put elems; }
 
 -- | Skip to the 'RowTagBytes' matching the given predicate.
 skipToRowElem :: (RowTag -> Bool) -> Select RowHeaderElem
-skipToRowElem found = join $ gets $ dropWhile (not . found . headerItemType) >>> \ case
-  []      -> mzero
-  e:elems -> state $ const (e, elems)
+skipToRowElem found = join $ Select $ gets $ dropWhile (not . found . headerItemType . snd) >>> \ case
+  []           -> mzero
+  (_, e):elems -> state $ const (e, elems)
 
 -- | Fail unless we have consumed all of the 'RowTagBytes's by this point.
 expectRowEndWith :: SelectAnomaly -> Select ()
-expectRowEndWith err = Select (lift get) >>= \ case { [] -> pure (); _ -> throwError err; }
+expectRowEndWith err = Select $ get >>= \ case { [] -> pure (); _ -> throwError err; }
 
 -- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
 rowElem :: Select (RowTag, RowTagBytes)
-rowElem = join $ gets $ \ case
+rowElem = Select get >>= \ case
   []      -> mzero
-  ( RowHeaderElem
-    { headerItemType   =  idxelem
-    , headerItemOffset = off
-    , headerItemLength = siz
-    }):elems -> do
-        put elems
-        (TaggedRow bytes) <- asks selectRow
-        return
-          ( idxelem
-          , RowTagBytes $ BLazy.fromStrict $
-              BStrict.take (fromIntegral siz) $
-              BStrict.drop (fromIntegral off) bytes
-          )
+  (_ , RowHeaderElem
+       { headerItemType   =  idxelem
+       , headerItemOffset = off
+       , headerItemLength = siz
+       }
+   ):elems -> do
+      put elems
+      (TaggedRow bytes) <- asks selectRow
+      return
+        ( idxelem
+        , RowTagBytes $ BLazy.fromStrict $
+            BStrict.take (fromIntegral siz) $
+            BStrict.drop (fromIntegral off) bytes
+        )
 
 -- | Use a 'Data.Binary.Get.Get' function from the "Data.Binary.Get" module to unpack the current
 -- row element retrieved from 'rowElem'.
@@ -713,6 +738,10 @@ unpackRowElem unpack = do
         " bytes at a time"
   if len > max then err else
     pure (idx, runGet (isolate (fromIntegral len) $ unpack idx) bytes)
+
+-- | Obtain a copy of the 'TaggedRow' object currently being inspected by this 'Select' function.
+currentTaggedRow :: Select TaggedRow
+currentTaggedRow = asks selectRow
 
 -- | Match the value of any type @a@ that instantiates 'IsPrimitive' with the current 'rowElem'
 -- under the cursor.
@@ -752,6 +781,32 @@ instance Monoid BuildRowState where
   mempty  = BuildRowState{ buildElemCount = 0, buildRowHeader = mempty }
   mappend = (<>)
 
+-- | Obtain the number of elements that have been written prior to evaluating this function.
+writtenElemCount :: RowBuilderM Int
+writtenElemCount = RowBuilderM $ gets buildElemCount
+
+execRowBuilder :: RowBuilder -> TaggedRow
+execRowBuilder = snd . runRowBuilder
+
+runRowBuilder :: RowBuilderM a -> (a, TaggedRow)
+runRowBuilder (RowBuilderM f) = (a, newRow) where
+  ((a, st), content) = runPutM $ runStateT f BuildRowState
+    { buildElemCount = 0
+    , buildRowHeader = mempty
+    }
+  newRow = TaggedRow $ BLazy.toStrict $ runPut $ do
+    let len = fromIntegral $ buildElemCount st
+    let (VarWord35 max) = maxBound
+    if len > max
+     then error $
+      "'RowBuilder' constructed row with "++show len++
+      " elements, but a maximum of "++show max++
+      " elements is the limit."
+     else do
+       binPutVarWord35 $ VarWord35 len
+       putBuilder $ buildRowHeader st
+       putLazyByteString content
+
 -- | Use the 'IsPrimitive' instance for data of type @a@ to store the information in @a@ into a
 -- 'RowBuilder'.
 writeRowPrim :: forall a . IsPrimitive a => a -> RowBuilder
@@ -776,7 +831,7 @@ class DBMapped a where
   writeRow :: a -> RowBuilder
   readRow  :: Select a
 
-instance DBMapped UTF8Char where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance DBMapped UTFChar  where { writeRow = writeRowPrim; readRow = readRowPrim; }
 instance DBMapped Int      where { writeRow = writeRowPrim; readRow = readRowPrim; }
 instance DBMapped Int8     where { writeRow = writeRowPrim; readRow = readRowPrim; }
 instance DBMapped Int16    where { writeRow = writeRowPrim; readRow = readRowPrim; }
