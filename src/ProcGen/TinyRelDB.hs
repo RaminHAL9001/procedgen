@@ -10,6 +10,7 @@ module ProcGen.TinyRelDB
     DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
     putPrimLazyUTF8String, getPrimLazyUTF8String,
     putPrimStrictUTF8String, getPrimStrictUTF8String,
+    putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
     -- * Classes of Primitives
@@ -55,6 +56,8 @@ import qualified Data.Sequence               as S
 import           Data.Semigroup
 import qualified Data.Text                   as TStrict
 import qualified Data.Text.Lazy              as TLazy
+import           Data.Vector.Unboxed.Base    (Unbox)
+import qualified Data.Vector.Unboxed         as Unboxed
 import           Data.Word
 
 import           Numeric                     (showHex)
@@ -699,8 +702,17 @@ rowElem = join $ gets $ \ case
 
 -- | Use a 'Data.Binary.Get.Get' function from the "Data.Binary.Get" module to unpack the current
 -- row element retrieved from 'rowElem'.
-unpackRowElem :: Get a -> Select (RowTag, a)
-unpackRowElem unpack = rowElem >>= \ (idx, RowTagBytes bytes) -> pure (idx, runGet unpack bytes)
+unpackRowElem :: (RowTag -> Get a) -> Select (RowTag, a)
+unpackRowElem unpack = do
+  (idx, RowTagBytes bytes) <- rowElem
+  let max = fromIntegral (maxBound :: Int) :: Int64
+      len = indexElemTypeSize idx
+      err = error $
+        "Serialized object of type "++show idx++" has binary size of "++show len++
+        " bytes, but decoder can only consume "++show max++
+        " bytes at a time"
+  if len > max then err else
+    pure (idx, runGet (isolate (fromIntegral len) $ unpack idx) bytes)
 
 -- | Match the value of any type @a@ that instantiates 'IsPrimitive' with the current 'rowElem'
 -- under the cursor.
@@ -785,15 +797,15 @@ instance DBMapped TaggedRow where
 -- encoded with a different 'RowTag' type tag so that any string will match it when using a 'Select'
 -- statement. Use this function to encode a lazy 'BLazy.ByteString' with a string tag in the
 -- 'RowHeader' of a 'TaggedRow'. Use 'getPrimLazyUTF8String' to retrieve the exact data you put in.
-putPrimLazyUTF8String :: UTF8Lazy.ByteString -> PutM RowTag
-putPrimLazyUTF8String str = do
+putPrimLazyUTF8String :: UTF8Lazy.ByteString -> RowBuilder
+putPrimLazyUTF8String = writeRowPrimWith $ \ str -> do
   putLazyByteString str
   return $ UTF8String $ varWord40Length "Lazy UTF8 ByteString" $
     BLazy.length str -- NOTE: this must be 'BLazy.length', and NOT 'UTF8Lazy.length'
 
 -- | Retrieve a string object from a 'TaggedRow' as a lazy 'BLazy.ByteString'.
-getPrimLazyUTF8String :: RowTag -> Get UTF8Lazy.ByteString
-getPrimLazyUTF8String = \ case
+getPrimLazyUTF8String :: Select UTF8Lazy.ByteString
+getPrimLazyUTF8String = fmap snd $ unpackRowElem $ \ case
   UTF8String (VarWord40 siz) -> getLazyByteString siz
   _                          -> mzero
 
@@ -801,17 +813,23 @@ getPrimLazyUTF8String = \ case
 -- encoded with a different 'RowTag' type tag so that any string will match it when using a 'Select'
 -- statement. Use this function to encode a strict 'BStrict.ByteString' with a string tag in the
 -- 'RowHeader' of a 'TaggedRow'. Use 'getPrimStrictUTF8String' to retrieve the exact data you put in.
-putPrimStrictUTF8String :: UTF8Strict.ByteString -> PutM RowTag
-putPrimStrictUTF8String str = do
+putPrimStrictUTF8String :: UTF8Strict.ByteString -> RowBuilder
+putPrimStrictUTF8String = writeRowPrimWith $ \ str -> do
   putByteString str
   return $ UTF8String $ varWord40Length "Strict UTF8 ByteString" $ fromIntegral $
     BStrict.length str -- NOTE: this must be 'BStrict.length', and NOT 'UTF8Strict.length'
 
 -- | Retrieve a string object from a 'TaggedRow' as a strict 'BStrict.ByteString'.
-getPrimStrictUTF8String :: RowTag -> Get UTF8Strict.ByteString
-getPrimStrictUTF8String = \ case
+getPrimStrictUTF8String :: Select UTF8Strict.ByteString
+getPrimStrictUTF8String = fmap snd $ unpackRowElem $ \ case
   UTF8String (VarWord40 siz) -> getByteString $ fromIntegral siz
   _                          -> mzero
+
+putPrimUnboxedVector :: (IsNumericPrimitive elem, Unbox elem) => Unboxed.Vector elem -> RowBuilder
+putPrimUnboxedVector = error "TODO"
+
+getPrimUnboxedVector :: (IsNumericPrimitive elem, Unbox elem) => Select (Unboxed.Vector elem)
+getPrimUnboxedVector = error "TODO"
 
 ----------------------------------------------------------------------------------------------------
 
