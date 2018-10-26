@@ -15,7 +15,7 @@ module ProcGen.TinyRelDB
     putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
-    currentTaggedRow,
+    currentTaggedRow, corruptRowData, hexDumpIfCorruptRow,
     -- * Classes of Primitives
     IsNumericPrimitive(..), IsPrimitive(..),
     putNumericPrimitive,
@@ -218,12 +218,18 @@ indexElemBinPrefix = (`shift` 6) . \ case
   UTF8String{}       -> 2
   BinaryBlob{}       -> 3
 
-indexElemTypeSize :: RowTag -> Int64
+indexElemTypeSize :: RowTag -> Int
 indexElemTypeSize = \ case
   NumericPrimitive       e  -> primElemTypeSize e
-  HomoArray e (VarWord35 x) -> primElemTypeSize e * x
-  UTF8String  (VarWord40 w) -> w
-  BinaryBlob  (VarWord40 w) -> w
+  HomoArray e (VarWord35 x) -> checkSize $ fromIntegral (primElemTypeSize e) * x
+  UTF8String  (VarWord40 w) -> checkSize w
+  BinaryBlob  (VarWord40 w) -> checkSize w
+  where
+    max = maxBound :: Int
+    checkSize :: Int64 -> Int
+    checkSize siz =  if siz < fromIntegral max then fromIntegral siz else error $
+      "'TaggedRow' header contains 'RowTag' which points to an object of size "++show siz++
+      " bytes, but the maximum size of a 'TaggedRow' is "++show max++" bytes"
 
 ----------------------------------------------------------------------------------------------------
 
@@ -247,7 +253,7 @@ primElemTypeBinSuffix :: PrimElemType -> Word8
 primElemTypeBinSuffix = fromIntegral . fromEnum
 
 -- | The serialized size (in bytes) of a value represented by the 'PrimElemType'.
-primElemTypeSize :: PrimElemType -> Int64
+primElemTypeSize :: PrimElemType -> Int
 primElemTypeSize = \ case
   PrimTypeUTFChar  -> primTypeUTFCharSize
   PrimTypeHostInt  -> numericPrimitiveSize (Proxy :: Proxy Int)
@@ -295,16 +301,20 @@ getIndexElem = do
 
 ----------------------------------------------------------------------------------------------------
 
-calcByteSize :: Bin.Binary a => a -> Int64
-calcByteSize = fromIntegral . BLazy.length . runPut . Bin.put 
+calcByteSize :: Bin.Binary a => a -> Int
+calcByteSize = fromIntegral . checkedLength . runPut . Bin.put where
+  checkedLength = BLazy.length >>> \ i -> let max = maxBound :: Int in
+    if i <= fromIntegral max then i else error $
+      "'calcByteSize': numeric primitive will be serialized to an object of "++show i++
+      " bytes of binary data, a row can only contain "++show max++" bytes"
 
-primTypeUTFCharSize :: Int64
+primTypeUTFCharSize :: Int
 primTypeUTFCharSize = 3
 
 -- | The class of type that can be represented as a single 'PrimElemType' when serialized.
 class IsNumericPrimitive a where
   numericPrimitiveType :: Proxy a -> PrimElemType
-  numericPrimitiveSize :: Proxy a -> Int64
+  numericPrimitiveSize :: Proxy a -> Int
 
 instance IsNumericPrimitive UTFChar where
   numericPrimitiveType Proxy = PrimTypeUTFChar
@@ -487,13 +497,14 @@ instance IsNumericPrimitive elem => IsPrimitive (PackedVector elem) where
         len = fromIntegral (BStrict.length bytes) `div`
           (numericPrimitiveSize (Proxy :: Proxy elem))
     if fromIntegral len <= max
-     then return $ HomoArray (numericPrimitiveType (Proxy :: Proxy elem)) (VarWord35 len)
+     then return $ HomoArray (numericPrimitiveType (Proxy :: Proxy elem)) $
+                      VarWord35 (fromIntegral len)
      else error $ "'ProcGen.TinyRelDB.putPrimitive' cannot put array with "++show len++
                   " elements, maximum number of elements is "++show max
   getPrimitive = \ case
     HomoArray typ (VarWord35 len) | typ == numericPrimitiveType (Proxy :: Proxy elem) ->
       PackedVector . BLazy.toStrict <$>
-      getLazyByteString (len * numericPrimitiveSize (Proxy :: Proxy elem))
+      getLazyByteString (len * fromIntegral (numericPrimitiveSize (Proxy :: Proxy elem)))
     _ -> mzero
 
 instance IsPrimitive BLazy.ByteString where
@@ -533,8 +544,8 @@ putNumericPrimitive put a =
 newtype RowTagBytes = RowTagBytes { rowElemBytes :: BLazy.ByteString }
   deriving (Eq, Ord)
 
-type RowElemOffset = Int64
-type RowElemLength = Int64
+type RowElemOffset = Int
+type RowElemLength = Int
 
 data RowHeaderElem
   = RowHeaderElem
@@ -585,13 +596,13 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
 putRowHeader :: RowHeader -> Put
 putRowHeader h = do
   let (VarWord35 max) = maxBound
-  let len = fromIntegral $ rowHeaderLength h
+  let len     = rowHeaderLength h
   let bytelen = sum $ headerItemLength . snd <$> rowHeaderTable h
-  if len <= max
+  if fromIntegral len <= max
    then
-    if bytelen <= max
+    if fromIntegral bytelen <= max
      then do
-        binPutVarWord35 $ VarWord35 len
+        binPutVarWord35 $ VarWord35 $ fromIntegral len
         mapM_ (Bin.put . headerItemType . snd) $ rowHeaderTable h
      else error $ "'ProcGen.TinyRelDB.RowHeader' content would require "++show bytelen++
                   "bytes, maximum allowable content size is "++show max++" bytes"
@@ -637,32 +648,38 @@ data SelectEnv
     }
 
 data SelectAnomaly
-  = SelectUnmatched
-    -- ^ Ignore this row, it does not match.
-  | CorruptRow !TaggedRow !TStrict.Text
+  = Select_unmatched
+    -- ^ Throwing this exception indicates to simply ignore this row because it does not match.
+  | Corrupt_row
+    { corrupted_row           :: !TaggedRow
+    , corrupt_row_item_number :: !Int
+    , corrupt_row_item_offset :: !Int
+    , corrupt_row_reason      :: !TStrict.Text
+    }
     -- ^ There seems to be something wrong with the data, halt immediately.
-  | UnknownError !TStrict.Text (Maybe TaggedRow)
+  | Unknown_error !TStrict.Text (Maybe TaggedRow)
     -- ^ A catch-all exception.
   deriving (Eq, Ord)
 
 instance Show SelectAnomaly where
   show = \ case
-    SelectUnmatched    -> "Row does not match the evaluated 'Select' function."
-    CorruptRow   _ msg -> "Row appears to be corrupted: "++TStrict.unpack msg
-    UnknownError msg _ -> "Failed to select elements from row: "++TStrict.unpack msg
+    Select_unmatched        -> "Row does not match the evaluated 'Select' function."
+    Corrupt_row _ i off msg -> "Row appears to be corrupted (index="++
+      show i++", offset="++show off++"):\n"++TStrict.unpack msg++"\n"
+    Unknown_error   msg _   -> "Failed to select elements from row: "++TStrict.unpack msg
 
 instance MonadFail Select where
-  fail = throwError . flip UnknownError Nothing . TStrict.pack
+  fail = throwError . flip Unknown_error Nothing . TStrict.pack
 
 instance MonadError SelectAnomaly Select where
   throwError = Select . lift . lift . throwError
   catchError (Select try) catch = Select $ catchError try $ unwrapSelect . catch
 
 instance MonadPlus Select where
-  mzero = Select $ lift $ lift $ throwError SelectUnmatched
+  mzero = Select $ lift $ lift $ throwError Select_unmatched
   mplus a b = catchError a $ \ case
-    SelectUnmatched -> b
-    err             -> throwError err
+    Select_unmatched -> b
+    err              -> throwError err
 
 instance MonadReader SelectEnv Select where
   ask = Select ask
@@ -706,6 +723,18 @@ skipToRowElem found = join $ Select $ gets $ dropWhile (not . found . headerItem
 expectRowEndWith :: SelectAnomaly -> Select ()
 expectRowEndWith err = Select $ get >>= \ case { [] -> pure (); _ -> throwError err; }
 
+-- | Throw a 'Corrupt_row' exception with the cursor information and a brief message.
+corruptRowData :: TStrict.Text -> Select void
+corruptRowData msg = do
+  hdr <- Select $ asks selectRowHeader
+  let len = rowHeaderLength hdr
+  row <- Select $ asks selectRow
+  let off = BStrict.length $ taggedRowBytes row
+  (i, off) <- Select $ lift $ gets $ \ case
+    []          -> (len, off)
+    (i, elem):_ -> (i  , headerItemOffset elem)
+  throwError $ Corrupt_row row i (off + rowHeaderLength hdr) msg
+
 -- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
 rowElem :: Select (RowTag, RowTagBytes)
 rowElem = Select get >>= \ case
@@ -736,7 +765,7 @@ unpackRowElem unpack = do
         "Serialized object of type "++show idx++" has binary size of "++show len++
         " bytes, but decoder can only consume "++show max++
         " bytes at a time"
-  if len > max then err else
+  if fromIntegral len > max then err else
     pure (idx, runGet (isolate (fromIntegral len) $ unpack idx) bytes)
 
 -- | Obtain a copy of the 'TaggedRow' object currently being inspected by this 'Select' function.
@@ -751,6 +780,35 @@ readRowPrim = do
   case runGetOrFail (getPrimitive idx) bytes of
     Right (_, _, a) -> return a
     Left{}          -> mzero
+
+-- | If a 'SelectAnomaly' exception is raised, and if the 'SelectAnomaly' is a 'Corrupt_row', this
+-- function will produce a hex-dump of the content of the row, indicating the cursor position at
+-- which the failure occured.
+hexDumpIfCorruptRow :: SelectAnomaly -> String
+hexDumpIfCorruptRow = \ case
+  Corrupt_row (TaggedRow bytes) _i off _msg -> unlines $ -- TODO: add header size to 'off'
+    loop (0 :: Int64) off (BStrict.unpack bytes)
+  _ -> ""
+  where
+    bytesPerRow = 16
+    alignNumR i = (++ (show i)) $ case i of
+      i | i < 10 -> "       "
+      i | i < 100 -> "      "
+      i | i < 1000 -> "     "
+      i | i < 10000 -> "    "
+      i | i < 100000 -> "   "
+      i | i < 1000000 -> "  "
+      i | i < 10000000 -> " "
+      _                 -> ""
+    loop grpnum i = splitAt bytesPerRow >>> \ case
+      ([]   , []       ) -> []
+      (group, remainder) ->
+        ( alignNumR grpnum ++ '\x3A' :
+          (group >>= \ c -> ' ' : (if c < 0x10 then ('0' :) else id) (showHex c ""))
+         ) :
+        (if i >= bytesPerRow then id else
+            (("        : " ++ replicate (fromIntegral i * 3) ' ' ++ "^\\cursor") :)
+         ) (((loop $! grpnum + bytesPerRow) $! i - bytesPerRow) remainder)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -803,9 +861,9 @@ runRowBuilder (RowBuilderM f) = (a, newRow) where
       " elements, but a maximum of "++show max++
       " elements is the limit."
      else do
-       binPutVarWord35 $ VarWord35 len
-       putBuilder $ buildRowHeader st
-       putLazyByteString content
+      binPutVarWord35 $ VarWord35 len
+      putBuilder $ buildRowHeader st
+      putLazyByteString content
 
 -- | Use the 'IsPrimitive' instance for data of type @a@ to store the information in @a@ into a
 -- 'RowBuilder'.
