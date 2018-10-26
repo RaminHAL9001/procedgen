@@ -128,8 +128,10 @@ Test-suite procgen-infra {
     --  ^ -- only necessary if module with 'main' function is not called "Main"
 
   OTHER-MODULES:
+    ProcGen.Arbitrary
     ProcGen.PrimeNumbers
     ProcGen.TinyRelDB
+    ProcGen.Types
 
   BUILD-DEPENDS:
     procgen,
