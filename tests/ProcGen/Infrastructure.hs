@@ -129,30 +129,30 @@ getTEST orig bytes = execTest bytes $ unVarWord35 <$> liftBinGet Bin.get >>= \ a
           throwError $ Unused_bytes t off $ BLazy.toStrict rem
 
 test_VarWord35_protocol :: IO ()
-test_VarWord35_protocol = forM_ (loop (0::Int) p) $ \ (n, group) -> do
-  print n
-  putStrLn $ "max bound: " ++ show (maximum $ p1 ++ p2 ++ p3)
-  forM_ group $ \ (orig, serialized, deserialized) -> case deserialized of
-    Right{}  -> return ()
-    Left err -> do
-      case err of
-        Decoder_failed remainder offset message -> do
-          putStrLn $ "ERROR: " ++ TStrict.unpack message
-          putStrLn $ "     test: " ++ show (orig :: TEST Int64)
-          putStrLn $ " original: " ++ showBytes serialized
-          putStrLn $ "remainder: " ++ showBytes remainder
-          putStrLn $ "           " ++ replicate (1 + 5 * fromIntegral offset) ' ' ++ "^"
-          putStrLn $ "   offset: " ++ show offset
-        Decoded_value_is_wrong original decoded -> do
-          putStrLn $ "ERROR: decoder succeeded with wrong result"
-          putStrLn $ "original: " ++ show original
-          putStrLn $ " decoded: " ++ show decoded
-        Unused_bytes decoded offset bytes -> do
-          putStrLn $ "ERROR: decoded correctly, but left undecoded bytes"
-          putStrLn $ " decoded: " ++ show decoded
-          putStrLn $ "  offset: " ++ show offset
-          putStrLn $ "   extra: " ++ showBytes bytes
-      fail "Tests failed."
+test_VarWord35_protocol = do
+  forM_ (zip [(0::Int) ..] p) $ \ (i, (orig, serialized, deserialized)) -> do
+    when (mod i (1024*7) == (1024*7-1)) $ print (i+1)
+    case deserialized of
+      Right{}  -> return ()
+      Left err -> do
+        case err of
+          Decoder_failed remainder offset message -> do
+            putStrLn $ "ERROR: " ++ TStrict.unpack message
+            putStrLn $ "     test: " ++ show (orig :: TEST Int64)
+            putStrLn $ " original: " ++ showBytes serialized
+            putStrLn $ "remainder: " ++ showBytes remainder
+            putStrLn $ "           " ++ replicate (1 + 5 * fromIntegral offset) ' ' ++ "^"
+            putStrLn $ "   offset: " ++ show offset
+          Decoded_value_is_wrong original decoded -> do
+            putStrLn $ "ERROR: decoder succeeded with wrong result"
+            putStrLn $ "original: " ++ show original
+            putStrLn $ " decoded: " ++ show decoded
+          Unused_bytes decoded offset bytes -> do
+            putStrLn $ "ERROR: decoded correctly, but left undecoded bytes"
+            putStrLn $ " decoded: " ++ show decoded
+            putStrLn $ "  offset: " ++ show offset
+            putStrLn $ "   extra: " ++ showBytes bytes
+        fail "Tests failed."
   where
     lim = flip mod (varWord35Mask + 1)
     p1  = 0 : 1 : (fromIntegral <$> Unboxed.toList all16BitPrimes)
@@ -163,9 +163,6 @@ test_VarWord35_protocol = forM_ (loop (0::Int) p) $ \ (n, group) -> do
       orig <- [T1 c, T2 a b, T3 a b c, T4 0 a b c, T4 a 0 b c, T4 a b 0 c, T4 a b c 0]
       let serialized = putTEST orig
       [(orig, serialized, getTEST orig $ BLazy.fromStrict serialized)]
-    loop n p = seq n $! case splitAt (7*1024) p of
-      ([],   []) -> []
-      (group, p) -> (n, group) : loop (n + 7*1024) p
 
 ----------------------------------------------------------------------------------------------------
 
@@ -254,7 +251,7 @@ writeAnyPrimToRow = \ case
   Prim_String  a -> writeRowPrim a
 
 readAnyPrimMatching :: AnyPrim -> Select AnyPrim
-readAnyPrimMatching = \ case
+readAnyPrimMatching prim = case prim of
   Prim_UTFChar a -> read Prim_UTFChar a
   Prim_Int     a -> read Prim_Int     a
   Prim_Int8    a -> read Prim_Int8    a
@@ -270,14 +267,14 @@ readAnyPrimMatching = \ case
   Prim_Double  a -> read Prim_Double  a
   Prim_String  a -> read Prim_String  a
   where
-    read :: (IsPrimitive a, Show a, Eq a) => (a -> AnyPrim) -> a -> Select AnyPrim
-    read constr a = readRowPrim >>= \ b -> if a == b then return $ constr b else do
-      taggedrow <- currentTaggedRow
-      throwError $ CorruptRow taggedrow $ TStrict.pack $
-        "'Select' failed.\nexpected value: "++show a++"\nselected value: "++show b
+    read :: (IsPrimitive a, Eq a) => (a -> AnyPrim) -> a -> Select AnyPrim
+    read constr a = readRowPrim >>= \ b -> if a == b then return $ constr b else 
+      corruptRowData $ TStrict.pack $
+        "'Select' function failed\nexpected value: "++show prim++
+        "\nselected value: "++show (constr b)
 
 test_primitive_protocol :: IO ()
-test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [0::Int .. numTests] $ \ i -> do
+test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i -> do
   when (mod i 100 == 99) $ liftIO $ putStrLn $ "Completed "++show (i+1)++" tests..."
   let elem  = randSelect primValues
   let unbox = Boxed.toList
@@ -290,15 +287,25 @@ test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [0::Int .. numTests] $ \ i -
       let serialized   = execRowBuilder $ mapM_ writeAnyPrimToRow elems
       let deserialized = runRowSelect (mapM readAnyPrimMatching elems) serialized
       case deserialized of
-        Left  err          -> liftIO $ fail $ show err
-        Right deserialized -> unless (elems == deserialized) $ liftIO $ fail $
-          "    original: "++show elems++
-          "\ndeserialized: "++show deserialized++
-          "\n('Select' function succeeded but read elements do not match original elements)\n"
+        Left  err          -> liftIO $ do
+          putStrLn $ "serialized object: " ++ show elems
+          print err
+          putStrLn $ hexDumpIfCorruptRow err
+          fail "'Select' function failed."
+        Right deserialized -> unless (elems == deserialized) $ liftIO $ do
+          putStrLn $ "serialized object: " ++ show elems
+          putStrLn $
+            "    original: "++show elems++
+            "\ndeserialized: "++show deserialized++
+            "\n('Select' function succeeded but read elements do not match original elements)"
+          fail "'Select' statement succeeded with incorrect result."
 
 main :: IO ()
 main = do
   putStrLn "Testing the VarWord35 bit serialization protocol..."
   test_VarWord35_protocol
+  putStrLn "VarWor35 bit serialization tests passed.\n"
+  --
   putStrLn "Testing the primitive value serialization protocol..."
   test_primitive_protocol
+  putStrLn "Primitive value serialization protocol tests passed."
