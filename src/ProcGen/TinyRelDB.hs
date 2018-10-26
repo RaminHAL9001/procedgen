@@ -653,6 +653,7 @@ data SelectAnomaly
   | Corrupt_row
     { corrupted_row           :: !TaggedRow
     , corrupt_row_item_number :: !Int
+    , corrupt_row_header_size :: !Int
     , corrupt_row_item_offset :: !Int
     , corrupt_row_reason      :: !TStrict.Text
     }
@@ -663,10 +664,10 @@ data SelectAnomaly
 
 instance Show SelectAnomaly where
   show = \ case
-    Select_unmatched        -> "Row does not match the evaluated 'Select' function."
-    Corrupt_row _ i off msg -> "Row appears to be corrupted (index="++
-      show i++", offset="++show off++"):\n"++TStrict.unpack msg++"\n"
-    Unknown_error   msg _   -> "Failed to select elements from row: "++TStrict.unpack msg
+    Select_unmatched               -> "Row does not match the evaluated 'Select' function."
+    Corrupt_row _ i hdrsiz off msg -> "Row appears to be corrupted (index="++show i++
+      ", headerSize="++show hdrsiz++", offset="++show off++"):\n"++TStrict.unpack msg++"\n"
+    Unknown_error msg _            -> "Failed to select elements from row: "++TStrict.unpack msg
 
 instance MonadFail Select where
   fail = throwError . flip Unknown_error Nothing . TStrict.pack
@@ -733,14 +734,14 @@ corruptRowData msg = do
   (i, off) <- Select $ lift $ gets $ \ case
     []          -> (len, off)
     (i, elem):_ -> (i  , headerItemOffset elem)
-  throwError $ Corrupt_row row i (off + rowHeaderLength hdr) msg
+  throwError $ Corrupt_row row i (rowHeaderLength hdr) off msg
 
 -- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
 rowElem :: Select (RowTag, RowTagBytes)
 rowElem = Select get >>= \ case
   []      -> mzero
   (_ , RowHeaderElem
-       { headerItemType   =  idxelem
+       { headerItemType   = idxelem
        , headerItemOffset = off
        , headerItemLength = siz
        }
@@ -786,8 +787,8 @@ readRowPrim = do
 -- which the failure occured.
 hexDumpIfCorruptRow :: SelectAnomaly -> String
 hexDumpIfCorruptRow = \ case
-  Corrupt_row (TaggedRow bytes) _i off _msg -> unlines $ -- TODO: add header size to 'off'
-    loop (0 :: Int64) off (BStrict.unpack bytes)
+  Corrupt_row (TaggedRow bytes) _i hdrsiz off _msg -> unlines $
+    loop (0 :: Int64) (hdrsiz+off) (BStrict.unpack bytes)
   _ -> ""
   where
     bytesPerRow = 16
