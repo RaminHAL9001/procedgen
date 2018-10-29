@@ -14,8 +14,8 @@ module ProcGen.TinyRelDB
     putPrimStrictUTF8String, getPrimStrictUTF8String,
     putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
-    nextRowTag, skipToRowElem, expectRowEndWith, rowElem, unpackRowElem, readRowPrim,
-    currentTaggedRow, corruptRowData, hexDumpIfCorruptRow,
+    nextRowTag, skipToRowElem, throwUnlessRowEnd, rowElem, unpackRowElem, readRowPrim,
+    currentTaggedRow, throwCorruptRow, hexDumpIfCorruptRow, showHeaderIfCorrupRow,
     -- * Classes of Primitives
     IsNumericPrimitive(..), IsPrimitive(..),
     putNumericPrimitive,
@@ -62,6 +62,8 @@ import qualified Data.Text.Lazy              as TLazy
 import           Data.Vector.Unboxed.Base    (Unbox)
 import qualified Data.Vector.Unboxed         as Unboxed
 import           Data.Word
+
+import           Text.Printf                 (printf)
 
 import           Numeric                     (showHex)
 
@@ -562,12 +564,18 @@ type RowHeaderTable = [(Int, RowHeaderElem)]
 -- bytes regardless of it's value. This allows for faster indexing and decoding.
 data RowHeader
   = RowHeader
-    { rowHeaderLength   :: !Int
+    { rowHeaderLength   :: !RowElemLength
       -- ^ Get the number of elements in this 'Row'.
-    , rowHeaderByteSize :: !Int64
+    , rowHeaderByteSize :: !RowElemOffset
     , rowHeaderTable    :: RowHeaderTable
     }
   deriving (Eq, Ord)
+
+-- | Used for error reporting when a 'RowHeaderElem' could be reported but won't be because the
+-- 'Select' statement cursor went past the last item in the row.
+_maybe_off :: TaggedRow -> RowHeader -> Maybe RowHeaderElem -> RowElemOffset
+_maybe_off (TaggedRow bytes) hdr =
+  maybe (BStrict.length bytes) (((rowHeaderByteSize hdr) +) . headerItemOffset)
 
 getRowHeaderElem :: Get RowHeaderElem
 getRowHeaderElem = do
@@ -584,7 +592,7 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
       return
         ( RowHeader
           { rowHeaderLength   = fromIntegral w
-          , rowHeaderByteSize = hdrsiz
+          , rowHeaderByteSize = fromIntegral hdrsiz -- TODO: add a (Int64 -> Int) check here?
           , rowHeaderTable    = zip [0 ..] $ elems []
           }
         , bytes
@@ -648,38 +656,62 @@ data SelectEnv
     }
 
 data SelectAnomaly
-  = Select_unmatched
+  = SelectUnmatched
     -- ^ Throwing this exception indicates to simply ignore this row because it does not match.
-  | Corrupt_row
-    { corrupted_row           :: !TaggedRow
-    , corrupt_row_item_number :: !Int
-    , corrupt_row_header_size :: !Int
-    , corrupt_row_item_offset :: !Int
-    , corrupt_row_reason      :: !TStrict.Text
-    }
-    -- ^ There seems to be something wrong with the data, halt immediately.
-  | Unknown_error !TStrict.Text (Maybe TaggedRow)
+  | PrematureEndOfRow
+    { corruptExpectedTag :: Maybe RowTag
+    , corruptRowReason   :: !TStrict.Text
+    } -- ^ This exception is thrown by 'throwUnlessRowEnd', indicates that the 'TaggedRow' should
+      -- have contained data that was expected by the 'Select' function which throws this error.
+  | CorruptRow
+    { corruptRowCopy     :: !TaggedRow
+      -- ^ a copy of the row that the 'Select' statement thought was corrupted.
+    , corruptRowHeader   :: !RowHeader
+      -- ^ a copy of the whole 'RowHeader' that was being used by the 'Select' statement that threw
+      -- this exception.
+    , corruptHeaderIndex :: !Int
+      -- ^ The index of the 'corruptHeaderElem'
+    , corruptHeaderElem  :: Maybe RowHeaderElem
+      -- ^ Which 'RowHeaderElem' in the 'rowHeaderTable' was being scrutinized by the 'Select'
+      -- statement when it threw this exception. This is set to 'Prelude.Nothing' if all tag
+      -- elements were consumed.
+    , corruptRowReason   :: !TStrict.Text
+    } -- ^ This exception is used when there seems to be something wrong with the data, and the
+      -- 'Select' function should halt immediately.
+  | UnknownError !TStrict.Text (Maybe TaggedRow)
     -- ^ A catch-all exception.
   deriving (Eq, Ord)
 
 instance Show SelectAnomaly where
   show = \ case
-    Select_unmatched               -> "Row does not match the evaluated 'Select' function."
-    Corrupt_row _ i hdrsiz off msg -> "Row appears to be corrupted (index="++show i++
-      ", headerSize="++show hdrsiz++", offset="++show off++"):\n"++TStrict.unpack msg++"\n"
-    Unknown_error msg _            -> "Failed to select elements from row: "++TStrict.unpack msg
+    SelectUnmatched               -> "Row does not match the evaluated 'Select' function."
+    PrematureEndOfRow typ msg     -> "Failed to parse row"++
+      maybe "" ((", expected data of type " ++) . show) typ ++
+      ": "++TStrict.unpack msg
+    UnknownError          msg _   -> "Failed to select elements from row: "++TStrict.unpack msg
+    CorruptRow row hdr i elem msg -> "Row appears to be corrupted (index="++
+      show i++", headerSize="++show (rowHeaderLength hdr)++", offset="++
+      show (_maybe_off row hdr elem)++"):\n"++TStrict.unpack msg++"\n"
+
+showHeaderIfCorrupRow :: SelectAnomaly -> String
+showHeaderIfCorrupRow = \ case
+  CorruptRow _row hdr _i _elem _msg -> unlines $ "  index   offset   length type" : do
+    (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
+      rowHeaderTable hdr
+    [printf "  %5i %8i %8i %s" i off len $ show typ]
+  _ -> ""
 
 instance MonadFail Select where
-  fail = throwError . flip Unknown_error Nothing . TStrict.pack
+  fail = throwError . flip UnknownError Nothing . TStrict.pack
 
 instance MonadError SelectAnomaly Select where
   throwError = Select . lift . lift . throwError
   catchError (Select try) catch = Select $ catchError try $ unwrapSelect . catch
 
 instance MonadPlus Select where
-  mzero = Select $ lift $ lift $ throwError Select_unmatched
+  mzero = Select $ lift $ lift $ throwError SelectUnmatched
   mplus a b = catchError a $ \ case
-    Select_unmatched -> b
+    SelectUnmatched -> b
     err              -> throwError err
 
 instance MonadReader SelectEnv Select where
@@ -698,8 +730,8 @@ instance Monoid    a => Monoid     (Select a) where
 runRowSelect :: Select a -> TaggedRow -> Either SelectAnomaly a
 runRowSelect (Select f) row =
   runExcept $ evalStateT (runReaderT f env) (rowHeaderTable header) where
-    env = SelectEnv{ selectRowHeader = header, selectRow = row }
     (header, _) = rowHeader row
+    env = SelectEnv{ selectRowHeader = header, selectRow = row }
 
 -- | Return a pair, the number of elements selected so far, and the number of elements that this row
 -- contains.
@@ -716,25 +748,30 @@ nextRowTag = Select get >>= \ case { [] -> mzero; _:elems -> put elems; }
 
 -- | Skip to the 'RowTagBytes' matching the given predicate.
 skipToRowElem :: (RowTag -> Bool) -> Select RowHeaderElem
-skipToRowElem found = join $ Select $ gets $ dropWhile (not . found . headerItemType . snd) >>> \ case
-  []           -> mzero
-  (_, e):elems -> state $ const (e, elems)
+skipToRowElem found = join $ Select $ gets $
+  dropWhile (not . found . headerItemType . snd) >>> \ case
+    []           -> mzero
+    (_, e):elems -> state $ const (e, elems)
 
--- | Fail unless we have consumed all of the 'RowTagBytes's by this point.
-expectRowEndWith :: SelectAnomaly -> Select ()
-expectRowEndWith err = Select $ get >>= \ case { [] -> pure (); _ -> throwError err; }
+-- | Throw an exception unless we have consumed all of the 'RowTagBytes's by this point. If we have
+-- consumed every item in this 'TaggedRow', this function does nothing and throws no exception. If
+-- you know what 'RowTag' type you expected, pass it as the first 'Prelude.Maybe' parameter.
+throwUnlessRowEnd :: Maybe RowTag -> TStrict.Text -> Select ()
+throwUnlessRowEnd tag msg = Select $ get >>= \ case
+  [] -> pure ()
+  _  -> throwError PrematureEndOfRow{ corruptExpectedTag = tag, corruptRowReason = msg }
 
--- | Throw a 'Corrupt_row' exception with the cursor information and a brief message.
-corruptRowData :: TStrict.Text -> Select void
-corruptRowData msg = do
-  hdr <- Select $ asks selectRowHeader
+-- | Throw a 'CorruptRow' exception with the cursor information and a brief message.
+throwCorruptRow :: TStrict.Text -> Select void
+throwCorruptRow msg = do
+  env <- Select ask
+  let hdr = selectRowHeader env
   let len = rowHeaderLength hdr
-  row <- Select $ asks selectRow
-  let off = BStrict.length $ taggedRowBytes row
-  (i, off) <- Select $ lift $ gets $ \ case
-    []          -> (len, off)
-    (i, elem):_ -> (i  , headerItemOffset elem)
-  throwError $ Corrupt_row row i (rowHeaderLength hdr) off msg
+  let row = selectRow env
+  (i, elem) <- Select $ lift $ gets $ \ case
+    []          -> (len, Nothing)
+    (i, elem):_ -> (i  , Just elem)
+  throwError $ CorruptRow row hdr i elem msg
 
 -- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
 rowElem :: Select (RowTag, RowTagBytes)
@@ -782,14 +819,14 @@ readRowPrim = do
     Right (_, _, a) -> return a
     Left{}          -> mzero
 
--- | If a 'SelectAnomaly' exception is raised, and if the 'SelectAnomaly' is a 'Corrupt_row', this
+-- | If a 'SelectAnomaly' exception is raised, and if the 'SelectAnomaly' is a 'CorruptRow', this
 -- function will produce a hex-dump of the content of the row, indicating the cursor position at
 -- which the failure occured.
 hexDumpIfCorruptRow :: SelectAnomaly -> String
 hexDumpIfCorruptRow = \ case
-  Corrupt_row (TaggedRow bytes) _i hdrsiz off _msg -> unlines $
-    loop (0 :: Int64) (hdrsiz+off) (BStrict.unpack bytes)
-  _ -> ""
+  CorruptRow row@(TaggedRow bytes) hdr _i elem _msg -> unlines $
+    loop (0 :: Int64) (_maybe_off row hdr elem) (BStrict.unpack bytes)
+  _  -> ""
   where
     bytesPerRow = 16
     alignNumR i = (++ (show i)) $ case i of

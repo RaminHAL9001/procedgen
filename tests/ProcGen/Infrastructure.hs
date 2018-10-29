@@ -269,7 +269,7 @@ readAnyPrimMatching prim = case prim of
   where
     read :: (IsPrimitive a, Eq a) => (a -> AnyPrim) -> a -> Select AnyPrim
     read constr a = readRowPrim >>= \ b -> if a == b then return $ constr b else 
-      corruptRowData $ TStrict.pack $
+      throwCorruptRow $ TStrict.pack $
         "'Select' function failed\nexpected value: "++show prim++
         "\nselected value: "++show (constr b)
 
@@ -291,6 +291,7 @@ test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i
           putStrLn $ "serialized object: " ++ show elems
           print err
           putStrLn $ hexDumpIfCorruptRow err
+          putStrLn $ showHeaderIfCorrupRow err
           fail "'Select' function failed."
         Right deserialized -> unless (elems == deserialized) $ liftIO $ do
           putStrLn $ "serialized object: " ++ show elems
