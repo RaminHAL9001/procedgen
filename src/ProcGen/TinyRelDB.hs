@@ -207,7 +207,14 @@ data RowTag
     -- ^ A string with non-uniform character elements.
   | BinaryBlob       !VarWord40
     -- ^ Any 'BStrict.ByteString'
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
+
+instance Show RowTag where
+  showsPrec p = \ case
+    NumericPrimitive t -> showsPrec p t
+    HomoArray      t n -> showsPrec p t . ('[' :) . showsPrec p n . (']' :)
+    UTF8String       n -> ("String[" ++) . showsPrec p n . (']' :)
+    BinaryBlob       n -> ("Blob[" ++) . showsPrec p n . (']' :)
 
 instance Bin.Binary RowTag where
   put = putIndexElem
@@ -249,7 +256,23 @@ data PrimElemType
   | PrimTypeWord64
   | PrimTypeFloat
   | PrimTypeDouble
-  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+  deriving (Eq, Ord, Enum, Bounded)
+
+instance Show PrimElemType where
+  show = \ case
+    PrimTypeHostInt   -> "HostInt"
+    PrimTypeHostWord  -> "HostWord"
+    PrimTypeUTFChar   -> "UTFChar"
+    PrimTypeInt8      -> "Int8"
+    PrimTypeWord8     -> "Word8"
+    PrimTypeInt16     -> "Int16"
+    PrimTypeWord16    -> "Word16"
+    PrimTypeInt32     -> "Int32"
+    PrimTypeWord32    -> "Word32"
+    PrimTypeInt64     -> "Int64"
+    PrimTypeWord64    -> "Word64"
+    PrimTypeFloat     -> "Float"
+    PrimTypeDouble    -> "Double"
 
 primElemTypeBinSuffix :: PrimElemType -> Word8
 primElemTypeBinSuffix = fromIntegral . fromEnum
@@ -731,7 +754,7 @@ runRowSelect :: Select a -> TaggedRow -> Either SelectAnomaly a
 runRowSelect (Select f) row =
   runExcept $ evalStateT (runReaderT f env) (rowHeaderTable header) where
     (header, _) = rowHeader row
-    env = SelectEnv{ selectRowHeader = header, selectRow = row }
+    env         = SelectEnv{ selectRowHeader = header, selectRow = row }
 
 -- | Return a pair, the number of elements selected so far, and the number of elements that this row
 -- contains.
