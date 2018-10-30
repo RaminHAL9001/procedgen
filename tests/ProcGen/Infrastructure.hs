@@ -285,13 +285,15 @@ test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i
     numTests = 10000
     runTest elems = do
       let serialized   = execRowBuilder $ mapM_ writeAnyPrimToRow elems
-      let deserialized = runRowSelect (mapM readAnyPrimMatching elems) serialized
+      let env          = selectEnv serialized
+      let deserialized = runRowSelect (mapM readAnyPrimMatching elems) env
       case deserialized of
         Left  err          -> liftIO $ do
           putStrLn $ "serialized object: " ++ show elems
           print err
-          putStrLn $ hexDumpIfCorruptRow err
-          putStrLn $ showHeaderIfCorrupRow err
+          case err of
+            CorruptRow{} -> putStrLn $ hexDumpIfCorruptRow err
+            _            -> print env
           fail "'Select' function failed."
         Right deserialized -> unless (elems == deserialized) $ liftIO $ do
           putStrLn $ "serialized object: " ++ show elems

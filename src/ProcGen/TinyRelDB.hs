@@ -8,14 +8,14 @@ module ProcGen.TinyRelDB
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence, hexDumpTaggedRow,
     -- * Mapping Haskell Data Types
     DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
-    runRowSelect, selectedElemCount, execRowBuilder, runRowBuilder,
+    selectEnv, runRowSelect, selectedElemCount, execRowBuilder, runRowBuilder,
     writtenElemCount,
     putPrimLazyUTF8String, getPrimLazyUTF8String,
     putPrimStrictUTF8String, getPrimStrictUTF8String,
     putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, throwUnlessRowEnd, rowElem, unpackRowElem, readRowPrim,
-    currentTaggedRow, throwCorruptRow, hexDumpIfCorruptRow, showHeaderIfCorrupRow,
+    currentTaggedRow, throwCorruptRow, hexDumpIfCorruptRow,
     -- * Classes of Primitives
     IsNumericPrimitive(..), IsPrimitive(..),
     putNumericPrimitive,
@@ -680,6 +680,14 @@ data SelectEnv
     }
   deriving (Eq, Ord)
 
+instance Show SelectEnv where
+  show env@(SelectEnv{selectRowHeader=hdr}) = unlines
+    ("  index   offset   length type" : do
+        (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
+          rowHeaderTable hdr
+        [printf "  %5i %8i %8i %s" i off len $ show typ]
+    ) ++ hexDumpTaggedRow env Nothing 
+
 data SelectAnomaly
   = SelectUnmatched
     -- ^ Throwing this exception indicates to simply ignore this row because it does not match.
@@ -716,14 +724,6 @@ instance Show SelectAnomaly where
       show i++", headerSize="++show (rowHeaderLength $ selectRowHeader env)++", offset="++
       show (_maybe_off env elem)++"):\n"++TStrict.unpack msg++"\n"
 
-showHeaderIfCorrupRow :: SelectAnomaly -> String
-showHeaderIfCorrupRow = \ case
-  CorruptRow env _i _elem _msg -> unlines $ "  index   offset   length type" : do
-    (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
-      rowHeaderTable (selectRowHeader env)
-    [printf "  %5i %8i %8i %s" i off len $ show typ]
-  _ -> ""
-
 instance MonadFail Select where
   fail msg = do
     env <- Select ask
@@ -752,11 +752,15 @@ instance Monoid    a => Monoid     (Select a) where
   mempty      = pure mempty
   mappend a b = mappend <$> a <*> b
 
-runRowSelect :: Select a -> TaggedRow -> Either SelectAnomaly a
-runRowSelect (Select f) row =
-  runExcept $ evalStateT (runReaderT f env) (rowHeaderTable header) where
-    (header, _) = rowHeader row
-    env         = SelectEnv{ selectRowHeader = header, selectRow = row }
+-- | Construct a 'SelectEnv' from a 'TaggedRow'. Use the result of this function to evaluate
+-- 'runRowSelect'.
+selectEnv :: TaggedRow -> SelectEnv
+selectEnv row = SelectEnv{ selectRowHeader = header, selectRow = row } where
+  (header, _ ) = rowHeader row
+
+runRowSelect :: Select a -> SelectEnv -> Either SelectAnomaly a
+runRowSelect (Select f) env = runExcept $
+  evalStateT (runReaderT f env) $ rowHeaderTable $ selectRowHeader env
 
 -- | Return a pair, the number of elements selected so far, and the number of elements that this row
 -- contains.
