@@ -292,7 +292,9 @@ test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i
           putStrLn $ "serialized object: " ++ show elems
           print err
           case err of
-            CorruptRow{} -> putStrLn $ hexDumpIfCorruptRow err
+            CorruptRow{} -> do
+              putStrLn $ hexDumpIfCorruptRow err
+              print $ selectRowHeader $ corruptSelectEnv err
             _            -> print env
           fail "'Select' function failed."
         Right deserialized -> unless (elems == deserialized) $ liftIO $ do

@@ -603,6 +603,14 @@ data RowHeader
     }
   deriving (Eq, Ord)
 
+instance Show RowHeader where
+  show hdr = unlines $
+    "'TaggedRow' -> 'RowHeader' contents:" :
+    "  index   offset   length type"       : do
+      (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
+        rowHeaderTable hdr
+      [printf "  %5i %8i %8i %s" i off len $ show typ]
+
 -- | Used for error reporting when a 'RowHeaderElem' could be reported but won't be because the
 -- 'Select' statement cursor went past the last item in the row.
 _maybe_off :: SelectEnv -> Maybe RowHeaderElem -> RowElemOffset
@@ -683,20 +691,15 @@ newtype Select a
 
 data SelectEnv
   = SelectEnv
-    { selectRowHeader :: RowHeader
-    , selectRow       :: TaggedRow
+    { selectRowHeader :: !RowHeader
+    , selectRow       :: !TaggedRow
     }
   deriving (Eq, Ord)
 
 instance Show SelectEnv where
-  show env@(SelectEnv{selectRowHeader=hdr}) = unlines
-    ( "'TaggedRow' -> 'RowHeader' contents:" :
-      "  index   offset   length type"       : do
-        (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
-          rowHeaderTable hdr
-        [printf "  %5i %8i %8i %s" i off len $ show typ]
-     ) ++ "Hex dump of the whole 'TaggedRow', including bytes of the 'RowHeader':\n"
-       ++ hexDumpTaggedRow env Nothing 
+  show env@(SelectEnv{selectRowHeader=hdr}) = show hdr ++
+    "Hex dump of the whole 'TaggedRow', including bytes of the 'RowHeader':\n" ++
+    hexDumpTaggedRow env Nothing 
 
 data SelectAnomaly
   = SelectUnmatched
