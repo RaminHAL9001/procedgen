@@ -115,7 +115,8 @@ putUTFChar (UTFChar char) = do
 getUTFChar :: Get UTFChar
 getUTFChar = do
   let w i = (`shift` i) . fromIntegral :: Word8 -> Int
-  (\ a b c -> UTFChar $ chr $ w 16 a * w 8 b * w 0 c) <$> getWord8 <*> getWord8 <*> getWord8
+  isolate 3 $ (\ a b c -> UTFChar $ chr $ w 16 a * w 8 b * w 0 c) <$>
+    getWord8 <*> getWord8 <*> getWord8
 
 ----------------------------------------------------------------------------------------------------
 
@@ -627,8 +628,8 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
 putRowHeader :: RowHeader -> Put
 putRowHeader h = do
   let (VarWord35 max) = maxBound
-  let len     = rowHeaderLength h
-  let bytelen = sum $ headerItemLength . snd <$> rowHeaderTable h
+  let len             = rowHeaderLength h
+  let bytelen         = sum $ headerItemLength . snd <$> rowHeaderTable h
   if fromIntegral len <= max
    then
     if fromIntegral bytelen <= max
@@ -682,8 +683,7 @@ data SelectAnomaly
   = SelectUnmatched
     -- ^ Throwing this exception indicates to simply ignore this row because it does not match.
   | PrematureEndOfRow
-    { corruptExpectedTag :: Maybe RowTag
-    , corruptRowReason   :: !TStrict.Text
+    { corruptRowReason   :: !TStrict.Text
     } -- ^ This exception is thrown by 'throwUnlessRowEnd', indicates that the 'TaggedRow' should
       -- have contained data that was expected by the 'Select' function which throws this error.
   | CorruptRow
@@ -708,9 +708,7 @@ data SelectAnomaly
 instance Show SelectAnomaly where
   show = \ case
     SelectUnmatched               -> "Row does not match the evaluated 'Select' function."
-    PrematureEndOfRow typ msg     -> "Failed to parse row"++
-      maybe "" ((", expected data of type " ++) . show) typ ++
-      ": "++TStrict.unpack msg
+    PrematureEndOfRow     msg     -> "Failed to parse row: "++TStrict.unpack msg
     UnknownError          msg _   -> "Failed to select elements from row: "++TStrict.unpack msg
     CorruptRow row hdr i elem msg -> "Row appears to be corrupted (index="++
       show i++", headerSize="++show (rowHeaderLength hdr)++", offset="++
@@ -777,12 +775,11 @@ skipToRowElem found = join $ Select $ gets $
     (_, e):elems -> state $ const (e, elems)
 
 -- | Throw an exception unless we have consumed all of the 'RowTagBytes's by this point. If we have
--- consumed every item in this 'TaggedRow', this function does nothing and throws no exception. If
--- you know what 'RowTag' type you expected, pass it as the first 'Prelude.Maybe' parameter.
-throwUnlessRowEnd :: Maybe RowTag -> TStrict.Text -> Select ()
-throwUnlessRowEnd tag msg = Select $ get >>= \ case
+-- consumed every item in this 'TaggedRow', this function does nothing and throws no exception.
+throwUnlessRowEnd :: TStrict.Text -> Select ()
+throwUnlessRowEnd msg = Select $ get >>= \ case
   [] -> pure ()
-  _  -> throwError PrematureEndOfRow{ corruptExpectedTag = tag, corruptRowReason = msg }
+  _  -> throwError PrematureEndOfRow{ corruptRowReason = msg }
 
 -- | Throw a 'CorruptRow' exception with the cursor information and a brief message.
 throwCorruptRow :: TStrict.Text -> Select void
@@ -799,21 +796,23 @@ throwCorruptRow msg = do
 -- | Extract the current 'RowTagBytes' under the cursor, then advance the cursor.
 rowElem :: Select (RowTag, RowTagBytes)
 rowElem = Select get >>= \ case
-  []      -> mzero
+  []       -> mzero
   (_ , RowHeaderElem
        { headerItemType   = idxelem
        , headerItemOffset = off
        , headerItemLength = siz
        }
    ):elems -> do
-      put elems
-      (TaggedRow bytes) <- asks selectRow
-      return
-        ( idxelem
-        , RowTagBytes $ BLazy.fromStrict $
-            BStrict.take (fromIntegral siz) $
-            BStrict.drop (fromIntegral off) bytes
-        )
+    Select (put elems)
+    env <- ask
+    let (TaggedRow bytes) = selectRow env
+    let hdrsiz = rowHeaderByteSize $ selectRowHeader env
+    return
+      ( idxelem
+      , RowTagBytes $ BLazy.fromStrict $
+          BStrict.take (hdrsiz + fromIntegral siz) $
+          BStrict.drop (hdrsiz + fromIntegral off) bytes
+      )
 
 -- | Use a 'Data.Binary.Get.Get' function from the "Data.Binary.Get" module to unpack the current
 -- row element retrieved from 'rowElem'.
@@ -827,20 +826,18 @@ unpackRowElem unpack = do
         " bytes, but decoder can only consume "++show max++
         " bytes at a time"
   if fromIntegral len > max then err else
-    pure (idx, runGet (isolate (fromIntegral len) $ unpack idx) bytes)
-
--- | Obtain a copy of the 'TaggedRow' object currently being inspected by this 'Select' function.
-currentTaggedRow :: Select TaggedRow
-currentTaggedRow = asks selectRow
+    case runGetOrFail (isolate (fromIntegral len) $ unpack idx) bytes of
+      Right (_, _, a) -> return (idx, a)
+      Left{}          -> mzero
 
 -- | Match the value of any type @a@ that instantiates 'IsPrimitive' with the current 'rowElem'
 -- under the cursor.
 readRowPrim :: forall a . IsPrimitive a => Select a
-readRowPrim = do
-  (idx, (RowTagBytes bytes)) <- rowElem
-  case runGetOrFail (getPrimitive idx) bytes of
-    Right (_, _, a) -> return a
-    Left{}          -> mzero
+readRowPrim = snd <$> unpackRowElem getPrimitive
+
+-- | Obtain a copy of the 'TaggedRow' object currently being inspected by this 'Select' function.
+currentTaggedRow :: Select TaggedRow
+currentTaggedRow = asks selectRow
 
 -- | If a 'SelectAnomaly' exception is raised, and if the 'SelectAnomaly' is a 'CorruptRow', this
 -- function will produce a hex-dump of the content of the row, indicating the cursor position at
