@@ -327,8 +327,8 @@ getIndexElem = do
 
 ----------------------------------------------------------------------------------------------------
 
-calcByteSize :: Bin.Binary a => a -> Int
-calcByteSize = fromIntegral . checkedLength . runPut . Bin.put where
+calcByteSize :: (a -> Put) -> a -> Int
+calcByteSize put = fromIntegral . checkedLength . runPut . put where
   checkedLength = BLazy.length >>> \ i -> let max = maxBound :: Int in
     if i <= fromIntegral max then i else error $
       "'calcByteSize': numeric primitive will be serialized to an object of "++show i++
@@ -348,51 +348,51 @@ instance IsNumericPrimitive UTFChar where
 
 instance IsNumericPrimitive Int where
   numericPrimitiveType Proxy = PrimTypeHostInt
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Int)
+  numericPrimitiveSize Proxy = calcByteSize putInthost 0
 
 instance IsNumericPrimitive Int8 where
   numericPrimitiveType Proxy = PrimTypeInt8
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Int8)
+  numericPrimitiveSize Proxy = calcByteSize putInt8 0
 
 instance IsNumericPrimitive Int16 where
   numericPrimitiveType Proxy = PrimTypeInt16
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Int16)
+  numericPrimitiveSize Proxy = calcByteSize putInt16host 0
 
 instance IsNumericPrimitive Int32 where
   numericPrimitiveType Proxy = PrimTypeInt32
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Int32)
+  numericPrimitiveSize Proxy = calcByteSize putInt32host 0
 
 instance IsNumericPrimitive Int64 where
   numericPrimitiveType Proxy = PrimTypeInt64
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Int64)
+  numericPrimitiveSize Proxy = calcByteSize putInt64host 0
 
 instance IsNumericPrimitive Word where
   numericPrimitiveType Proxy = PrimTypeHostWord
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Word)
+  numericPrimitiveSize Proxy = calcByteSize putWordhost 0
 
 instance IsNumericPrimitive Word8 where
   numericPrimitiveType Proxy = PrimTypeWord8
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Word8)
+  numericPrimitiveSize Proxy = calcByteSize putWord8 0
 
 instance IsNumericPrimitive Word16 where
   numericPrimitiveType Proxy = PrimTypeWord16
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Word16)
+  numericPrimitiveSize Proxy = calcByteSize putWord16host 0
 
 instance IsNumericPrimitive Word32 where
   numericPrimitiveType Proxy = PrimTypeWord32
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Word32)
+  numericPrimitiveSize Proxy = calcByteSize putWord32host 0
 
 instance IsNumericPrimitive Word64 where
   numericPrimitiveType Proxy = PrimTypeWord64
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Word64)
+  numericPrimitiveSize Proxy = calcByteSize putWord64host 0
 
 instance IsNumericPrimitive Float where
   numericPrimitiveType Proxy = PrimTypeFloat
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Float)
+  numericPrimitiveSize Proxy = calcByteSize putFloathost 0
 
 instance IsNumericPrimitive Double where
   numericPrimitiveType Proxy = PrimTypeDouble
-  numericPrimitiveSize Proxy = calcByteSize (0 :: Double)
+  numericPrimitiveSize Proxy = calcByteSize putDoublehost 0
 
 ----------------------------------------------------------------------------------------------------
 
@@ -682,11 +682,13 @@ data SelectEnv
 
 instance Show SelectEnv where
   show env@(SelectEnv{selectRowHeader=hdr}) = unlines
-    ("  index   offset   length type" : do
+    ( "'TaggedRow' -> 'RowHeader' contents:" :
+      "  index   offset   length type"       : do
         (i,RowHeaderElem{headerItemType=typ,headerItemOffset=off,headerItemLength=len}) <-
           rowHeaderTable hdr
         [printf "  %5i %8i %8i %s" i off len $ show typ]
-    ) ++ hexDumpTaggedRow env Nothing 
+     ) ++ "Hex dump of the whole 'TaggedRow', including bytes of the 'RowHeader':\n"
+       ++ hexDumpTaggedRow env Nothing 
 
 data SelectAnomaly
   = SelectUnmatched
