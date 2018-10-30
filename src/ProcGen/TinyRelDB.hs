@@ -244,7 +244,12 @@ indexElemTypeSize = \ case
 ----------------------------------------------------------------------------------------------------
 
 data PrimElemType
-  = PrimTypeHostInt
+  = PrimTypeInvalid
+    -- ^ This exists so the derived 'Enum' instance will assign it (the first item in this sum type)
+    -- the value zero, which will be an invalid elem type. I think it is generally a good idea to
+    -- keep as many bytes in the header non-zero as possible, that way if a 'Select' statement is
+    -- accidentally evaluated on null data, it will fail sooner rather than later.
+  | PrimTypeHostInt
   | PrimTypeHostWord
   | PrimTypeUTFChar
   | PrimTypeInt8
@@ -261,6 +266,7 @@ data PrimElemType
 
 instance Show PrimElemType where
   show = \ case
+    PrimTypeInvalid   -> "(error)"
     PrimTypeHostInt   -> "HostInt"
     PrimTypeHostWord  -> "HostWord"
     PrimTypeUTFChar   -> "UTFChar"
@@ -281,6 +287,7 @@ primElemTypeBinSuffix = fromIntegral . fromEnum
 -- | The serialized size (in bytes) of a value represented by the 'PrimElemType'.
 primElemTypeSize :: PrimElemType -> Int
 primElemTypeSize = \ case
+  PrimTypeInvalid  -> error "primElemTypeSize called with 'PrimTypeInvalid'"
   PrimTypeUTFChar  -> primTypeUTFCharSize
   PrimTypeHostInt  -> numericPrimitiveSize (Proxy :: Proxy Int)
   PrimTypeInt8     -> numericPrimitiveSize (Proxy :: Proxy Int8)
@@ -297,6 +304,7 @@ primElemTypeSize = \ case
 
 putIndexElem :: RowTag -> Put
 putIndexElem e = case e of
+  NumericPrimitive PrimTypeInvalid -> error "'putIndexElem' evaluated on 'PrimTypeInvalid'"
   NumericPrimitive p     -> putWord8 $ pfx .|. primElemTypeBinSuffix p
   HomoArray        p w35 -> putWord8 (pfx .|. primElemTypeBinSuffix p) >> Bin.put w35
   UTF8String         w40 -> putWord40 w40
