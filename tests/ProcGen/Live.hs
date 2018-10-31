@@ -1,6 +1,6 @@
 -- | This is essentially a test suite which I used to build stand-alone programs when the GHCI
 -- version of the program doesn't seem to be working correctly.
-module ProcGen.Live where
+module Main where
 
 import           ProcGen
 import           ProcGen.Plot.Examples

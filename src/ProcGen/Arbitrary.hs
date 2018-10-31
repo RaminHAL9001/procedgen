@@ -7,11 +7,11 @@
 module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
-    shuffleTake,
+    shuffleTake, randSelect,
     Word256, TFRandSeed, tfGen,
     TFRandT(..), TFRand, arbTFRand, seedIOArbTFRand,
     seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
-     seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT, runTFRand,  runTFRandT,
+     seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT,  runTFRand,  runTFRandT,
     testDistributionFunction,
     System.Random.TF.Init.initTFGen,
     System.Random.TF.TFGen,
@@ -34,6 +34,7 @@ import           Data.Semigroup
 import           Data.Functor.Identity
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
+import qualified Data.Vector.Generic              as GVec
 import           Data.Word
 
 import           System.Random.TF
@@ -111,6 +112,9 @@ shuffleTake elems n p = if n < p then return elems else do
           (keep, e:elems) -> (e:stack, keep ++ elems)
         loop p n stack elems
   loop p n [] $ take n elems
+
+randSelect :: (MonadRandom m, GVec.Vector v a) => v a -> m a
+randSelect vec = (vec GVec.!) <$> getRandomR (0, GVec.length vec - 1)
 
 ----------------------------------------------------------------------------------------------------
 
