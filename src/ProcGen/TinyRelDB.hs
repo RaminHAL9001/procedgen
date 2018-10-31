@@ -12,7 +12,6 @@ module ProcGen.TinyRelDB
     writtenElemCount,
     putPrimLazyUTF8String, getPrimLazyUTF8String,
     putPrimStrictUTF8String, getPrimStrictUTF8String,
-    putPrimUnboxedVector, getPrimUnboxedVector,
     writeRowPrim, tableFoldDown, tableFoldUp,
     nextRowTag, skipToRowElem, throwUnlessRowEnd, rowElem, unpackRowElem, readRowPrim,
     currentTaggedRow, throwCorruptRow, hexDumpIfCorruptRow,
@@ -593,6 +592,11 @@ instance IsPrimitive BStrict.ByteString where
   putPrimitive = putPrimitive . BLazy.fromStrict
   getPrimitive = fmap BLazy.toStrict . getPrimitive
 
+instance (Unbox elem, IsPrimitive elem, IsNumericPrimitive elem)
+      => IsPrimitive (Unboxed.Vector elem) where
+  putPrimitive = putPrimUnboxedVector
+  getPrimitive = getPrimUnboxedVector
+
 varWord40Length :: String -> Int64 -> VarWord40
 varWord40Length typmsg len =
   let (VarWord40 max) = maxBound
@@ -982,6 +986,11 @@ instance TaggedRowMapped TaggedRow where
   writeRow (TaggedRow bytes) = writeRowPrim bytes
   readRow = TaggedRow <$> readRowPrim
 
+instance (Unbox elem, IsNumericPrimitive elem, IsPrimitive elem)
+      => TaggedRowMapped (Unboxed.Vector elem) where
+  writeRow = writeRowPrim
+  readRow  = readRowPrim
+
 -- | A UTF8-encoded 'UTF8Lazy.ByteString' is just a plain lazy 'BLazy.ByteString', but it can be
 -- encoded with a different 'RowTag' type tag so that any string will match it when using a 'Select'
 -- statement. Use this function to encode a lazy 'BLazy.ByteString' with a string tag in the
@@ -1020,12 +1029,10 @@ getPrimStrictUTF8String = fmap snd $ unpackRowElem $ \ case
     report len max = "'getPrimStrictUTF8String': stored string has a length of "++len++
       " bytes, maximum constructable string size is "++max
 
--- | Copy an unboxed 'Unboxed.Vector' of primitive @elem@ents into a 'TaggedRow' using a
--- 'RowBuilder'.
 putPrimUnboxedVector
   :: forall elem . (IsNumericPrimitive elem, IsPrimitive elem, Unbox elem)
-  => Unboxed.Vector elem -> RowBuilder
-putPrimUnboxedVector = writeRowPrimWith $ \ vec -> do
+  => Unboxed.Vector elem -> PutM RowTag
+putPrimUnboxedVector vec = do
   let report len max = "'putPrimUnboxedVector': given a vector containing "++len++
         " elements, but a vector stored in a 'TaggedRow' can contain no more than "++max++
         " elements."
@@ -1035,12 +1042,10 @@ putPrimUnboxedVector = writeRowPrimWith $ \ vec -> do
     mapM_ putPrimitive $ Unboxed.toList vec
     return tag
 
--- | Copy an unboxed 'Unboxed.Vector' of primitive @elem@ents that was serialized using
--- 'putPrimUnboxedVector' from a 'TaggedRow' into an actual 'Unboxed.Vector'.
 getPrimUnboxedVector
   :: (IsNumericPrimitive elem, IsPrimitive elem, Unbox elem)
-  => Select (Unboxed.Vector elem)
-getPrimUnboxedVector = fmap snd $ unpackRowElem $ \ case
+  => RowTag -> Get (Unboxed.Vector elem)
+getPrimUnboxedVector = \ case
   HomoArray typ (VarWord35 len') -> do
     let report len max = "'getPrimUnboxedVector': parsing vector of type "++show typ++
           " with "++len++" elements, but a native vector may only contain "++max++" elements."
