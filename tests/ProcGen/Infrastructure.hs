@@ -167,38 +167,44 @@ test_VarWord35_protocol = do
 ----------------------------------------------------------------------------------------------------
 
 data AnyPrim
-  = Prim_UTFChar UTFChar
-  | Prim_Int     Int
-  | Prim_Int8    Int8
-  | Prim_Int16   Int16
-  | Prim_Int32   Int32
-  | Prim_Int64   Int64
-  | Prim_Word    Word
-  | Prim_Word8   Word8
-  | Prim_Word16  Word16
-  | Prim_Word32  Word32
-  | Prim_Word64  Word64
-  | Prim_Float   Float
-  | Prim_Double  Double
-  | Prim_String  BStrict.ByteString
+  = Prim_UTFChar  UTFChar
+  | Prim_Int      Int
+  | Prim_Int8     Int8
+  | Prim_Int16    Int16
+  | Prim_Int32    Int32
+  | Prim_Int64    Int64
+  | Prim_Word     Word
+  | Prim_Word8    Word8
+  | Prim_Word16   Word16
+  | Prim_Word32   Word32
+  | Prim_Word64   Word64
+  | Prim_Float    Float
+  | Prim_Double   Double
+  | Prim_String   BStrict.ByteString
+  | Prim_VecInt8  (Unboxed.Vector Int8)
+  | Prim_VecInt16 (Unboxed.Vector Int16)
+  | Prim_VecInt32 (Unboxed.Vector Int32)
   deriving (Eq, Ord)
 
 instance Show AnyPrim where
   showsPrec p = showParen (p > 10) . \ case
-    Prim_UTFChar a -> ("UTFChar " ++) . showsPrec p a
-    Prim_Int     a -> ("Int "     ++) . showsPrec p a
-    Prim_Int8    a -> ("Int8 "    ++) . showsPrec p a
-    Prim_Int16   a -> ("Int16 "   ++) . showsPrec p a
-    Prim_Int32   a -> ("Int32 "   ++) . showsPrec p a
-    Prim_Int64   a -> ("Int64 "   ++) . showsPrec p a
-    Prim_Word    a -> ("Word "    ++) . showsPrec p a
-    Prim_Word8   a -> ("Word8 "   ++) . showsPrec p a
-    Prim_Word16  a -> ("Word16 "  ++) . showsPrec p a
-    Prim_Word32  a -> ("Word32 "  ++) . showsPrec p a
-    Prim_Word64  a -> ("Word64 "  ++) . showsPrec p a
-    Prim_Float   a -> ("Float "   ++) . showsPrec p a
-    Prim_Double  a -> ("Double "  ++) . showsPrec p a
-    Prim_String  a -> ("Str0 "    ++) . showsPrec p a
+    Prim_UTFChar  a -> ("UTFChar "  ++) . showsPrec p a
+    Prim_Int      a -> ("Int "      ++) . showsPrec p a
+    Prim_Int8     a -> ("Int8 "     ++) . showsPrec p a
+    Prim_Int16    a -> ("Int16 "    ++) . showsPrec p a
+    Prim_Int32    a -> ("Int32 "    ++) . showsPrec p a
+    Prim_Int64    a -> ("Int64 "    ++) . showsPrec p a
+    Prim_Word     a -> ("Word "     ++) . showsPrec p a
+    Prim_Word8    a -> ("Word8 "    ++) . showsPrec p a
+    Prim_Word16   a -> ("Word16 "   ++) . showsPrec p a
+    Prim_Word32   a -> ("Word32 "   ++) . showsPrec p a
+    Prim_Word64   a -> ("Word64 "   ++) . showsPrec p a
+    Prim_Float    a -> ("Float "    ++) . showsPrec p a
+    Prim_Double   a -> ("Double "   ++) . showsPrec p a
+    Prim_String   a -> ("Str0 "     ++) . showsPrec p a
+    Prim_VecInt8  a -> ("Vec Int8 " ++) . showsPrec p a
+    Prim_VecInt16 a -> ("Vec Int16 "++) . showsPrec p a
+    Prim_VecInt32 a -> ("Vec Int32 "++) . showsPrec p a
 
 primUTFChar :: Char -> AnyPrim
 primUTFChar = Prim_UTFChar . UTFChar
@@ -223,8 +229,9 @@ primValues = Boxed.fromList $ Boxed.fromList <$>
   , [Prim_Float  0.0, Prim_Float  1.0e999, Prim_Float  1.0e-999]
   , [Prim_Double 0.0, Prim_Double 1.0e999, Prim_Double 1.0e-999]
   , Prim_String . UTF8Strict.fromString <$> ["", s2, s7_1, s7, s14_1, s14]
+  , Prim_VecInt8 . Unboxed.fromList <$> [[], v2, v7_1, v7, v14_1, v14]
   ] where
-    pow :: String -> Int -> String
+    pow :: [n] -> Int -> [n]
     pow s i = mconcat $ replicate (2 ^ i) s
     s2 :: String
     s2    = "ABC "
@@ -232,40 +239,52 @@ primValues = Boxed.fromList $ Boxed.fromList <$>
     s7_1  = take (2^(7::Int) - 1 :: Int) s7
     s14   = pow s7 7
     s14_1 = take (2^(14::Int) - 1 :: Int) s14
+    v2 :: (Unboxed.Unbox n, Num n) => [n]
+    v2    = [37, 74, 111, 148]
+    v7    = pow v2 5
+    v7_1  = take (2^(7::Int) - 1 :: Int) v7
+    v14   = pow v7 7
+    v14_1 = take (2^(14::Int) - 1 :: Int) v14
 
 writeAnyPrimToRow :: AnyPrim -> RowBuilder
 writeAnyPrimToRow = \ case
-  Prim_UTFChar a -> writeRowPrim a
-  Prim_Int     a -> writeRowPrim a
-  Prim_Int8    a -> writeRowPrim a
-  Prim_Int16   a -> writeRowPrim a
-  Prim_Int32   a -> writeRowPrim a
-  Prim_Int64   a -> writeRowPrim a
-  Prim_Word    a -> writeRowPrim a
-  Prim_Word8   a -> writeRowPrim a
-  Prim_Word16  a -> writeRowPrim a
-  Prim_Word32  a -> writeRowPrim a
-  Prim_Word64  a -> writeRowPrim a
-  Prim_Float   a -> writeRowPrim a
-  Prim_Double  a -> writeRowPrim a
-  Prim_String  a -> writeRowPrim a
+  Prim_UTFChar  a -> writeRowPrim a
+  Prim_Int      a -> writeRowPrim a
+  Prim_Int8     a -> writeRowPrim a
+  Prim_Int16    a -> writeRowPrim a
+  Prim_Int32    a -> writeRowPrim a
+  Prim_Int64    a -> writeRowPrim a
+  Prim_Word     a -> writeRowPrim a
+  Prim_Word8    a -> writeRowPrim a
+  Prim_Word16   a -> writeRowPrim a
+  Prim_Word32   a -> writeRowPrim a
+  Prim_Word64   a -> writeRowPrim a
+  Prim_Float    a -> writeRowPrim a
+  Prim_Double   a -> writeRowPrim a
+  Prim_String   a -> writeRowPrim a
+  Prim_VecInt8  a -> writeRowPrim a
+  Prim_VecInt16 a -> writeRowPrim a
+  Prim_VecInt32 a -> writeRowPrim a
 
 readAnyPrimMatching :: AnyPrim -> Select AnyPrim
 readAnyPrimMatching prim = case prim of
-  Prim_UTFChar a -> read Prim_UTFChar a
-  Prim_Int     a -> read Prim_Int     a
-  Prim_Int8    a -> read Prim_Int8    a
-  Prim_Int16   a -> read Prim_Int16   a
-  Prim_Int32   a -> read Prim_Int32   a
-  Prim_Int64   a -> read Prim_Int64   a
-  Prim_Word    a -> read Prim_Word    a
-  Prim_Word8   a -> read Prim_Word8   a
-  Prim_Word16  a -> read Prim_Word16  a
-  Prim_Word32  a -> read Prim_Word32  a
-  Prim_Word64  a -> read Prim_Word64  a
-  Prim_Float   a -> read Prim_Float   a
-  Prim_Double  a -> read Prim_Double  a
-  Prim_String  a -> read Prim_String  a
+  Prim_UTFChar  a -> read Prim_UTFChar  a
+  Prim_Int      a -> read Prim_Int      a
+  Prim_Int8     a -> read Prim_Int8     a
+  Prim_Int16    a -> read Prim_Int16    a
+  Prim_Int32    a -> read Prim_Int32    a
+  Prim_Int64    a -> read Prim_Int64    a
+  Prim_Word     a -> read Prim_Word     a
+  Prim_Word8    a -> read Prim_Word8    a
+  Prim_Word16   a -> read Prim_Word16   a
+  Prim_Word32   a -> read Prim_Word32   a
+  Prim_Word64   a -> read Prim_Word64   a
+  Prim_Float    a -> read Prim_Float    a
+  Prim_Double   a -> read Prim_Double   a
+  Prim_String   a -> read Prim_String   a
+  Prim_VecInt8  a -> read Prim_VecInt8  a
+  Prim_VecInt16 a -> read Prim_VecInt16 a
+  Prim_VecInt32 a -> read Prim_VecInt32 a
   where
     read :: (IsPrimitive a, Eq a) => (a -> AnyPrim) -> a -> Select AnyPrim
     read constr a = readRowPrim >>= \ b -> if a == b then return $ constr b else 
@@ -275,7 +294,7 @@ readAnyPrimMatching prim = case prim of
 
 test_primitive_protocol :: IO ()
 test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i -> do
-  when (mod i 100 == 99) $ liftIO $ putStrLn $ "Completed "++show (i+1)++" tests..."
+  when (mod i 50 == 49) $ liftIO $ putStrLn $ "Completed "++show (i+1)++" tests..."
   let elem  = randSelect primValues -- each 'elem' is a set of values
   let unbox = Boxed.toList
   (a, b, c, d) <- (,,,) <$> elem <*> elem <*> elem <*> elem
