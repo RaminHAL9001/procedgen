@@ -90,6 +90,33 @@ aggreg def add ax bx = runIdentity $ aggregA def (\ a -> pure . add a) ax bx
 
 ----------------------------------------------------------------------------------------------------
 
+-- The length of a lazy ByteString is an Int64, the length of a strict ByteString is Int. On 64-bit
+-- systems this is no problem, but on 32-bit systems, performing arithmetic on ByteString lengths
+-- results in type mismatching that prevent overflows. But arithmetic is still necessary for
+-- bit-level protocols. So the following are tools for converting between Int and Int64 in a way
+-- that can be optimized away on 64-bit systems, but can result in failures with helpful error
+-- messages on 32-bit systems.
+
+hostIntSize :: Int
+hostIntSize = finiteBitSize (0 :: Int)
+
+int64Size :: Int
+int64Size = finiteBitSize (0 :: Int64)
+
+toHostInt :: (String -> String -> String) -> Int64 -> Int
+toHostInt parameters i64 = if not ok then error report else fromIntegral i64 where
+  ok = hostIntSize >= int64Size
+    || (fromIntegral (maxBound :: Int) :: Int64) >= i64
+  report = parameters (show i64) (show (maxBound :: Int))
+
+toInt64 :: (String -> String -> String) -> Int -> Int64
+toInt64 parameters ihost = if not ok then error report else fromIntegral ihost where
+  ok = int64Size >= hostIntSize
+    || (fromIntegral (maxBound :: Int64) :: Int) >= ihost
+  report = parameters (show ihost) (show (maxBound :: Int))
+
+----------------------------------------------------------------------------------------------------
+
 -- | A wrapper around an ordinary 'Prelude.Char' type that instantiates 'Bin.Binary' such that when
 -- it is serialized, it always consumes exactly 3-bytes. 'UTF8Char' also instantiates 'IsPrimitive'
 -- and 'PackedVectorElem'.
@@ -142,9 +169,21 @@ instance Bin.Binary VarWord35 where
   put = binPutVarWord35
   get = binGetVarWord35
 
--- | Construct a 'VarWord35'. Takes any 'Prelude.Integral' data type modulo the 'varWord35Mask'.
+-- | Construct a 'VarWord35'. Takes any 'Prelude.Integral' data type modulo the
+-- 'varWord35Mask'. Integer overflows are never checked so this function never fails.
 varWord35 :: Integral i => i -> VarWord35
 varWord35 = VarWord35 . (.&. varWord35Mask) . fromIntegral
+
+-- | This function is similar to 'varWord35', except that it constructs a 'VarWord35' from an
+-- 'Data.Int.Int64', and also that this function reports an error if an integer overflow is
+-- detected. This function also allows you to formulate an error message for the context in which
+-- the error is raised.
+int64ToVarWord35 :: (String -> String -> String) -> Int64 -> VarWord35
+int64ToVarWord35 report i64 = let (VarWord35 max) = maxBound in
+  if i64 > max then error $ report (show i64) (show max) else VarWord35 i64
+
+hostIntToVarWord35 :: (String -> String -> String) -> Int -> VarWord35
+hostIntToVarWord35 report = int64ToVarWord35 report . toInt64 report
 
 -- | This bit mask (expressed as a 64-bit integer) is bitwise-ANDed with an arbitrary
 -- 'Data.Int.Int64' value to construct a 'VarWord35'.
@@ -233,11 +272,10 @@ indexElemTypeSize = \ case
   UTF8String  (VarWord40 w) -> checkSize w
   BinaryBlob  (VarWord40 w) -> checkSize w
   where
-    max = maxBound :: Int
     checkSize :: Int64 -> Int
-    checkSize siz =  if siz < fromIntegral max then fromIntegral siz else error $
-      "'TaggedRow' header contains 'RowTag' which points to an object of size "++show siz++
-      " bytes, but the maximum size of a 'TaggedRow' is "++show max++" bytes"
+    checkSize = toHostInt $ \ siz max -> 
+      "'TaggedRow' header contains 'RowTag' which points to an object of size "++siz++
+      " bytes, but the maximum size of a 'TaggedRow' is "++max++" bytes"
 
 ----------------------------------------------------------------------------------------------------
 
@@ -334,11 +372,10 @@ getIndexElem = do
 ----------------------------------------------------------------------------------------------------
 
 calcByteSize :: (a -> Put) -> a -> Int
-calcByteSize put = fromIntegral . checkedLength . runPut . put where
-  checkedLength = BLazy.length >>> \ i -> let max = maxBound :: Int in
-    if i <= fromIntegral max then i else error $
-      "'calcByteSize': numeric primitive will be serialized to an object of "++show i++
-      " bytes of binary data, a row can only contain "++show max++" bytes"
+calcByteSize put = toHostInt report . BLazy.length . runPut . put where
+  report siz max = 
+    "'calcByteSize': numeric primitive will be serialized to an object of "++siz++
+    " bytes of binary data, a row can only contain "++max++" bytes"
 
 primTypeUTFCharSize :: Int
 primTypeUTFCharSize = 3
@@ -420,25 +457,24 @@ instance Monoid (PackedVector elem) where
   Done _ _ a -> Just a
   _          -> Nothing
   where
-    u = fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem)
-    decoder = pushChunk (runGetIncremental $ isolate u Bin.get) $
-      BStrict.take u $ BStrict.drop (i * u) bytes
+    unitSize = numericPrimitiveSize (Proxy :: Proxy elem)
+    decoder = pushChunk (runGetIncremental $ isolate unitSize Bin.get) $
+      BStrict.take unitSize $ BStrict.drop (i * unitSize) bytes
 
 (!) :: (IsNumericPrimitive elem, Bin.Binary elem) => PackedVector elem -> Int -> elem
 (!) vec i = maybe (error msg) id $ vec !? i where
   msg = "PackedVector of length "++show (ProcGen.TinyRelDB.length vec)++" indexed with "++show i
 
 length :: forall elem . IsNumericPrimitive elem => PackedVector elem -> Int
-length (PackedVector bytes) = BStrict.length bytes `div`
-  (fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem))
+length (PackedVector bytes) = BStrict.length bytes `div` numericPrimitiveSize (Proxy :: Proxy elem)
 
 fromList :: forall elem . (IsNumericPrimitive elem, Bin.Binary elem) => [elem] -> PackedVector elem
 fromList elems = PackedVector $ BLazy.toStrict $ runPut (mapM_ Bin.put elems)
 
 toList :: forall elem . (IsNumericPrimitive elem, Bin.Binary elem) => PackedVector elem -> [elem]
 toList (PackedVector bytes) = loop  bytes where
-  u = fromIntegral $ numericPrimitiveSize (Proxy :: Proxy elem)
-  loop bytes = case runGetIncremental (isolate u Bin.get) `pushChunk` bytes of
+  unitSize = numericPrimitiveSize (Proxy :: Proxy elem)
+  loop bytes = case runGetIncremental (isolate unitSize Bin.get) `pushChunk` bytes of
     Done bytes _ a -> a : loop bytes
     _              -> []
 
@@ -525,14 +561,13 @@ instance IsPrimitive TStrict.Text where
 instance IsNumericPrimitive elem => IsPrimitive (PackedVector elem) where
   putPrimitive (PackedVector bytes) = do
     putByteString bytes
-    let (VarWord35 max) = maxBound
-        len = fromIntegral (BStrict.length bytes) `div`
-          (numericPrimitiveSize (Proxy :: Proxy elem))
-    if fromIntegral len <= max
-     then return $ HomoArray (numericPrimitiveType (Proxy :: Proxy elem)) $
-                      VarWord35 (fromIntegral len)
-     else error $ "'ProcGen.TinyRelDB.putPrimitive' cannot put array with "++show len++
-                  " elements, maximum number of elements is "++show max
+    let len = BStrict.length bytes `div` numericPrimitiveSize (Proxy :: Proxy elem)
+    let report len max =
+          "'ProcGen.TinyRelDB.putPrimitive' cannot put array with "++len++
+          " elements, maximum number of elements is "++max
+    return $! HomoArray
+      (numericPrimitiveType (Proxy :: Proxy elem))
+      (hostIntToVarWord35 report len)
   getPrimitive = \ case
     HomoArray typ (VarWord35 len) | typ == numericPrimitiveType (Proxy :: Proxy elem) ->
       PackedVector . BLazy.toStrict <$>
@@ -627,10 +662,12 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
     then do
       hdrsiz <- bytesRead
       bytes  <- getRemainingLazyByteString
+      let report siz max = "'getRowHeader': Parsed 'RowHeader' object of size "++siz++
+            " bytes, exceeds maximum size of "++max++" bytes."
       return
         ( RowHeader
           { rowHeaderLength   = fromIntegral w
-          , rowHeaderByteSize = fromIntegral hdrsiz -- TODO: add a (Int64 -> Int) check here?
+          , rowHeaderByteSize = toHostInt report hdrsiz
           , rowHeaderTable    = zip [0 ..] $ elems []
           }
         , bytes
@@ -640,20 +677,11 @@ getRowHeader = Bin.get >>= \ (VarWord35 w) -> loop w w 0 id where
      loop w (nelems - 1) (off + headerItemLength elem) $ elems . ((elem{headerItemOffset = off}) :)
 
 putRowHeader :: RowHeader -> Put
-putRowHeader h = do
-  let (VarWord35 max) = maxBound
-  let len             = rowHeaderLength h
-  let bytelen         = sum $ headerItemLength . snd <$> rowHeaderTable h
-  if fromIntegral len <= max
-   then
-    if fromIntegral bytelen <= max
-     then do
-        binPutVarWord35 $ VarWord35 $ fromIntegral len
-        mapM_ (Bin.put . headerItemType . snd) $ rowHeaderTable h
-     else error $ "'ProcGen.TinyRelDB.RowHeader' content would require "++show bytelen++
-                  "bytes, maximum allowable content size is "++show max++" bytes"
-   else error $ "'ProcGen.TinyRelDB.RowHeader' contains "++show len++" elements, "++
-                "the maximum allowable number of elements is "++show max
+putRowHeader hdr = do
+  let report len max = "'putRowHeader': Attempted to encode a 'RowHeader' with "++len++
+        " elements, but the maximum number of elements allowable is "++max
+  binPutVarWord35 $ hostIntToVarWord35 report $ rowHeaderLength hdr
+  mapM_ (Bin.put . headerItemType . snd) $ rowHeaderTable hdr
 
 -- | Split the 'RowHeader' from a 'TaggedRow' and return the header along with the content without
 -- inspecting the content or performing any deserialization. Use this if you want just the header
@@ -830,8 +858,8 @@ rowElem = Select get >>= \ case
     return
       ( idxelem
       , RowTagBytes $ BLazy.fromStrict $
-          BStrict.take (hdrsiz + fromIntegral siz) $
-          BStrict.drop (hdrsiz + fromIntegral off) bytes
+          BStrict.take (hdrsiz + siz) $
+          BStrict.drop (hdrsiz + off) bytes
       )
 
 -- | Use a 'Data.Binary.Get.Get' function from the "Data.Binary.Get" module to unpack the current
@@ -839,16 +867,9 @@ rowElem = Select get >>= \ case
 unpackRowElem :: (RowTag -> Get a) -> Select (RowTag, a)
 unpackRowElem unpack = do
   (idx, RowTagBytes bytes) <- rowElem
-  let max = fromIntegral (maxBound :: Int) :: Int64
-      len = indexElemTypeSize idx
-      err = error $
-        "Serialized object of type "++show idx++" has binary size of "++show len++
-        " bytes, but decoder can only consume "++show max++
-        " bytes at a time"
-  if fromIntegral len > max then err else
-    case runGetOrFail (isolate (fromIntegral len) $ unpack idx) bytes of
-      Right (_, _, a) -> return (idx, a)
-      Left{}          -> mzero
+  case runGetOrFail (isolate (indexElemTypeSize idx) $ unpack idx) bytes of
+    Right (_, _, a) -> return (idx, a)
+    Left{}          -> mzero
 
 -- | Match the value of any type @a@ that instantiates 'IsPrimitive' with the current 'rowElem'
 -- under the cursor.
@@ -910,17 +931,13 @@ runRowBuilder (RowBuilderM f) = (a, newRow) where
     , buildRowHeader = mempty
     }
   newRow = TaggedRow $ BLazy.toStrict $ runPut $ do
-    let len = fromIntegral $ buildElemCount st
-    let (VarWord35 max) = maxBound
-    if len > max
-     then error $
-      "'RowBuilder' constructed row with "++show len++
-      " elements, but a maximum of "++show max++
-      " elements is the limit."
-     else do
-      binPutVarWord35 $ VarWord35 len
-      putBuilder $ buildRowHeader st
-      putLazyByteString content
+    let report len max = 
+          "'RowBuilder' constructed row with "++show len++
+          " elements, but a maximum of "++show max++
+          " elements is the limit."
+    binPutVarWord35 $ hostIntToVarWord35 report $ buildElemCount st
+    putBuilder $ buildRowHeader st
+    putLazyByteString content
 
 -- | Use the 'IsPrimitive' instance for data of type @a@ to store the information in @a@ into a
 -- 'RowBuilder'.
@@ -986,14 +1003,20 @@ getPrimLazyUTF8String = fmap snd $ unpackRowElem $ \ case
 putPrimStrictUTF8String :: UTF8Strict.ByteString -> RowBuilder
 putPrimStrictUTF8String = writeRowPrimWith $ \ str -> do
   putByteString str
-  return $ UTF8String $ varWord40Length "Strict UTF8 ByteString" $ fromIntegral $
+  return $ UTF8String $ varWord40Length "Strict UTF8 ByteString" $ toInt64 report $
     BStrict.length str -- NOTE: this must be 'BStrict.length', and NOT 'UTF8Strict.length'
+  where
+    report len max = "'putPrimStrictUTF8String': string to be stored has a length of "++len++
+      " bytes, maximum string size storable into a 'TaggedRow' is "++max
 
 -- | Retrieve a string object from a 'TaggedRow' as a strict 'BStrict.ByteString'.
 getPrimStrictUTF8String :: Select UTF8Strict.ByteString
 getPrimStrictUTF8String = fmap snd $ unpackRowElem $ \ case
-  UTF8String (VarWord40 siz) -> getByteString $ fromIntegral siz
+  UTF8String (VarWord40 siz) -> getByteString $ toHostInt report siz
   _                          -> mzero
+  where
+    report len max = "'getPrimStrictUTF8String': stored string has a length of "++len++
+      " bytes, maximum constructable string size is "++max
 
 putPrimUnboxedVector :: (IsNumericPrimitive elem, Unbox elem) => Unboxed.Vector elem -> RowBuilder
 putPrimUnboxedVector = error "TODO"
@@ -1041,7 +1064,7 @@ instance Bin.Binary TaggedRow where
 
 hexDumpTaggedRow :: SelectEnv -> Maybe RowHeaderElem -> String
 hexDumpTaggedRow env@(SelectEnv{selectRow=(TaggedRow bytes)}) elem = unlines $
-  loop (0 :: Int64) (_maybe_off env elem) (BStrict.unpack bytes) where
+  loop (0 :: Int) (_maybe_off env elem) (BStrict.unpack bytes) where
     bytesPerRow = 16
     alignNumR i = (++ (show i)) $ case i of
       i | i < 10 -> "       "
@@ -1059,7 +1082,7 @@ hexDumpTaggedRow env@(SelectEnv{selectRow=(TaggedRow bytes)}) elem = unlines $
           (group >>= \ c -> ' ' : (if c < 0x10 then ('0' :) else id) (showHex c ""))
          ) :
         (if i >= bytesPerRow then id else
-            (("        : " ++ replicate (fromIntegral i * 3) ' ' ++ "^\\cursor") :)
+            (("        : " ++ replicate (i * 3) ' ' ++ "^\\cursor") :)
          ) (((loop $! grpnum + bytesPerRow) $! i - bytesPerRow) remainder)
 
 -- | Fold from the top of the table to the bottom. This function is defined in terms of
