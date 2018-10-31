@@ -7,7 +7,7 @@ module ProcGen.TinyRelDB
   ( -- * Database Data Types
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence, hexDumpTaggedRow,
     -- * Mapping Haskell Data Types
-    DBMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
+    TaggedRowMapped(..), Select, SelectAnomaly(..), SelectEnv(..), RowBuilder, RowBuilderM,
     selectEnv, runRowSelect, selectedElemCount, execRowBuilder, runRowBuilder,
     writtenElemCount,
     putPrimLazyUTF8String, getPrimLazyUTF8String,
@@ -958,27 +958,27 @@ writeRowPrimWith putPrim a = RowBuilderM $ do
 
 -- | The class of things that map to and from 'TaggedRow's in the Tiny Relation Database. This class
 -- combines both query and update functions together. When performing queries and updates on a
--- 'Table' of 'TaggedRow's, store values of types in the class 'DBMapped' into the rows. If you
+-- 'Table' of 'TaggedRow's, store values of types in the class 'TaggedRowMapped' into the rows. If you
 -- don't want 'TaggedRow's, if you instead want 'PlainRow's, store values of types in the class
 -- 'Bin.Binary'.
-class DBMapped a where
+class TaggedRowMapped a where
   writeRow :: a -> RowBuilder
   readRow  :: Select a
 
-instance DBMapped UTFChar  where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int      where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int8     where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int16    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int32    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Int64    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word     where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word8    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word16   where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Word32   where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Float    where { writeRow = writeRowPrim; readRow = readRowPrim; }
-instance DBMapped Double   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped UTFChar  where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Int      where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Int8     where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Int16    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Int32    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Int64    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Word     where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Word8    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Word16   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Word32   where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Float    where { writeRow = writeRowPrim; readRow = readRowPrim; }
+instance TaggedRowMapped Double   where { writeRow = writeRowPrim; readRow = readRowPrim; }
 
-instance DBMapped TaggedRow where
+instance TaggedRowMapped TaggedRow where
   writeRow (TaggedRow bytes) = writeRowPrim bytes
   readRow = TaggedRow <$> readRowPrim
 
