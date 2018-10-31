@@ -276,10 +276,12 @@ readAnyPrimMatching prim = case prim of
 test_primitive_protocol :: IO ()
 test_primitive_protocol = seedEvalTFRandT 0 $ forM_ [(0::Int) .. numTests] $ \ i -> do
   when (mod i 100 == 99) $ liftIO $ putStrLn $ "Completed "++show (i+1)++" tests..."
-  let elem  = randSelect primValues
+  let elem  = randSelect primValues -- each 'elem' is a set of values
   let unbox = Boxed.toList
   (a, b, c, d) <- (,,,) <$> elem <*> elem <*> elem <*> elem
-  runTest (unbox a)
+  -- First run just tests of a single test set 'a'
+  runTest $ unbox a
+  -- Then run the cartesian product of four test sets
   mapM_ runTest $ (\ a b c d -> [a,b,c,d]) <$> unbox a <*> unbox b <*> unbox c <*> unbox d
   where
     numTests = 10000

@@ -105,17 +105,15 @@ instance Bin.Binary UTFChar where
   get = getUTFChar
 
 putUTFChar :: UTFChar -> Put
-putUTFChar (UTFChar char) = do
-  let c = ord char
-  let w = fromIntegral . (.&. 0xFF) :: Int -> Word8
-  b <- pure $ shift c 8
-  a <- pure $ shift b 8
-  putWord8 (w a) >> putWord8 (w b) >> putWord8 (w c)
+putUTFChar (UTFChar inChar) = do
+  let c = ord inChar
+  let w i = fromIntegral . (.&. 0xFF) . flip shift (negate i) :: Int -> Word8
+  putWord8 (w 16 c) >> putWord8 (w 8 c) >> putWord8 (w 0 c)
 
 getUTFChar :: Get UTFChar
 getUTFChar = do
   let w i = (`shift` i) . fromIntegral :: Word8 -> Int
-  isolate 3 $ (\ a b c -> UTFChar $ chr $ w 16 a * w 8 b * w 0 c) <$>
+  isolate 3 $ (\ a b c -> UTFChar $ chr $ w 16 a .|. w 8 b .|. w 0 c) <$>
     getWord8 <*> getWord8 <*> getWord8
 
 ----------------------------------------------------------------------------------------------------
