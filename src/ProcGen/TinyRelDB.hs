@@ -42,6 +42,7 @@ import           Control.Monad.Except        hiding (fail)
 import           Control.Monad.Fail
 import           Control.Monad.Reader        hiding (fail)
 import           Control.Monad.State         hiding (fail)
+import           Control.Monad.ST
 
 import qualified Data.Binary                 as Bin
 import           Data.Binary.Builder            (Builder)
@@ -61,6 +62,7 @@ import qualified Data.Text                   as TStrict
 import qualified Data.Text.Lazy              as TLazy
 import           Data.Vector.Unboxed.Base    (Unbox)
 import qualified Data.Vector.Unboxed         as Unboxed
+import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
 
 import           Text.Printf                 (printf)
@@ -1018,11 +1020,42 @@ getPrimStrictUTF8String = fmap snd $ unpackRowElem $ \ case
     report len max = "'getPrimStrictUTF8String': stored string has a length of "++len++
       " bytes, maximum constructable string size is "++max
 
-putPrimUnboxedVector :: (IsNumericPrimitive elem, Unbox elem) => Unboxed.Vector elem -> RowBuilder
-putPrimUnboxedVector = error "TODO"
+-- | Copy an unboxed 'Unboxed.Vector' of primitive @elem@ents into a 'TaggedRow' using a
+-- 'RowBuilder'.
+putPrimUnboxedVector
+  :: forall elem . (IsNumericPrimitive elem, IsPrimitive elem, Unbox elem)
+  => Unboxed.Vector elem -> RowBuilder
+putPrimUnboxedVector = writeRowPrimWith $ \ vec -> do
+  let report len max = "'putPrimUnboxedVector': given a vector containing "++len++
+        " elements, but a vector stored in a 'TaggedRow' can contain no more than "++max++
+        " elements."
+  let tag = HomoArray (numericPrimitiveType (Proxy :: Proxy elem)) $
+         hostIntToVarWord35 report $ Unboxed.length vec
+  seq tag $! do
+    mapM_ putPrimitive $ Unboxed.toList vec
+    return tag
 
-getPrimUnboxedVector :: (IsNumericPrimitive elem, Unbox elem) => Select (Unboxed.Vector elem)
-getPrimUnboxedVector = error "TODO"
+-- | Copy an unboxed 'Unboxed.Vector' of primitive @elem@ents that was serialized using
+-- 'putPrimUnboxedVector' from a 'TaggedRow' into an actual 'Unboxed.Vector'.
+getPrimUnboxedVector
+  :: (IsNumericPrimitive elem, IsPrimitive elem, Unbox elem)
+  => Select (Unboxed.Vector elem)
+getPrimUnboxedVector = fmap snd $ unpackRowElem $ \ case
+  HomoArray typ (VarWord35 len') -> do
+    let report len max = "'getPrimUnboxedVector': parsing vector of type "++show typ++
+          " with "++len++" elements, but a native vector may only contain "++max++" elements."
+    let len = toHostInt report len'
+    packVector typ len 0 (Mutable.new len)
+  _                              -> mzero
+
+packVector
+  :: (IsPrimitive elem, Unbox elem)
+  => PrimElemType -> Int -> Int
+  -> (forall s . ST s (Mutable.STVector s elem))
+  -> Get (Unboxed.Vector elem)
+packVector typ len i next = seq next $! if i >= len then return $ Unboxed.create next else do
+  elem <- getPrimitive $ NumericPrimitive typ
+  (packVector typ len (i + 1)) (next >>= \ vec -> Mutable.write vec i elem >> return vec)
 
 ----------------------------------------------------------------------------------------------------
 
