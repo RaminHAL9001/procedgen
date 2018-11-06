@@ -41,11 +41,12 @@ module ProcGen.Music.Composition
     NoteReference, untied,
     Strength(..),  strengthToAmplitude,
     -- * Arranging Notes
-    Bar, PlayedRole(..), playedRoleInstrument, playedRoleSequence, nextBar,
+    Bar, PlayedRole(..), sequenceBar, tieSequencedNotes,
+    playedRoleInstrument, playedRoleSequence, nextBar,
     NoteSequence(..), listNoteSequence, playNoteSequence, getPlayedRoles,
     -- * Composing Music for a Single Role
     Notation, evalNotation, randGenNotation, notationKeySignature,
-    ScorableNote(..), note, rest, intTone, quick, tieNote, tie, untie,
+    ScorableNote(..), note, rest, intTone, playNote, quick, tieNote, tie, untie,
     Composition, CompositionState(..), runCompositionTFGen, emptyComposition,
     instrument, composeNotes, composedDrums,
     exampleComposition,
@@ -136,7 +137,7 @@ instance Show value => Show (PlayedNote value) where
   show = \ case
     RestNote       -> "rest"
     n@PlayedNote{} -> do
-      let show_dt = printf "%5f %s" (show $ playedDuration n) (show $ playedStrength n)
+      let show_dt = printf "%5f %s" (playedDuration n) (show $ playedStrength n)
       let ident   = replicate (22 - length show_dt) ' '
       (show_dt ++) . (ident ++) . shows (playedNoteValue n) $ case playedTied n of
         RestNote -> ""
@@ -203,7 +204,10 @@ playScoredNote dt = \ case
 -- track of each unique note played in order to evaluate "tied notes" which are notes are held for
 -- an amount of time, sometimes sliding (gradually changing the sound'S base frequency) into another
 -- note.
-newtype NoteReference = NoteReference Int deriving (Eq, Ord, Show)
+newtype NoteReference = NoteReference Int deriving (Eq, Ord)
+
+instance Show NoteReference where
+  show ref@(NoteReference i) = if ref == untied then "untied" else "(tie "++show i++")"
 
 -- | A 'Note' that is not tied.
 untied :: NoteReference
@@ -302,10 +306,13 @@ playNoteSequence t0 dt0 = NoteSequence
 -- 'playNoteSequence' to re-order the elements in this list.
 tieSequencedNotes :: [(Moment, Duration, ScoredTone)] -> [(Moment, PlayedTone)]
 tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empty) where
-  f (t, dt, scor) (list, table) = if untied == scoredNoteTiedID scor then (list, table) else
-    let (NoteReference i) = scoredNoteTiedID scor
-        play = (t, playScoredNote dt scor)
-    in (list, IMap.alter (Just . maybe [play] (play :)) i table)
+  f (t, dt, scor) (list, table) = case scor of
+    ScoredNoteRest -> (list, table)
+    scor@ScoredNote{scoredNoteTiedID=tiedTo} ->
+      let (NoteReference i) = tiedTo
+          play = (t, playScoredNote dt scor)
+      in  if tiedTo == untied then (play:list, table) else
+            (list, IMap.alter (Just . maybe [play] (play :)) i table)
   tie (t2, n2) (t1, n1) = case n1 of
     RestNote     -> (t2, n2)
     PlayedNote{} -> (,) t1 $ n1
@@ -440,7 +447,7 @@ instance ScorableNote DrumValue   DrumValue where
     }
 
 intTone :: [Int] -> Notation ToneValue ScoredTone
-intTone = toNote
+intTone = toNote >=> \ n -> playNote n >> return n
 
 -- | Evaluate a 'Notation' function automatically seeding a new random number generator using
 -- 'Control.Random.TF.Init.initTFGen'.
@@ -451,12 +458,14 @@ evalNotation (Notation f) = liftM fst $
 randGenNotation :: Notation note a -> TFGen -> IO (a, TFGen)
 randGenNotation (Notation f) = runTFRandT (evalStateT f emptyNotationState)
 
+-- | If you already have a 'ScoredNote' of some type (like a 'ScoredTone' or a 'ScoredDrum'), you
+-- can play it again using 'playNote'.
 playNote :: ScoredNote value -> Notation value ()
-playNote note = notationNotes %= (:) (BarLeaf note)
+playNote note = notationNotes %= (:) (BarLeaf note) >> notationNoteCount += 1
 
 -- | Play a note
 note :: ScorableNote note value => note -> Notation value ()
-note n = toNote n >>= (%=) notationNotes . (:) . BarLeaf >> notationNoteCount += 1
+note n = toNote n >>= playNote
 
 -- | Leave a brief silent gap in the current 'Bar' (a gap in the sub-division of the current
 -- interval).
@@ -606,6 +615,17 @@ instrument inst bar = do
 
 ----------------------------------------------------------------------------------------------------
 
+-- | This function produces a 'Bar' of a couple of played notes. Choose an
+-- 'ProcGen.Music.SoundFont.InstrumentID', and then apply the exampe 'Bar' produced by this function
+-- to the 'instrument' function. If you have no 'ProcGen.Music.SoundFont.InstrumentID' the sequencer
+-- should default to a sine wave generator, so don't worry if you haven't created any instruments
+-- yet, you can still use this example:
+--
+-- @
+-- let randomSeed = 12345
+-- let sinegen = InstrumentID "sine wave generator"
+-- musicToFile "example.wav" randomSeed $ exampleComposition >>= instrument sinegen
+-- @
 exampleComposition :: Composition (Bar ScoredTone)
 exampleComposition = do 
   let updown = intTone[39] >> rest >> intTone[61] >> rest >> nextBar
