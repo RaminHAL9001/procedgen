@@ -58,7 +58,6 @@ Library {
     ProcGen.Arbitrary
     ProcGen.Buffer
     ProcGen.Collapsible
-    ProcGen.GHCI
     ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.Sequencer
@@ -66,7 +65,6 @@ Library {
     ProcGen.Music.Synth
     ProcGen.Music.WaveFile
     ProcGen.Plot
-    ProcGen.Plot.Examples
     ProcGen.Plot.GUI
     ProcGen.PrimeNumbers
     ProcGen.Properties
@@ -194,7 +192,6 @@ Test-suite procgen-live {
     ProcGen.Music.Synth
     ProcGen.Music.WaveFile
     ProcGen.Plot
-    ProcGen.Plot.Examples
     ProcGen.Plot.GUI
     ProcGen.PrimeNumbers
     ProcGen.Properties
