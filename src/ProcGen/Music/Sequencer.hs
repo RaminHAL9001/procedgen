@@ -11,6 +11,7 @@
 -- program).
 module ProcGen.Music.Sequencer
   ( -- * Shaping Signals
+    test,
     ShapedSignal(..), basicShapedSignal, squareShapedSignal,
     shapedTDSignal, shapedSound, setShapedSignalDuration, setShapedSoundDuration,
     shapedSignal, shapeInitTime, shapeDuration,
@@ -89,6 +90,11 @@ musicToFile path seed seqinit f = do
       ((), _seqst) <- flip runSequencer seqst $
         seqinit >> mapM_ (playToTrack track 0.5 . wholeShape) roles
       writeTrackFile path track
+
+-- | TODO: delete this function, it shouldn't be here in the release version.
+test :: IO ()
+test = musicToFile "example.wav" 0 (pure ()) $
+  exampleComposition >>= instrument (InstrumentID "Sine Wave Generator")
 
 ----------------------------------------------------------------------------------------------------
 

@@ -502,7 +502,7 @@ quick' subcomposition = do
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) (count - 1)) elems
         return vec
   let subdiv = BarBranch $ mkvec count notes
-  notationNotes     .= subdiv : oldnotes
+      notationNotes     .= subdiv : oldnotes
   notationNoteCount .= oldcount + 1
   return (a, subdiv)
 
@@ -510,6 +510,7 @@ quick' subcomposition = do
 nextBar :: Notation value (Bar (ScoredNote value))
 nextBar = do
   notes <- use notationNotes
+  notationNoteCount .= 0
   notationNotes .= mempty
   case notes of
     []  -> return mempty
@@ -628,7 +629,7 @@ instrument inst bar = do
 -- @
 exampleComposition :: Composition (Bar ScoredTone)
 exampleComposition = do 
-  let updown = intTone[39] >> rest >> intTone[61] >> rest >> nextBar
+  let updown = intTone[39] >> rest >> intTone[51] >> rest >> nextBar
   a <- composeNotes updown
   b <- composeNotes (rest >> quick updown)
   return (a <> b)
