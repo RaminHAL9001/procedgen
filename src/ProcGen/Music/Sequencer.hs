@@ -93,8 +93,7 @@ musicToFile path seed seqinit f = do
 
 -- | TODO: delete this function, it shouldn't be here in the release version.
 test :: IO ()
-test = musicToFile "example.wav" 0 (pure ()) $
-  exampleComposition >>= instrument (InstrumentID "Sine Wave Generator")
+test = musicToFile "example.wav" 0 (pure ()) exampleComposition
 
 ----------------------------------------------------------------------------------------------------
 

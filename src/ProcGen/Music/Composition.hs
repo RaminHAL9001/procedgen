@@ -502,7 +502,7 @@ quick' subcomposition = do
         mapM_ (uncurry $ Mutable.write vec) $ zip (iterate (subtract 1) (count - 1)) elems
         return vec
   let subdiv = BarBranch $ mkvec count notes
-      notationNotes     .= subdiv : oldnotes
+  notationNotes     .= subdiv : oldnotes
   notationNoteCount .= oldcount + 1
   return (a, subdiv)
 
@@ -627,9 +627,11 @@ instrument inst bar = do
 -- let sinegen = InstrumentID "sine wave generator"
 -- musicToFile "example.wav" randomSeed $ exampleComposition >>= instrument sinegen
 -- @
-exampleComposition :: Composition (Bar ScoredTone)
-exampleComposition = do 
-  let updown = intTone[39] >> rest >> intTone[51] >> rest >> nextBar
-  a <- composeNotes updown
-  b <- composeNotes (rest >> quick updown)
-  return (a <> b)
+exampleComposition :: Composition ()
+exampleComposition = do
+  let singen = InstrumentID "Sine Wave Generator"
+  let a = intTone [39]
+  let b = intTone [51]
+  a_b_ <- composeNotes (do{ a; rest; b; rest; nextBar; })
+  _ab_ <- composeNotes (do{ rest; a; b; rest; nextBar; })
+  instrument singen (a_b_ <> _ab_)
