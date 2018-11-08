@@ -48,7 +48,7 @@ module ProcGen.Music.Composition
     Notation, evalNotation, randGenNotation, notationKeySignature,
     ScorableNote(..), note, rest, intTone, playNote, quick, tieNote, tie, untie,
     Composition, CompositionState(..), runCompositionTFGen, emptyComposition,
-    instrument, composeNotes, composedDrums,
+    nextMeasure, instrument, composeNotes, composedDrums,
     exampleComposition,
     module ProcGen.Arbitrary,
     module Control.Monad.State.Class,
@@ -348,7 +348,8 @@ instance HasTimeWindow [PlayedRole (PlayedNote any)] Moment where
   timeWindow = twMinBoundsAll . (>>= (maybeToList . timeWindow))
 
 instance Show note => Show (PlayedRole note) where
-  show n = show (thePlayedRoleSequence n) ++ '\n' : show (thePlayedRoleSequence n)
+  show n = show (thePlayedRoleInstrument n) ++ '\n' : show (thePlayedRoleSequence n)
+  showList = foldl (\ a b -> a . b) id . fmap (showsPrec 0)
 
 playedRoleInstrument :: Lens' (PlayedRole note) InstrumentID
 playedRoleInstrument = lens thePlayedRoleInstrument $ \ a b -> a{ thePlayedRoleInstrument = b }
@@ -571,7 +572,7 @@ instance MonadRandom Composition where
 
 emptyComposition :: CompositionState
 emptyComposition = CompositionState
-  { theCompositionMeasure  = 0
+  { theCompositionMeasure  = 4.0
   , theCompositionMoment   = 0
   , theComposedInstruments = Map.empty
   , theComposedDrums       = mempty
@@ -580,10 +581,14 @@ emptyComposition = CompositionState
 getPlayedRoles :: CompositionState -> [PlayedRole PlayedTone]
 getPlayedRoles comp = uncurry PlayedRole <$> Map.assocs (comp ^. composedInstruments)
 
--- | The amount of time for each measure. This parameter essentially sets the tempo of the music.
+-- | The amount of time for each measure. This parameter essentially sets the tempo of the
+-- music. The minimum value is 0.5, setting a value less than 0.5 will not fail but set the value to
+-- 0.5. This is to prevent divide-by-zero exceptions and also undefined behavior that would
+-- otherwise exist when using a negative measure time.
 compositionMeasure :: Lens' CompositionState Duration
-compositionMeasure = lens theCompositionMeasure $ \ a b -> a{ theCompositionMeasure = b }
+compositionMeasure = lens theCompositionMeasure $ \ a b -> a{ theCompositionMeasure = max 0.5 b }
 
+-- | The current time for which notes are being comoposed.
 compositionMoment :: Lens' CompositionState Moment
 compositionMoment = lens theCompositionMoment $ \ a b -> a{ theCompositionMoment = b }
 
@@ -613,6 +618,10 @@ instrument inst bar = do
   dt <- use compositionMeasure
   let seq = playNoteSequence t dt bar
   composedInstruments %= Map.alter (Just . maybe seq (<> seq)) inst
+
+-- | Increase the current 'compositionMoment' time by 'compositionMeasure' amount of time.
+nextMeasure :: Composition ()
+nextMeasure = use compositionMeasure >>= (compositionMoment %=) . (+)
 
 ----------------------------------------------------------------------------------------------------
 
