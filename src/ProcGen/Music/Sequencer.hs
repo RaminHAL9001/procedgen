@@ -36,8 +36,6 @@ import           ProcGen.Music.Synth
 import           ProcGen.Music.WaveFile
 
 import           Control.Lens
---import           Control.Monad.Random
---import           Control.Monad.State
 
 import qualified Data.Map                    as Map
 import           Data.Semigroup
@@ -92,8 +90,12 @@ musicToFile path seed seqinit f = do
       writeTrackFile path track
 
 -- | TODO: delete this function, it shouldn't be here in the release version.
-test :: IO ()
-test = musicToFile "example.wav" 0 (pure ()) exampleComposition
+test :: IO TDView
+test = do
+  let filepath = "./example.wav" :: FilePath
+  musicToFile filepath 0 (pure ()) exampleComposition
+  putStrLn $ "Created " ++ show filepath
+  (`tdView` (keyboard88 $ keyIndex 39)) <$> readTDSignalFile filepath
 
 ----------------------------------------------------------------------------------------------------
 
@@ -287,12 +289,12 @@ playSinusoidToTrack (Track vecT) t0 = \ case
       let i0   = durationSampleCount t0
       let tone = if a == b then const a else \ t -> a + (a - b) *
             sigmoid TimeWindow{ timeStart = 0, timeEnd = dt } t
+      let fade_0_to_dt = fadeInOut 0 (2 / a) (dt - 2 / b) dt
       phase <- onRandFloat (* (2 * pi))
       liftIO $ mapBuffer vecT
         (TimeWindow{ timeStart = i0, timeEnd = i0 + durationSampleCount dt }) $ \ i e -> do
           let t = indexToTime $ i - i0
-          pure $ e + sinePulse (tone t) phase t *
-            fadeInOut t0 (t0 + 2 / a) (t0 + dt - 2 / b) (t0 + dt) t
+          pure $ e + sinePulse (tone t) phase t * fade_0_to_dt t
 
 ----------------------------------------------------------------------------------------------------
 
