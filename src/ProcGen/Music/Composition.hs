@@ -516,7 +516,7 @@ nextBar = do
   case notes of
     []  -> return mempty
     [a] -> return a
-    ax  -> return $ BarBranch $ Boxed.fromList ax
+    ax  -> return $ BarBranch $ Boxed.fromList $ reverse ax
 
 -- | Play a 'note' that will be tied to another 'note' at some point in the future. The tied note is
 -- held for a time until the future 'untie'd note is reached.
