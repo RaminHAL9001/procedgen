@@ -11,6 +11,7 @@ module ProcGen.Music.WaveFile
 
 import           ProcGen.Types
 
+import           Control.Exception           (evaluate, bracket)
 import           Control.Monad
 import           Control.Monad.ST
 
@@ -23,7 +24,7 @@ import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
 
-import           System.IO (Handle)
+import           System.IO (Handle, IOMode(..), openFile, hClose)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -174,9 +175,10 @@ hWriteWave h = Bytes.hPut h . Binary.runPut . putRiffWaveFormat
 -- | Open a given 'System.IO.FilePath' and read the entire contents as RIFF/WAVE formatted binary
 -- data, returning a 'Unboxed.Vector' of 'ProcGen.Types.Sample' data contained within.
 readWave :: FilePath -> IO (Unboxed.Vector Sample)
-readWave = fmap (Binary.runGet getRiffWaveFormat) . Bytes.readFile
+readWave filepath = bracket (openFile filepath ReadMode) hClose (hReadWave >=> evaluate)
 
 -- | Open a given 'System.IO.FilePath' and write an entire 'Unboxed.Vector' of
 -- 'ProcGen.Types.Samples's into it as RIFF/WAVE formatted binary data.
 writeWave :: FilePath -> Unboxed.Vector Sample -> IO ()
-writeWave path = Bytes.writeFile path . Binary.runPut . putRiffWaveFormat
+writeWave filepath vec =
+  bracket (openFile filepath WriteMode) hClose (flip hWriteWave vec >=> evaluate)
