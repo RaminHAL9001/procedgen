@@ -5,9 +5,10 @@ module ProcGen.Types
 
 import           ProcGen.PrimeNumbers
 
-import           Control.Monad
+import           Control.Monad.Random
 
 import           Data.Int
+import           Data.Ratio
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
@@ -198,24 +199,24 @@ diffList = init where
     a:b:ax -> (a, b) : loop a0 (b:ax)
 
 -- | Given 4 control points, compute the curve value for a single parametric value.
-bezier3 :: ProcGenFloat -> ProcGenFloat -> ProcGenFloat -> ProcGenFloat -> Moment -> Sample
+bezier3 :: Floating n => n -> n -> n -> n -> n -> n
 bezier3 a b c d t = a*(1-t)**3 + b*3*t*(1-t)**2 + c*3*(1-t)*t**2 + d*t**3
 
 -- | A time domain function computing unit sine wave function, where the period of the sineusoid is
 -- 1, rather than 2π.
-unitSine :: ProcGenFloat -> ProcGenFloat
+unitSine :: Floating n => n -> n
 unitSine = sin . ((2*pi) *)
 
 -- | A time domain function computing periodic unit sawtooth function.
-sawtooth :: ProcGenFloat -> ProcGenFloat
+sawtooth :: (Floating n, RealFrac n) => n -> n
 sawtooth t0 = let t = 2*t0 + 0.5 in 2*(t - realToFrac (floor t :: Integer)) - 1
 
 -- | A time domain function computing periodic unit triangular function.
-triangle :: ProcGenFloat -> ProcGenFloat
+triangle :: (Floating n, RealFrac n) => n -> n
 triangle t0 = let t = 2*t0 + 0.5 in 2*(abs $ sawtooth t) - 1
 
 -- | A time domain function computing periodic unit triangular function.
-square :: ProcGenFloat -> ProcGenFloat
+square :: (Floating n, RealFrac n) => n -> n
 square t0 = (if t0 - (realToFrac (round t0 :: Int)) < 0.5 then id else negate) 1
 
 -- | An 'Envelope' increasing linearly from zero to one starting at a given 'Moment' and increasing
@@ -242,6 +243,16 @@ sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
       n = 4 -- n must be even
   in  if tw==0 then if t'<t0 then 0 else 1 else
       if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
+
+-- | The ReLU function, is an activation function used in neural networks which is defined as
+-- @(\t -> if t < 0 then 0 else t)@
+relu :: (Ord n, Floating n) => n -> n
+relu t = if t < 0 then 0 else t
+
+-- | Like 'ReLU' but evaluates to a constant @c@ rather than 0 if the input @t@ is less than
+-- @c@. Usually @c@ is very small, like @0.001@
+leakyReLU :: (Ord n, Floating n) => n -> n -> n
+leakyReLU c t = if t < c then c else t
 
 -- | A function that constructs a fade-in and fade-out envelope.
 fadeInOut
@@ -567,3 +578,173 @@ twIterate = fmap timeIndex . twMoments
 twIndicies :: Int -> TimeWindow Moment -> [Int]
 twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
   [max 0 $ min (len - 1) $ durationSampleCount t0 .. min (len - 1) $ durationSampleCount end]
+
+----------------------------------------------------------------------------------------------------
+
+type FloatFunction = RealValueFunction ProcGenFloat
+
+-- | A small DSL (or perhaps a "meta function") for functions over 'Float' values. Use this data
+-- type when you have a mathematical equation that you want to serialze or store to a file.
+--
+-- The disadvantage to using this data type is that you lose the ability to optimize computations.
+-- It is usually a good idea extend this data type with your own functions. For example, suppose you
+-- want to construct a 'Polynomial' data type, you can create your own data type which efficiently
+-- computes polynomials, but uses this 'RealValueFunction' type as the polynomial coefficients. This
+-- would result in be a much, much more efficient computations than defining polynomials in terms of
+-- 'RealValueFunction's using the 'FFPow', 'FFMul', 'FFAdd', 'FFNegate' functions.
+data RealValueFunction num
+  = FFConst    !num -- ^ a constant value
+  | FFFloat    !Float
+  | FFDouble   !Double
+  | FFInteger  !Integer
+  | FFRatio    !Integer !Integer
+  | FFUniformRand -- ^ A unformly distributed random variable between 0 and 1
+  | FFNormalRand
+     -- ^ A normally distributed random variable between 0 and 1, with 0.5 being the most common
+     -- value.
+  | FFBeta3Rand
+     -- ^ A beta-distributed random variable with a beta function of polynomial degree 3, generating
+     -- a value between 0 and 1 with @(1/3)@ being the value most common generated.
+  | FFBeta5Rand
+     -- ^ A beta-distributed random variable with a beta function of polynomial degree 5, generating
+     -- a value between 0 and 1 with @(1/5)@ being the value most commonly generated.
+  | FFAdd       (RealValueFunction num)  (RealValueFunction num)
+  | FFMul       (RealValueFunction num)  (RealValueFunction num)
+  | FFMin       (RealValueFunction num)  (RealValueFunction num)
+  | FFMax       (RealValueFunction num)  (RealValueFunction num)
+  | FFToFloat   (RealValueFunction num)
+    -- ^ evaluates a function to a 'Float' constant
+  | FFToDouble  (RealValueFunction num)
+    -- ^ evaluates a function to a 'Double' constant
+  | FFRound     (RealValueFunction num)
+    -- ^ evaluates a function to an 'Int' constant by rounding
+  | FFFloor     (RealValueFunction num)
+    -- ^ evaluates a function to an 'Int' constant by taking the 'floor'
+  | FFCeiling   (RealValueFunction num)
+    -- ^ evaluates a function to an 'Int' constant by taking the 'ceiling'
+  | FFNegate    (RealValueFunction num)
+  | FFAbs       (RealValueFunction num)
+  | FFSignNum   (RealValueFunction num)
+  | FFRecip     (RealValueFunction num)
+  | FFExp       (RealValueFunction num)
+    -- ^ Take the constant @e@ to the power of a value
+  | FFLog       (RealValueFunction num)
+    -- ^ Take the natural logarithm of a value
+  | FFPow       (RealValueFunction num)  (RealValueFunction num)
+  | FFLogBase   (RealValueFunction num)  (RealValueFunction num)
+  | FFSin       (RealValueFunction num)
+  | FFCos       (RealValueFunction num)
+  | FFTan       (RealValueFunction num)
+  | FFASin      (RealValueFunction num)
+  | FFACos      (RealValueFunction num)
+  | FFATan      (RealValueFunction num)
+  | FFSinH      (RealValueFunction num)
+  | FFCosH      (RealValueFunction num)
+  | FFTanH      (RealValueFunction num)
+  | FFASinH     (RealValueFunction num)
+  | FFACosH     (RealValueFunction num)
+  | FFATanH     (RealValueFunction num)
+  | FFSqrt      (RealValueFunction num)
+  | FFReLU      (RealValueFunction num)
+  | FFLeakyReLU (RealValueFunction num) (RealValueFunction num)
+  | FFSawtooth  (RealValueFunction num)
+  | FFTriangle  (RealValueFunction num)
+  | FFSquare    (RealValueFunction num)
+  | FFUnitSine  (RealValueFunction num)
+  | FFBezier3   (RealValueFunction num)
+                (RealValueFunction num)
+                (RealValueFunction num)
+                (RealValueFunction num)
+                (RealValueFunction num)
+  deriving (Eq, Functor)
+
+instance Num (RealValueFunction num) where
+  (+) a b     = FFAdd a b
+  (-) a b     = FFAdd a (FFNegate b)
+  (*) a b     = FFMul a b
+  negate      = FFNegate
+  abs         = FFAbs
+  signum      = FFSignNum
+  fromInteger = FFInteger
+
+instance Fractional (RealValueFunction num) where
+  (/) a b        = FFMul a $ FFRecip b
+  recip          = FFRecip
+  fromRational a = FFRatio (numerator a) (denominator a)
+
+instance Floating num => Floating (RealValueFunction num) where
+  pi      = FFConst pi
+  exp     = FFExp
+  log     = FFLog
+  sqrt    = FFSqrt
+  (**)    = FFPow
+  logBase = FFLogBase
+  sin     = FFSin
+  cos     = FFCos
+  tan     = FFTan
+  asin    = FFASin
+  acos    = FFACos
+  atan    = FFATan
+  sinh    = FFSinH
+  cosh    = FFCosH
+  tanh    = FFTanH
+  asinh   = FFASinH
+  acosh   = FFACosH
+  atanh   = FFATanH
+
+reduceRealValue
+  :: forall m num . (Monad m, MonadRandom m, Num num, RealFrac num, Floating num)
+  => RealValueFunction num -> m num
+reduceRealValue = let eval = reduceRealValue in \ case
+  FFConst        a    -> pure a
+  FFInteger      a    -> pure $ realToFrac a
+  FFFloat        a    -> pure $ realToFrac a
+  FFDouble       a    -> pure $ realToFrac a
+  FFRatio        a b  -> pure $ realToFrac $ a % b
+  FFUniformRand       -> (realToFrac :: ProcGenFloat -> num) <$> getRandom
+  FFNormalRand        -> realToFrac . inverseNormal <$> getRandom
+  FFBeta3Rand         -> realToFrac . inverseBeta3  <$> getRandom
+  FFBeta5Rand         -> realToFrac . inverseBeta5  <$> getRandom
+  FFAdd          a b  -> (+)  <$> eval a <*> eval (realToFrac <$> b)
+  FFMul          a b  -> (*)  <$> eval a <*> eval (realToFrac <$> b)
+  FFMin          a b  -> min  <$> eval a <*> eval b
+  FFMax          a b  -> max  <$> eval a <*> eval b
+  FFToFloat      a    -> realToFrac <$> reduceFloat  (realToFrac <$> a)
+  FFToDouble     a    -> realToFrac <$> reduceDouble (realToFrac <$> a)
+  FFRound        a    -> fromInteger . round   <$> reduceDouble (realToFrac <$> a)
+  FFFloor        a    -> fromInteger . floor   <$> reduceDouble (realToFrac <$> a)
+  FFCeiling      a    -> fromInteger . ceiling <$> reduceDouble (realToFrac <$> a)
+  FFNegate       a    -> negate     <$> eval a
+  FFAbs          a    -> abs        <$> eval a
+  FFSignNum      a    -> signum     <$> eval a
+  FFRecip        a    -> recip      <$> eval a
+  FFExp          a    -> exp        <$> eval a
+  FFLog          a    -> log        <$> eval a
+  FFPow          a b  -> realToFrac <$> ((**) <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
+  FFLogBase      a b  -> realToFrac <$> (logBase <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
+  FFSin          a    -> sin        <$> eval a
+  FFCos          a    -> cos        <$> eval a
+  FFTan          a    -> tan        <$> eval a
+  FFASin         a    -> asin       <$> eval a
+  FFACos         a    -> acos       <$> eval a
+  FFATan         a    -> atan       <$> eval a
+  FFSinH         a    -> sinh       <$> eval a
+  FFCosH         a    -> cosh       <$> eval a
+  FFTanH         a    -> tanh       <$> eval a
+  FFASinH        a    -> asinh      <$> eval a
+  FFACosH        a    -> acosh      <$> eval a
+  FFATanH        a    -> atanh      <$> eval a
+  FFSqrt         a    -> sqrt       <$> eval a
+  FFReLU         a    -> relu       <$> eval a
+  FFLeakyReLU    a b  -> leakyReLU  <$> eval a <*> eval b
+  FFSawtooth     a    -> sawtooth   <$> eval a
+  FFTriangle     a    -> triangle   <$> eval a
+  FFSquare       a    -> square     <$> eval a
+  FFUnitSine     a    -> unitSine   <$> eval a
+  FFBezier3 a b c d t -> bezier3    <$> eval a <*> eval b <*> eval c <*> eval d <*> eval t
+
+reduceDouble :: (Monad m, MonadRandom m) => RealValueFunction Double -> m Double
+reduceDouble = reduceRealValue
+
+reduceFloat :: (Monad m, MonadRandom m) => RealValueFunction Float -> m Float
+reduceFloat = reduceRealValue

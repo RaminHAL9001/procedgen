@@ -63,6 +63,23 @@ import           Text.Printf
 
 ----------------------------------------------------------------------------------------------------
 
+-- | A component of a synthesized sound. Components are simply functions take a base 'Frequency' and
+-- a 'Moment' in time as input parameters, and producing one or more 'Frequency', 'Amplitude', and
+-- 'Phase' components as an output. When you want to convert a 'SynthComponent' to a frequency
+-- domain signal ('FDSignal'), choose a base frequency, for example 256 Hz, and then iterate over a
+-- time interval from (for example) 0 to 1 seconds with the inverse of the 'sampleRate' as the time
+-- step for each iteration. The base frequency may vary with time if you wish. After applying the
+-- base frequency and current 'Moment' in time to this, a list of 'Frequency', 'Amplitude' and
+-- 'Phase' components will be produced, which construct the 'FDSignal'. You can then convert the
+-- 'FDSignal' to a 'TDSignal' for that moment in time.
+data SynthComponent
+  = SynthComponent
+    { theSynthCompTimeInterval :: !(Interval Moment)
+    , theSynthCompFrequency    :: !SynthComponentEquation
+    }
+
+----------------------------------------------------------------------------------------------------
+
 newtype Synth a = Synth { unwrapSynth :: StateT SynthState IO a }
   deriving (Functor, Applicative, Monad, MonadIO)
 
