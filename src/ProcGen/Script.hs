@@ -16,7 +16,7 @@ import           Data.Ratio
 
 ----------------------------------------------------------------------------------------------------
 
-type FloatFunction = RealValueFunction ProcGenFloat
+type FloatEqn = MathEqn ProcGenFloat
 
 -- | A small DSL (or perhaps a "meta function") for functions over 'Float' values. Use this data
 -- type when you have a mathematical equation that you want to serialze or store to a file.
@@ -24,10 +24,10 @@ type FloatFunction = RealValueFunction ProcGenFloat
 -- The disadvantage to using this data type is that you lose the ability to optimize computations.
 -- It is usually a good idea extend this data type with your own functions. For example, suppose you
 -- want to construct a 'Polynomial' data type, you can create your own data type which efficiently
--- computes polynomials, but uses this 'RealValueFunction' type as the polynomial coefficients. This
+-- computes polynomials, but uses this 'MathEqn' type as the polynomial coefficients. This
 -- would result in be a much, much more efficient computations than defining polynomials in terms of
--- 'RealValueFunction's using the 'FFPow', 'FFMul', 'FFAdd', 'FFNegate' functions.
-data RealValueFunction num
+-- 'MathEqn's using the 'FFPow', 'FFMul', 'FFAdd', 'FFNegate' functions.
+data MathEqn num
   = FFConst    !num -- ^ a constant value
   | FFFloat    !Float
   | FFDouble   !Double
@@ -43,87 +43,68 @@ data RealValueFunction num
   | FFBeta5Rand
      -- ^ A beta-distributed random variable with a beta function of polynomial degree 5, generating
      -- a value between 0 and 1 with @(1/5)@ being the value most commonly generated.
-  | FFAdd        (RealValueFunction num)  (RealValueFunction num)
-  | FFMul        (RealValueFunction num)  (RealValueFunction num)
-  | FFMin        (RealValueFunction num)  (RealValueFunction num)
-  | FFMod        (RealValueFunction num)  (RealValueFunction num)
-  | FFMax        (RealValueFunction num)  (RealValueFunction num)
-  | FFToFloat    (RealValueFunction num)
+  | FFAdd        (MathEqn num)  (MathEqn num)
+  | FFMul        (MathEqn num)  (MathEqn num)
+  | FFMin        (MathEqn num)  (MathEqn num)
+  | FFMod        (MathEqn num)  (MathEqn num)
+  | FFMax        (MathEqn num)  (MathEqn num)
+  | FFToFloat    (MathEqn num)
     -- ^ evaluates a function to a 'Float' constant
-  | FFToDouble   (RealValueFunction num)
+  | FFToDouble   (MathEqn num)
     -- ^ evaluates a function to a 'Double' constant
-  | FFRound      (RealValueFunction num)
+  | FFRound      (MathEqn num)
     -- ^ evaluates a function to an 'Integer' constant by rounding
-  | FFFloor      (RealValueFunction num)
+  | FFFloor      (MathEqn num)
     -- ^ evaluates a function to an 'Integer' constant by taking the 'floor'
-  | FFCeiling    (RealValueFunction num)
+  | FFCeiling    (MathEqn num)
     -- ^ evaluates a function to an 'Integer' constant by taking the 'ceiling'
-  | FFNegate     (RealValueFunction num)
-  | FFAbs        (RealValueFunction num)
-  | FFSignNum    (RealValueFunction num)
-  | FFRecip      (RealValueFunction num)
-  | FFExp        (RealValueFunction num)
+  | FFNegate     (MathEqn num)
+  | FFAbs        (MathEqn num)
+  | FFSignNum    (MathEqn num)
+  | FFRecip      (MathEqn num)
+  | FFExp        (MathEqn num)
     -- ^ Take the constant @e@ to the power of a value
-  | FFSqrt       (RealValueFunction num)
-  | FFLog        (RealValueFunction num)
+  | FFSqrt       (MathEqn num)
+  | FFLog        (MathEqn num)
     -- ^ Take the natural logarithm of a value
-  | FFPow        (RealValueFunction num)  (RealValueFunction num)
-  | FFLogBase    (RealValueFunction num)  (RealValueFunction num)
-  | FFSin        (RealValueFunction num)
-  | FFCos        (RealValueFunction num)
-  | FFTan        (RealValueFunction num)
-  | FFASin       (RealValueFunction num)
-  | FFACos       (RealValueFunction num)
-  | FFATan       (RealValueFunction num)
-  | FFSinH       (RealValueFunction num)
-  | FFCosH       (RealValueFunction num)
-  | FFTanH       (RealValueFunction num)
-  | FFASinH      (RealValueFunction num)
-  | FFACosH      (RealValueFunction num)
-  | FFATanH      (RealValueFunction num)
-  | FFReLU       (RealValueFunction num)
-  | FFLeakyReLU  (RealValueFunction num) (RealValueFunction num)
-  | FFSawtooth   (RealValueFunction num)
-  | FFTriangle   (RealValueFunction num)
-  | FFSquare     (RealValueFunction num)
-  | FFUnitSine   (RealValueFunction num)
-  | FFClamp0_1   (RealValueFunction num)
-  | FFClamp1_1   (RealValueFunction num)
-  | FFBezier3    (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFSlope      (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFSigmoid    (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFSine2      (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFFadeInOut  (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFSinePulse  (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFSinePulse3 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-                 (RealValueFunction num)
-  | FFNormal     (RealValueFunction num) (RealValueFunction num)
-  | FFBeta       (RealValueFunction num) (RealValueFunction num)
+  | FFPow        (MathEqn num)  (MathEqn num)
+  | FFLogBase    (MathEqn num)  (MathEqn num)
+  | FFSin        (MathEqn num)
+  | FFCos        (MathEqn num)
+  | FFTan        (MathEqn num)
+  | FFASin       (MathEqn num)
+  | FFACos       (MathEqn num)
+  | FFATan       (MathEqn num)
+  | FFSinH       (MathEqn num)
+  | FFCosH       (MathEqn num)
+  | FFTanH       (MathEqn num)
+  | FFASinH      (MathEqn num)
+  | FFACosH      (MathEqn num)
+  | FFATanH      (MathEqn num)
+  | FFReLU       (MathEqn num)
+  | FFLeakyReLU  (MathEqn num) (MathEqn num)
+  | FFSawtooth   (MathEqn num)
+  | FFTriangle   (MathEqn num)
+  | FFSquare     (MathEqn num)
+  | FFUnitSine   (MathEqn num)
+  | FFClamp0_1   (MathEqn num)
+  | FFClamp1_1   (MathEqn num)
+  | FFBezier3    (MathEqn num) (MathEqn num) (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFSlope      (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFSigmoid    (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFSine2      (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFFadeInOut  (MathEqn num) (MathEqn num) (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFSinePulse  (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFSinePulse3 (MathEqn num) (MathEqn num) (MathEqn num) (MathEqn num)
+  | FFNormal     (MathEqn num) (MathEqn num)
+  | FFBeta       (MathEqn num) (MathEqn num)
   deriving (Eq, Ord, Functor)
 
-instance Ord num => MinMaxDomain (RealValueFunction num) where
+instance Ord num => MinMaxDomain (MathEqn num) where
   minOf = FFMin
   maxOf = FFMax
 
-instance Num (RealValueFunction num) where
+instance Num (MathEqn num) where
   (+) a b     = FFAdd a b
   (-) a b     = FFAdd a (FFNegate b)
   (*) a b     = FFMul a b
@@ -132,12 +113,12 @@ instance Num (RealValueFunction num) where
   signum      = FFSignNum
   fromInteger = FFInteger
 
-instance Fractional (RealValueFunction num) where
+instance Fractional (MathEqn num) where
   (/) a b        = FFMul a $ FFRecip b
   recip          = FFRecip
   fromRational a = FFRatio (numerator a) (denominator a)
 
-instance Floating num => Floating (RealValueFunction num) where
+instance Floating num => Floating (MathEqn num) where
   pi      = FFConst pi
   exp     = FFExp
   log     = FFLog
@@ -157,48 +138,48 @@ instance Floating num => Floating (RealValueFunction num) where
   acosh   = FFACosH
   atanh   = FFATanH
 
-instance Ord num => ClampedDomain (RealValueFunction num) where
+instance Ord num => ClampedDomain (MathEqn num) where
   clamp0_1 = FFClamp0_1
   clamp1_1 = FFClamp1_1
 
-instance (Ord num, RealFrac num) => ModulousDomain (RealValueFunction num) where
+instance (Ord num, RealFrac num) => ModulousDomain (MathEqn num) where
   contMod = FFMod
 
-instance RoundingDomain (RealValueFunction num) where
+instance RoundingDomain (MathEqn num) where
   roundDown = FFFloor
   roundUp   = FFCeiling
   roundMid  = FFRound
 
-instance PeriodicDomain num => PeriodicDomain (RealValueFunction num) where
+instance PeriodicDomain num => PeriodicDomain (MathEqn num) where
   unitSine = FFUnitSine
   sawtooth = FFSawtooth
   triangle = FFTriangle
   square   = FFSquare
 
-instance EnvelopeDomain num => EnvelopeDomain (RealValueFunction num) where
+instance EnvelopeDomain num => EnvelopeDomain (MathEqn num) where
   slope       (TimeWindow a b) = FFSlope     a b
   sigmoid     (TimeWindow a b) = FFSigmoid   a b
   sineSquared (TimeWindow a b) = FFSine2     a b
   fadeInOut                    = FFFadeInOut
 
-instance ProbabilityDomain num => ProbabilityDomain (RealValueFunction num) where
+instance ProbabilityDomain num => ProbabilityDomain (MathEqn num) where
   normal = FFNormal
   beta   = FFBeta
 
-instance PulsedSinusoidalDomain num => PulsedSinusoidalDomain (RealValueFunction num) where
+instance PulsedSinusoidalDomain num => PulsedSinusoidalDomain (MathEqn num) where
   sinePulse  = FFSinePulse
   sinePulse3 = FFSinePulse3
 
--- | Force computation of equation as much as possible without forcing evaluation of any of the
--- random variables.
-reduceRealValue
+-- | Force partial computation of as much of the math equation as possible. Everything except for
+-- random variables are force-evaluated to a constant or primitive value.
+reduceMathEqn
   :: forall num
      . (RealFrac num, Floating num,
         EnvelopeDomain num, ClampedDomain num, ModulousDomain num,
         PeriodicDomain num, ActivationDomain num, PulsedSinusoidalDomain num)
-  => RealValueFunction num -> RealValueFunction num
-reduceRealValue a = maybe a id $ reduce a where
-  loop = reduceRealValue
+  => MathEqn num -> MathEqn num
+reduceMathEqn a = maybe a id $ reduce a where
+  loop = reduceMathEqn
   reduce = \ case
     a@FFConst{}       -> pure a
     a@FFInteger{}     -> pure a
@@ -292,7 +273,7 @@ reduceRealValue a = maybe a id $ reduce a where
     _           -> empty
   toInt
     :: (forall n . RealFrac n => n -> Integer)
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> MathEqn num -> Maybe (MathEqn num)
   toInt round = \ case
     FFConst   a -> pure $ FFInteger $ round a
     FFFloat   a -> pure $ FFInteger $ round a
@@ -303,9 +284,9 @@ reduceRealValue a = maybe a id $ reduce a where
   --------------------------------------------------------------------------------
   get1Value
     :: (v -> v)
-    -> (RealValueFunction num -> Maybe v)
-    -> (v -> RealValueFunction num)
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> (MathEqn num -> Maybe v)
+    -> (v -> MathEqn num)
+    -> MathEqn num -> Maybe (MathEqn num)
   get1Value f get constr a = constr . f <$> get a
   float1
     :: (forall n .
@@ -313,7 +294,7 @@ reduceRealValue a = maybe a id $ reduce a where
            ActivationDomain n, PeriodicDomain n, ClampedDomain n)
           => n -> n
        )
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> MathEqn num -> Maybe (MathEqn num)
   float1 f a =
     get1Value f getConst     FFConst   a <|>
     get1Value f getFloat     FFFloat   a <|>
@@ -324,23 +305,23 @@ reduceRealValue a = maybe a id $ reduce a where
     get1Value f getAnyRatio  ffratio   a
   toFloat
     :: Fractional f
-    => (f -> RealValueFunction num)
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    => (f -> MathEqn num)
+    -> MathEqn num -> Maybe (MathEqn num)
   real1
     :: (forall n . Real n => n -> n)
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> MathEqn num -> Maybe (MathEqn num)
   real1 f a = get1Value f getInteger FFInteger a <|> float1 f a <|> ratio1 f a
   eval1
-    :: (RealValueFunction num -> RealValueFunction num)
-    -> (RealValueFunction num -> Maybe (RealValueFunction num))
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    :: (MathEqn num -> MathEqn num)
+    -> (MathEqn num -> Maybe (MathEqn num))
+    -> MathEqn num -> Maybe (MathEqn num)
   eval1 constr eval a' = let a = loop a' in eval a <|> pure (constr a)
   --------------------------------------------------------------------------------
   get2Values
     :: (v -> v -> v)
-    -> (RealValueFunction num -> Maybe v)
-    -> (v -> RealValueFunction num)
-    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> (MathEqn num -> Maybe v)
+    -> (v -> MathEqn num)
+    -> MathEqn num -> MathEqn num -> Maybe (MathEqn num)
   get2Values   f get constr a b = constr <$> (f <$> get a <*> get b)
   float2
     :: (forall n .
@@ -348,7 +329,7 @@ reduceRealValue a = maybe a id $ reduce a where
            ActivationDomain n, ProbabilityDomain n)
           => n -> n -> n
        )
-    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> MathEqn num -> MathEqn num -> Maybe (MathEqn num)
   float2 f a b =
     get2Values f getConst     FFConst   a b <|>
     get2Values f getFloat     FFFloat   a b <|>
@@ -359,12 +340,12 @@ reduceRealValue a = maybe a id $ reduce a where
     get2Values f getAnyRatio  ffratio   a b
   real2
     :: (forall n . (Real n, MinMaxDomain n) => n -> n -> n)
-    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> MathEqn num -> MathEqn num -> Maybe (MathEqn num)
   real2 f a b = get2Values f getInteger FFInteger a b <|> float2 f a b <|> ratio2 f a b
   eval2
-    :: (RealValueFunction num -> RealValueFunction num -> RealValueFunction num)
-    -> (RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num))
-    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+    :: (MathEqn num -> MathEqn num -> MathEqn num)
+    -> (MathEqn num -> MathEqn num -> Maybe (MathEqn num))
+    -> MathEqn num -> MathEqn num -> Maybe (MathEqn num)
   eval2 constr eval a' b' = do
     let a = loop a'
     let b = loop b'
@@ -372,8 +353,8 @@ reduceRealValue a = maybe a id $ reduce a where
   --------------------------------------------------------------------------------
   envel
     :: (forall n . (RealFrac n, Floating n, EnvelopeDomain n) => TimeWindow n -> n -> n)
-    -> RealValueFunction num -> RealValueFunction num -> RealValueFunction num
-    -> Maybe (RealValueFunction num)
+    -> MathEqn num -> MathEqn num -> MathEqn num
+    -> Maybe (MathEqn num)
   envel f a b c =
     FFConst  <$> (f <$> (TimeWindow <$> getConst     a <*> getConst     b) <*> getConst     c) <|>
     FFFloat  <$> (f <$> (TimeWindow <$> getFloat     a <*> getFloat     b) <*> getFloat     c) <|>
@@ -390,13 +371,9 @@ reduceRealValue a = maybe a id $ reduce a where
           (RealFrac n, Floating n, ActivationDomain n, EnvelopeDomain n)
            => n -> n -> n -> n -> n -> n
        )
-    -> (   RealValueFunction num -> RealValueFunction num
-        -> RealValueFunction num -> RealValueFunction num
-        -> RealValueFunction num -> RealValueFunction num
-       )
-    -> RealValueFunction num -> RealValueFunction num
-    -> RealValueFunction num -> RealValueFunction num
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
+    -> (MathEqn num -> MathEqn num -> MathEqn num -> MathEqn num -> MathEqn num -> MathEqn num)
+    -> MathEqn num -> MathEqn num -> MathEqn num -> MathEqn num -> MathEqn num
+    -> Maybe (MathEqn num)
   eval5 f constr a' b' c' d' t' =
     let { a = loop a'; b = loop b'; c = loop c'; d = loop d'; t = loop t' } in
     FFConst  <$> (f <$> getConst a <*> getConst b <*> getConst c <*> getConst d <*> getConst t) <|>
@@ -404,15 +381,15 @@ reduceRealValue a = maybe a id $ reduce a where
     FFDouble <$> (f <$> getDouble a <*> getDouble b <*> getDouble c <*> getDouble d <*> getDouble t) <|>
     FFDouble <$> (f <$> getAnyDouble a <*> getAnyDouble b <*> getAnyDouble c <*> getAnyDouble d <*> getAnyDouble t) <|>
     pure (constr a b c d t)
-{-# SPECIALIZE reduceRealValue :: RealValueFunction ProcGenFloat -> RealValueFunction ProcGenFloat #-}
+{-# SPECIALIZE reduceMathEqn :: MathEqn ProcGenFloat -> MathEqn ProcGenFloat #-}
 
-forceRealValue
+forceEvalMathEqn
   :: forall m num
      . (Monad m, MonadRandom m, RealFrac num, Floating num,
         EnvelopeDomain num, ClampedDomain num, ModulousDomain num,
         PeriodicDomain num, ActivationDomain num, PulsedSinusoidalDomain num)
-  => RealValueFunction num -> m num
-forceRealValue = let eval = forceRealValue in \ case
+  => MathEqn num -> m num
+forceEvalMathEqn = let eval = forceEvalMathEqn in \ case
   FFConst        a         -> pure a
   FFInteger      a         -> pure $ realToFrac a
   FFFloat        a         -> pure $ realToFrac a
@@ -470,10 +447,10 @@ forceRealValue = let eval = forceRealValue in \ case
   FFFadeInOut    a b c d t -> fadeInOut   <$> eval a <*> eval b <*> eval c <*> eval d <*> eval t
   FFNormal       a       t -> normal      <$> eval a <*> eval t
   FFBeta         a       t -> beta        <$> eval a <*> eval t
-{-# SPECIALIZE forceRealValue :: MonadRandom m => RealValueFunction ProcGenFloat -> m ProcGenFloat #-}
+{-# SPECIALIZE forceEvalMathEqn :: MonadRandom m => MathEqn ProcGenFloat -> m ProcGenFloat #-}
 
-reduceDouble :: (Monad m, MonadRandom m) => RealValueFunction Double -> m Double
-reduceDouble = forceRealValue
+reduceDouble :: (Monad m, MonadRandom m) => MathEqn Double -> m Double
+reduceDouble = forceEvalMathEqn
 
-reduceFloat :: (Monad m, MonadRandom m) => RealValueFunction Float -> m Float
-reduceFloat = forceRealValue
+reduceFloat :: (Monad m, MonadRandom m) => MathEqn Float -> m Float
+reduceFloat = forceEvalMathEqn

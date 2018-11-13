@@ -76,7 +76,7 @@ import           Text.Printf
 data SynthComponent
   = SynthComponent
     { theSynthCompTimeInterval :: !(TimeWindow Moment)
-    , theSynthCompFrequency    :: !(RealValueFunction ProcGenFloat)
+    , theSynthCompFrequency    :: !FloatEqn
     }
 
 ----------------------------------------------------------------------------------------------------
