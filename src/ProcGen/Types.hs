@@ -934,8 +934,25 @@ reduceRealValue a = maybe a id $ reduce a where
     FFUnitSine  a     -> eval1 FFUnitSine (float1 unitSine) a
     FFClamp0_1  a     -> eval1 FFClamp0_1 (float1 clamp0_1) a
     FFClamp1_1  a     -> eval1 FFClamp1_1 (float1 clamp1_1) a
-    FFNormal    a b   -> eval2 FFNormal (float2 normal) a b
-    FFBeta      a b   -> eval2 FFBeta   (float2 beta)   a b
+    FFNormal    a b   -> eval2 FFNormal   (float2 normal)  a b
+    FFBeta      a b   -> eval2 FFBeta     (float2 beta)    a b
+    FFSlope     a b c -> eval3 FFSlope    (envel slope) a b c
+    FFSigmoid   a b c -> eval3 FFSigmoid  (envel sigmoid) a b c
+    FFSine2     a b c -> eval3 FFSine2    (envel sineSquared) a b c
+    FFBezier3   a b c d t -> eval5 bezier3 FFBezier3 a b c d t
+    FFFadeInOut a b c d t -> eval5 fadeInOut FFFadeInOut a b c d t
+    FFSinePulse a' b'  t' -> let { a = loop a'; b = loop b'; t = loop t'; } in
+      FFConst  <$> (sinePulse <$> getConst a <*> getConst b <*> getConst t) <|>
+      FFFloat  <$> (sinePulse <$> getFloat a <*> getFloat b <*> getFloat t) <|>
+      FFDouble <$> (sinePulse <$> getDouble a <*> getDouble b <*> getDouble t) <|>
+      FFDouble <$> (sinePulse <$> getAnyDouble a <*> getAnyDouble b <*> getAnyDouble t) <|>
+      pure (FFSinePulse a b t)
+    FFSinePulse3 a' b' c' t' -> let { a = loop a'; b = loop b'; c = loop c'; t = loop t'; } in
+      FFConst  <$> (sinePulse3 <$> getConst a <*> getConst b <*> getConst c <*> getConst t) <|>
+      FFFloat  <$> (sinePulse3 <$> getFloat a <*> getFloat b <*> getFloat c <*> getFloat t) <|>
+      FFDouble <$> (sinePulse3 <$> getDouble a <*> getDouble b <*> getDouble c <*> getDouble t) <|>
+      FFDouble <$> (sinePulse3 <$> getAnyDouble a <*> getAnyDouble b <*> getAnyDouble c <*> getAnyDouble t) <|>
+      pure (FFSinePulse3 a b c t)
   ffratio r    = FFRatio (numerator r) (denominator r)
   getConst     = \ case { FFConst   a -> pure a; _ -> empty; }
   getInteger   = \ case { FFInteger a -> pure a; _ -> empty; }
@@ -952,18 +969,30 @@ reduceRealValue a = maybe a id $ reduce a where
     FFDouble  a -> pure $ realToFrac a
     FFFloat   a -> pure $ realToFrac a
     _           -> empty
+  toFloat constr = \ case
+    FFConst   a -> pure $ constr $ realToFrac a
+    FFFloat   a -> pure $ constr $ realToFrac a
+    FFDouble  a -> pure $ constr $ realToFrac a
+    FFInteger a -> pure $ constr $ realToFrac $ a % 1
+    FFRatio a b -> pure $ constr $ realToFrac $ a % b
+    _           -> empty
+  toInt
+    :: (forall n . RealFrac n => n -> Integer)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  toInt round = \ case
+    FFConst   a -> pure $ FFInteger $ round a
+    FFFloat   a -> pure $ FFInteger $ round a
+    FFDouble  a -> pure $ FFInteger $ round a
+    FFInteger a -> pure $ FFInteger a
+    FFRatio a b -> pure $ FFInteger $ round $ a % b
+    _           -> empty
+  --------------------------------------------------------------------------------
   get1Value
     :: (v -> v)
     -> (RealValueFunction num -> Maybe v)
     -> (v -> RealValueFunction num)
     -> RealValueFunction num -> Maybe (RealValueFunction num)
   get1Value f get constr a = constr . f <$> get a
-  get2Values
-    :: (v -> v -> v)
-    -> (RealValueFunction num -> Maybe v)
-    -> (v -> RealValueFunction num)
-    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
-  get2Values   f get constr a b = constr <$> (f <$> get a <*> get b)
   float1
     :: (forall n .
           (RealFrac n, Floating n,
@@ -983,27 +1012,22 @@ reduceRealValue a = maybe a id $ reduce a where
     :: Fractional f
     => (f -> RealValueFunction num)
     -> RealValueFunction num -> Maybe (RealValueFunction num)
-  toFloat constr = \ case
-    FFConst   a -> pure $ constr $ realToFrac a
-    FFFloat   a -> pure $ constr $ realToFrac a
-    FFDouble  a -> pure $ constr $ realToFrac a
-    FFInteger a -> pure $ constr $ realToFrac $ a % 1
-    FFRatio a b -> pure $ constr $ realToFrac $ a % b
-    _           -> empty
-  toInt
-    :: (forall n . RealFrac n => n -> Integer)
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
-  toInt round = \ case
-    FFConst   a -> pure $ FFInteger $ round a
-    FFFloat   a -> pure $ FFInteger $ round a
-    FFDouble  a -> pure $ FFInteger $ round a
-    FFInteger a -> pure $ FFInteger a
-    FFRatio a b -> pure $ FFInteger $ round $ a % b
-    _           -> empty
   real1
     :: (forall n . Real n => n -> n)
     -> RealValueFunction num -> Maybe (RealValueFunction num)
   real1 f a = get1Value f getInteger FFInteger a <|> float1 f a <|> ratio1 f a
+  eval1
+    :: (RealValueFunction num -> RealValueFunction num)
+    -> (RealValueFunction num -> Maybe (RealValueFunction num))
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  eval1 constr eval a' = let a = loop a' in eval a <|> pure (constr a)
+  --------------------------------------------------------------------------------
+  get2Values
+    :: (v -> v -> v)
+    -> (RealValueFunction num -> Maybe v)
+    -> (v -> RealValueFunction num)
+    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+  get2Values   f get constr a b = constr <$> (f <$> get a <*> get b)
   float2
     :: (forall n .
           (RealFrac n, Floating n, ModulousDomain n, MinMaxDomain n,
@@ -1023,11 +1047,6 @@ reduceRealValue a = maybe a id $ reduce a where
     :: (forall n . (Real n, MinMaxDomain n) => n -> n -> n)
     -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
   real2 f a b = get2Values f getInteger FFInteger a b <|> float2 f a b <|> ratio2 f a b
-  eval1
-    :: (RealValueFunction num -> RealValueFunction num)
-    -> (RealValueFunction num -> Maybe (RealValueFunction num))
-    -> RealValueFunction num -> Maybe (RealValueFunction num)
-  eval1 constr eval a' = let a = loop a' in eval a <|> pure (constr a)
   eval2
     :: (RealValueFunction num -> RealValueFunction num -> RealValueFunction num)
     -> (RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num))
@@ -1036,6 +1055,42 @@ reduceRealValue a = maybe a id $ reduce a where
     let a = loop a'
     let b = loop b'
     eval a b <|> pure (constr a b)
+  --------------------------------------------------------------------------------
+  envel
+    :: (forall n . (RealFrac n, Floating n, EnvelopeDomain n) => TimeWindow n -> n -> n)
+    -> RealValueFunction num -> RealValueFunction num -> RealValueFunction num
+    -> Maybe (RealValueFunction num)
+  envel f a b c =
+    FFConst  <$> (f <$> (TimeWindow <$> getConst     a <*> getConst     b) <*> getConst     c) <|>
+    FFFloat  <$> (f <$> (TimeWindow <$> getFloat     a <*> getFloat     b) <*> getFloat     c) <|>
+    FFDouble <$> (f <$> (TimeWindow <$> getDouble    a <*> getDouble    b) <*> getDouble    c) <|>
+    FFDouble <$> (f <$> (TimeWindow <$> getAnyDouble a <*> getAnyDouble b) <*> getAnyDouble c)
+  eval3 constr eval a' b' c' = do
+    let a = loop a'
+    let b = loop b'
+    let c = loop c'
+    eval a b c <|> pure (constr a b c)
+  --------------------------------------------------------------------------------
+  eval5
+    :: (forall n .
+          (RealFrac n, Floating n, ActivationDomain n, EnvelopeDomain n)
+           => n -> n -> n -> n -> n -> n
+       )
+    -> (   RealValueFunction num -> RealValueFunction num
+        -> RealValueFunction num -> RealValueFunction num
+        -> RealValueFunction num -> RealValueFunction num
+       )
+    -> RealValueFunction num -> RealValueFunction num
+    -> RealValueFunction num -> RealValueFunction num
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  eval5 f constr a' b' c' d' t' =
+    let { a = loop a'; b = loop b'; c = loop c'; d = loop d'; t = loop t' } in
+    FFConst  <$> (f <$> getConst a <*> getConst b <*> getConst c <*> getConst d <*> getConst t) <|>
+    FFFloat  <$> (f <$> getFloat a <*> getFloat b <*> getFloat c <*> getFloat d <*> getFloat t) <|>
+    FFDouble <$> (f <$> getDouble a <*> getDouble b <*> getDouble c <*> getDouble d <*> getDouble t) <|>
+    FFDouble <$> (f <$> getAnyDouble a <*> getAnyDouble b <*> getAnyDouble c <*> getAnyDouble d <*> getAnyDouble t) <|>
+    pure (constr a b c d t)
+
 
 forceRealValue
   :: forall m num
