@@ -5,6 +5,7 @@ module ProcGen.Types
 
 import           ProcGen.PrimeNumbers
 
+import           Control.Applicative
 import           Control.Monad.Random
 
 import           Data.Int
@@ -59,7 +60,8 @@ type Percentage  = ProcGenFloat
 --
 -- As a law, the output of an 'Envelope' function must be on the inclusive interval
 -- @[0 .. 1]@ for all input 'Moment's, although there is no type-level enforcement of this law.
-type Envelope = TimeWindow Moment -> Moment -> Amplitude
+type GenEnvelope n = TimeWindow n -> n -> n
+type Envelope = GenEnvelope ProcGenFloat
 
 -- | A 1-D continuous probability fistribution function
 type CPDFunction = Moment -> Probability
@@ -84,6 +86,24 @@ class TimeDomain f where
 -- | A class of frequency domain functions that can produce an 'Amplitude' from a 'Frequency'.
 class FreqDomain f where
   amplitude :: f -> Frequency -> Amplitude
+
+-- | A type class for functions that have a 'Prelude.min', 'Prelude.max', 'Prelude.minimum', and
+-- 'Prelude.maximum' implementation.
+class Ord n => MinMaxDomain n where
+  minOf :: n -> n -> n
+  minOf = min
+  maxOf :: n -> n -> n
+  maxOf = max
+  foldMin :: n -> [n] -> n
+  foldMin = foldr minOf
+  foldMax :: n -> [n] -> n
+  foldMax = foldr maxOf
+
+instance MinMaxDomain Int
+instance MinMaxDomain Float
+instance MinMaxDomain Double
+instance MinMaxDomain Integer
+instance (Integral n, MinMaxDomain n) => MinMaxDomain (Ratio n)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -148,14 +168,6 @@ toSample = (* (32704.0 / (32768.0 * 32768.0))) . realToFrac
 wordToSample :: Word16 -> Sample
 wordToSample = toSample . fromIntegral
 
--- | Clamp a value between 0 and 1.
-clamp0_1 :: (Fractional x, Ord x) => x -> x
-clamp0_1 = min 1.0 . max 0.0
-
--- | Clamp a value between -1 and 1.
-clamp1_1 :: (Fractional x, Ord x) => x -> x
-clamp1_1 = min 1.0 . max (negate 1.0)
-
 -- | Convert a 'SampleCount' (the number of samples in a quantized time domain function) to a time
 -- 'Duration' measured in seconds.
 sampleCountDuration :: SampleCount -> Duration
@@ -166,15 +178,6 @@ sampleCountDuration = (/ sampleRate) . realToFrac
 -- of samples required to span the given time 'Duration'.
 durationSampleCount :: Duration -> SampleCount
 durationSampleCount = ceiling . (* sampleRate)
-
--- | Continuous modulus function, useful for points traversing continuous cyclical curves. The
--- result of @contMod a b@ is a value between 0 and @b@ (or between @-b@ and 0 if @a@ is negative).
-contMod :: ProcGenFloat -> ProcGenFloat -> ProcGenFloat
-contMod a b = mod (if a<0 then negate else id)
-  (if b<0 then ceiling :: ProcGenFloat -> Integer else floor :: ProcGenFloat -> Integer)
-  (abs a) (abs b)
-  where
-    mod negate round a b = negate $ a - realToFrac (round (a / b)) * b
 
 -- | Prepare a list of elements for a discrete differentiation by pairing each element with it's
 -- neighbour. For example, the expression @('diffList' [1,2,3,4])@ will yield the result:
@@ -198,119 +201,238 @@ diffList = init where
     [a]    -> [(a, a0)]
     a:b:ax -> (a, b) : loop a0 (b:ax)
 
--- | Given 4 control points, compute the curve value for a single parametric value.
-bezier3 :: Floating n => n -> n -> n -> n -> n -> n
-bezier3 a b c d t = a*(1-t)**3 + b*3*t*(1-t)**2 + c*3*(1-t)*t**2 + d*t**3
+----------------------------------------------------------------------------------------------------
 
--- | A time domain function computing unit sine wave function, where the period of the sineusoid is
--- 1, rather than 2π.
-unitSine :: Floating n => n -> n
-unitSine = sin . ((2*pi) *)
+-- | Clamping values to a limit between 0 and 1, or between -1 and 1. There is no minimal complete
+-- definition, all functions can be dervied with a stand-alone instance. This class exists to
+-- provide an alternative lazy evaluation scheme for the 'RealValueFunction' data type.
+class (Fractional n, MinMaxDomain n) => ClampedDomain n where
+  -- | Clamp a value between 0 and 1.
+  clamp0_1 :: n -> n
+  clamp0_1 = min 1.0 . max 0.0
 
--- | A time domain function computing periodic unit sawtooth function.
-sawtooth :: (Floating n, RealFrac n) => n -> n
-sawtooth t0 = let t = 2*t0 + 0.5 in 2*(t - realToFrac (floor t :: Integer)) - 1
+  -- | Clamp a value between -1 and 1.
+  clamp1_1 :: n -> n
+  clamp1_1 = min 1.0 . max (negate 1.0)
 
--- | A time domain function computing periodic unit triangular function.
-triangle :: (Floating n, RealFrac n) => n -> n
-triangle t0 = let t = 2*t0 + 0.5 in 2*(abs $ sawtooth t) - 1
+instance ClampedDomain Float
+instance ClampedDomain Double
 
--- | A time domain function computing periodic unit triangular function.
-square :: (Floating n, RealFrac n) => n -> n
-square t0 = (if t0 - (realToFrac (round t0 :: Int)) < 0.5 then id else negate) 1
+----------------------------------------------------------------------------------------------------
 
--- | An 'Envelope' increasing linearly from zero to one starting at a given 'Moment' and increasing
--- to one over a period of 'TimeSpan' amount of time.
+-- | Modulous over real number approximating data types i.e. the 'Float' and 'Double' data
+-- types). There is no minimal complete definition, all functions can be dervied with a stand-alone
+-- instance. This class exists to provide an alternative lazy evaluation scheme for the
+-- 'RealValueFunction' data type.
+class ModulousDomain n where
+  -- | Modulous over a continuous value, implemented in terms of the 'Prelude.round' function.
+  contMod  :: n -> n -> n
+
+instance ModulousDomain Float    where { contMod = realFracContMod; }
+instance ModulousDomain Double   where { contMod = realFracContMod; }
+instance ModulousDomain Rational where { contMod = realFracContMod; }
+
+-- | A generalized version of 'contMod' which works for any 'Ord' 'RealFrac' data type.
+realFracContMod :: forall n . (Ord n, RealFrac n) => n -> n -> n
+realFracContMod a b = mod (if a<0 then negate else id)
+  (if b<0 then ceiling :: n -> Integer else floor :: n -> Integer)
+  (abs a) (abs b)
+  where
+    mod negate round a b = negate $ a - realToFrac (round (a / b)) * b
+
+----------------------------------------------------------------------------------------------------
+
+-- | Periodic fundamental wave functions for real number approximating data types i.e. 'Float' and
+-- 'Double'. All of these functions have a period of exacly 1 unit. There is no minimal complete
+-- definition, all functions can be dervied with a stand-alone instance. This class exists to
+-- provide an alternative lazy evaluation scheme for the 'RealValueFunction' data type.
+class PeriodicDomain n where
+  -- | A time domain function computing unit sine wave function, where the period of the sineusoid is
+  -- 1, rather than 2π.
+  unitSine :: n -> n
+  -- | A time domain function computing periodic unit sawtooth function.
+  sawtooth :: n -> n
+  -- | A time domain function computing periodic unit triangular function.
+  triangle :: n -> n
+  -- | A time domain function computing periodic unit triangular function.
+  square   :: n -> n
+
+instance PeriodicDomain Float where
+  unitSine = floatUnitSine
+  sawtooth = floatSawtooth
+  triangle = floatTriangle
+  square   = floatSquare
+
+instance PeriodicDomain Double where
+  unitSine = floatUnitSine
+  sawtooth = floatSawtooth
+  triangle = floatTriangle
+  square   = floatSquare
+
+-- | A generalized version of 'unitSine' that works for any 'Floating' 'RealFrac' value.
+floatUnitSine ::  (Floating n, RealFrac n) => n -> n
+floatUnitSine = sin . ((2*pi) *)
+
+-- | A generalized version of 'sawtooth' that works for any 'Floating' 'RealFrac' value.
+floatSawtooth ::  (Floating n, RealFrac n) => n -> n
+floatSawtooth t0 = let t = 2*t0 + 0.5 in 2*(t - realToFrac (floor t :: Integer)) - 1
+
+-- | A generalized version of 'triangle' that works for any 'Floating' 'RealFrac' value.
+floatTriangle ::  (Floating n, RealFrac n) => n -> n
+floatTriangle t0 = let t = 2*t0 + 0.5 in 2*(abs $ floatSawtooth t) - 1
+
+-- | A generalized version of 'square' that works for any 'Floating' 'RealFrac' value.
+floatSquare ::  (Floating n, RealFrac n) => n -> n
+floatSquare t0 = (if t0 - (realToFrac (round t0 :: Int)) < 0.5 then id else negate) 1
+
+----------------------------------------------------------------------------------------------------
+
+-- | Envelope functions for real number approximating data types, i.e. 'Float' and 'Double'. There
+-- is no minimal complete definition, all functions can be dervied with a stand-alone instance. This
+-- class exists to provide an alternative lazy evaluation scheme for the 'RealValueFunction' data
+-- type.
+class (Ord n, Floating n) => EnvelopeDomain n where
+  -- | An 'Envelope' increasing linearly from zero to one starting at a given 'Moment' and
+  -- increasing to one over a period of 'TimeSpan' amount of time. This function can be thought of
+  -- as 'relu'-like function that is parameterized like an 'Envelop' function.
+  --
+  -- A negative 'TimeSpan' indicates the envelope should go from one to zero.
+  slope :: Floating n => GenEnvelope n
+  slope (TimeWindow{timeStart=t0,timeEnd=t1}) t = let tw = t1-t0 in case compare tw 0 of
+    EQ -> if t< t0 then 0 else 1
+    LT -> if t<=t0 then 1 else if t>=t0 then 0 else 1 + (t-t0)/tw
+    GT -> if t<=t0 then 0 else if t>=t1 then 1 else (t-t0)/tw
+
+  -- | An 'Envelope' increasing over gradual a sigmoidal function from zero to one starting at a
+  -- given 'Moment' and increasing to one over a period of 'TimeSpan' amount of time.
+  --
+  -- A negative 'TimeSpan' indicates the envelope should go from one to zero. The sigmoidal function
+  -- is approximated by a polynomial, so it is not the genuine equation for the sigmoid which
+  -- computes an exponent of the natural base value @e@, but the approximation is more than close
+  -- enough and it also ensures the slope of the unit curve at t=0 and t=1 is exactly zero.
+  --
+  -- This function could certainly be in the 'ActivationDomain', but in this form it follows the
+  -- parameterization of an 'Envelope' function.
+  sigmoid :: GenEnvelope n
+  sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
+    let tw = t1 - t0
+        t = slope win t'
+        n = 4 -- n must be even
+    in  if tw==0 then if t'<t0 then 0 else 1 else
+        if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
+
+  -- | An 'Envelope' increasing over the square of the sine of @t@.
+  sineSquared :: GenEnvelope n
+  sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
+    let { tw = t1 - t0; t = slope win t'; } in
+    if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
+
+  -- | A function that constructs a fade-in and fade-out envelope.
+  fadeInOut
+    :: n -- ^ t0
+    -> n -- ^ t1 (fade-in occurs betwen t0 and t1)
+    -> n -- ^ t2 (no fading occurs between t1 and t2)
+    -> n -- ^ t3 (fade-out occurs between t2 and t3)
+    -> n -> n
+  fadeInOut t0 t1 t2 t3 t = sigmoid TimeWindow{ timeStart = t0, timeEnd = t1 } t *
+    (1.0 - sigmoid TimeWindow{ timeStart = t2, timeEnd = t3 } t)
+
+instance EnvelopeDomain Float
+instance EnvelopeDomain Double
+
+----------------------------------------------------------------------------------------------------
+
+-- | A domain of sinusoidal functions that have been multiplied by an envelope function to restrict
+-- their image to a single pulse shape. This function is a type class over real number approximating
+-- data types, i.e. 'Float' and 'Double'. There is no minimal complete definition, all functions can
+-- be dervied with a stand-alone instance. This class exists to provide an alternative lazy
+-- evaluation scheme for the 'RealValueFunction' data type.
+class
+  (Ord n, Floating n, ProbabilityDomain n, EnvelopeDomain n)
+  => PulsedSinusoidalDomain n where
+    -- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
+    -- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which
+    -- is produces a slightly distorted sinusoud with a duration of a single cycle.
+    sinePulse
+      :: n -- ^ Frequency
+      -> n -- ^ PhaseShift
+      -> n -> n
+    sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
+
+    -- | Like a 'sinePulse' but produces three cycles: 1 cycle with a sigmoidal ramp-up envelope, 1
+    -- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that
+    -- the name of this function has to do with the fact that it creates a sine pulse of three cycles,
+    -- not that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
+    sinePulse3
+      :: n -- ^ Frequency of the sine wave, also determines the size of the pulse equal to 3 times
+           -- the inverse of the frequency.
+      -> n -- ^ The start time of the pulse, where the signal ramps-up.
+      -> n -- ^ The phase shift of the sine wave relative to the above pulse start time.
+      -> n -> n
+    sinePulse3 freq t0 phase t = sin (2 * pi * freq * (t0 + phase + t)) *
+      fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
+
+instance PulsedSinusoidalDomain Float
+instance PulsedSinusoidalDomain Double
+
+----------------------------------------------------------------------------------------------------
+
+-- | A class of activation functions (a class of functions used in computing artificial neural
+-- networks, although this function does not include 'atan') for real value approximating data types
+-- i.e. 'Float' and 'Double'. There is no minimal complete definition, all functions can be dervied
+-- with a stand-alone instance. This class exists to provide an alternative lazy evaluation scheme
+-- for the 'RealValueFunction' data type.
 --
--- A negative 'TimeSpan' indicates the envelope should go from one to zero.
-slope :: Envelope
-slope (TimeWindow{timeStart=t0,timeEnd=t1}) t = let tw = t1-t0 in case compare tw 0 of
-  EQ -> if t< t0 then 0 else 1
-  LT -> if t<=t0 then 1 else if t>=t0 then 0 else 1 + (t-t0)/tw
-  GT -> if t<=t0 then 0 else if t>=t1 then 1 else (t-t0)/tw
+-- The 'sigmoid' function could certainly go here, but because it's formulation matches that of an
+-- 'Envelop'ed function, it is not a member of this type class but of the 'EnvelopeDomain' type
+-- class.
+class (Ord n, Floating n) => ActivationDomain n where
+  -- | Given 4 control points, compute the curve value for a single parametric value.
+  bezier3 :: n -> n -> n -> n -> n -> n
+  bezier3 a b c d t = a*(1-t)**3 + b*3*t*(1-t)**2 + c*3*(1-t)*t**2 + d*t**3
 
--- | An 'Envelope' increasing over gradual a sigmoidal function from zero to one starting at a given
--- 'Moment' and increasing to one over a period of 'TimeSpan' amount of time.
---
--- A negative 'TimeSpan' indicates the envelope should go from one to zero. The sigmoidal function
--- is approximated by a polynomial, so it is not the genuine equation for the sigmoid which computes
--- an exponent of the natural base value @e@, but the approximation is more than close enough and it
--- also ensures the slope of the unit curve at t=0 and t=1 is exactly zero.
-sigmoid :: Envelope
-sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
-  let tw = t1 - t0
-      t = slope win t'
-      n = 4 -- n must be even
-  in  if tw==0 then if t'<t0 then 0 else 1 else
-      if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
+  -- | The ReLU function, is an activation function used in neural networks which is defined as
+  -- @(\\t -> if t < 0 then 0 else t)@
+  relu :: (Ord n, Floating n) => n -> n
+  relu t = if t < 0 then 0 else t
 
--- | The ReLU function, is an activation function used in neural networks which is defined as
--- @(\t -> if t < 0 then 0 else t)@
-relu :: (Ord n, Floating n) => n -> n
-relu t = if t < 0 then 0 else t
+  -- | Like 'ReLU' but evaluates to a constant @c@ rather than 0 if the input @t@ is less than
+  -- @c@. Usually @c@ is very small, like @0.001@
+  leakyReLU :: (Ord n, Floating n) => n -> n -> n
+  leakyReLU c t = if t < c then c else t
 
--- | Like 'ReLU' but evaluates to a constant @c@ rather than 0 if the input @t@ is less than
--- @c@. Usually @c@ is very small, like @0.001@
-leakyReLU :: (Ord n, Floating n) => n -> n -> n
-leakyReLU c t = if t < c then c else t
-
--- | A function that constructs a fade-in and fade-out envelope.
-fadeInOut
-  :: Moment -- ^ t0
-  -> Moment -- ^ t1 (fade-in occurs betwen t0 and t1)
-  -> Moment -- ^ t2 (no fading occurs between t1 and t2)
-  -> Moment -- ^ t3 (fade-out occurs between t2 and t3)
-  -> Moment -> Sample
-fadeInOut t0 t1 t2 t3 t = sigmoid TimeWindow{ timeStart = t0, timeEnd = t1 } t *
-  (1.0 - sigmoid TimeWindow{ timeStart = t2, timeEnd = t3 } t)
-
--- | An 'Envelope' increasing over the square of the sine of @t@.
-sineSquared :: Envelope
-sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
-  let { tw = t1 - t0; t = slope win t'; } in
-  if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
-
--- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
--- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which is
--- produces a slightly distorted sinusoud with a duration of a single cycle.
-sinePulse :: Frequency -> PhaseShift -> Moment -> Sample
-sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
-
--- | Like a 'sinePulse' but produces three cycles: 1 cycle with a sigmoidal ramp-up envelope, 1
--- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that the
--- name of this function has to do with the fact that it creates a sine pulse of three cycles, not
--- that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
-sinePulse3
-  :: Frequency
-     -- ^ Frequency of the sine wave, also determines the size of the pulse equal to 3 times the
-     -- inverse of the frequency.
-  -> Moment -- ^ The start time of the pulse, where the signal ramps-up.
-  -> PhaseShift -- ^ The phase shift of the sine wave relative to the above pulse start time.
-  -> Moment -> Sample
-sinePulse3 freq t0 phase t = sin (2 * pi * freq * (t0 + phase + t)) *
-  fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
+instance ActivationDomain Float
+instance ActivationDomain Double
 
 -- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
 -- requires O(n) time to compute where @n@ is the length of the number of components. However for
 -- simpler functions with a few components, this function is useful.
-sinePulseSum :: [(Frequency, Moment)] -> Moment -> Sample
+sinePulseSum :: PulsedSinusoidalDomain n => [(n, n)] -> n -> n
 sinePulseSum comps t = case comps of
   [] -> 0
   (freq, t0):comps -> sinePulse freq t0 t + sinePulseSum comps t
 
--- | A normal normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
--- curve fits pretty nicely within the range between -1.0 and 1.0.
-normal :: TimeScale -> Moment -> Sample
-normal var x = exp $ negate $ x * x * exp 2 / var * var
+class Floating n => ProbabilityDomain n where
+  -- | A normal normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
+  -- curve fits pretty nicely within the range between -1.0 and 1.0.
+  normal
+    :: n -- ^ TimeScale
+    -> n -> n
+  normal var x = exp $ negate $ x * x * exp 2 / var * var
 
--- | Create a Beta distribution curve of rank @n@ where @n is the first paramter passed to this
--- function. The curve is not limited to the range between 'Moment's 0 and 1, however it is mostly
--- on this interval between 0 and 1 where this function is useful. The rank is compareable to the
--- rank of a polynomial, however non-integer values may be passed for exponentiation. The
--- reciporical of the rank defines where the peak value lies, that is for which value of @n@ such
--- that @(beta n (1/n)) == 1.0@.
-beta :: ProcGenFloat -> Moment -> Sample
-beta rank x = let n = rank - 1 in rank**rank * x * (1 - x)**n / n**n
+  -- | Create a Beta distribution curve of rank @n@ where @n is the first paramter passed to this
+  -- function. The curve is not limited to the range between 'Moment's 0 and 1, however it is mostly
+  -- on this interval between 0 and 1 where this function is useful. The rank is compareable to the
+  -- rank of a polynomial, however non-integer values may be passed for exponentiation. The
+  -- reciporical of the rank defines where the peak value lies, that is for which value of @n@ such
+  -- that @(beta n (1/n)) == 1.0@.
+  beta
+    :: n -- ^ polynomial rank
+    -> n -> n
+  beta rank x = let n = rank - 1 in rank**rank * x * (1 - x)**n / n**n
+
+instance ProbabilityDomain Float
+instance ProbabilityDomain Double
 
 -- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
 -- converting from a real-number value to an integer vector index, with linear smoothing for values
@@ -472,20 +594,22 @@ permute perm len list = if null list then [] else if len<=0 then list else
 ----------------------------------------------------------------------------------------------------
 
 -- | A function with strict stateful minimum and maximum values.
-data MinMax i = MinMax{ minValue :: !i, maxValue :: !i }
+data MinMax n = MinMax{ minValue :: !n, maxValue :: !n }
   deriving (Eq, Show, Read)
 
-instance Ord i => Semigroup (MinMax i) where
-  (MinMax a b) <> (MinMax c d) = MinMax (min a $ min b $ min c d) (max a $ max b $ max c d)
+instance MinMaxDomain n => Semigroup (MinMax n) where
+  (MinMax a b) <> (MinMax c d) = MinMax
+    (min a $ min b $ min c d)
+    (max a $ max b $ max c d)
 
-instance (Ord i, Bounded i) => Monoid (MinMax i) where
+instance (MinMaxDomain n, Bounded n) => Monoid (MinMax n) where
   mempty = MinMax{ minValue = maxBound, maxValue = minBound }
   mappend = (<>)
 
-stepMinMax :: Ord i => MinMax i -> i -> MinMax i
+stepMinMax :: MinMaxDomain n => MinMax n -> n -> MinMax n
 stepMinMax (MinMax lo hi) i = MinMax (min lo i) (max hi i)
 
-minMax :: (Bounded i, Ord i) => [i] -> MinMax i
+minMax :: (Bounded n, MinMaxDomain n) => [n] -> MinMax n
 minMax = foldl stepMinMax mempty
 
 ----------------------------------------------------------------------------------------------------
@@ -534,15 +658,16 @@ twIntersect (TimeWindow{ timeStart=a0, timeEnd=a1 }) (TimeWindow{ timeStart=b0, 
       bHi  = max b0 b1
       neg  = if aNeg && not bNeg || not aNeg && bNeg then id else (\ (a,b) -> (b,a))
   in fmap ((\ (t0, t1) -> TimeWindow{ timeStart=t0, timeEnd=t1 }) . neg) $ case compare aLo bLo of
-        EQ -> Just (aLo, min aHi bLo)
+        EQ -> Just (aLo, Prelude.min aHi bLo)
         LT -> if aHi < bLo then Nothing else Just (aHi, bLo)
         GT -> if bHi < aLo then Nothing else Just (bHi, aLo)
 
 -- | Compute the minimum bounding window required to fit both windows given. This is like a union of
 -- two windows except the windows need not overlap.
 twMinBounds :: Ord t => TimeWindow t -> TimeWindow t -> TimeWindow t
-twMinBounds a b = TimeWindow{ timeStart = minimum times, timeEnd = maximum times } where
-  times = [timeStart a, timeEnd a, timeStart b, timeEnd b]
+twMinBounds a b =
+  TimeWindow{ timeStart = Prelude.minimum times, timeEnd = Prelude.maximum times } where
+    times = [timeStart a, timeEnd a, timeStart b, timeEnd b]
 
 twMinBoundsAll :: (Eq n, Ord n, Num n) => [TimeWindow n] -> Maybe (TimeWindow n)
 twMinBoundsAll = \ case
@@ -577,7 +702,8 @@ twIterate = fmap timeIndex . twMoments
 -- vector. Pass the length of the vector as the first parameter.
 twIndicies :: Int -> TimeWindow Moment -> [Int]
 twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
-  [max 0 $ min (len - 1) $ durationSampleCount t0 .. min (len - 1) $ durationSampleCount end]
+  [Prelude.max 0 $ Prelude.min (len - 1) $ durationSampleCount t0 ..
+   Prelude.min (len - 1) $ durationSampleCount end]
 
 ----------------------------------------------------------------------------------------------------
 
@@ -608,55 +734,85 @@ data RealValueFunction num
   | FFBeta5Rand
      -- ^ A beta-distributed random variable with a beta function of polynomial degree 5, generating
      -- a value between 0 and 1 with @(1/5)@ being the value most commonly generated.
-  | FFAdd       (RealValueFunction num)  (RealValueFunction num)
-  | FFMul       (RealValueFunction num)  (RealValueFunction num)
-  | FFMin       (RealValueFunction num)  (RealValueFunction num)
-  | FFMax       (RealValueFunction num)  (RealValueFunction num)
-  | FFToFloat   (RealValueFunction num)
+  | FFAdd        (RealValueFunction num)  (RealValueFunction num)
+  | FFMul        (RealValueFunction num)  (RealValueFunction num)
+  | FFMin        (RealValueFunction num)  (RealValueFunction num)
+  | FFMod        (RealValueFunction num)  (RealValueFunction num)
+  | FFMax        (RealValueFunction num)  (RealValueFunction num)
+  | FFToFloat    (RealValueFunction num)
     -- ^ evaluates a function to a 'Float' constant
-  | FFToDouble  (RealValueFunction num)
+  | FFToDouble   (RealValueFunction num)
     -- ^ evaluates a function to a 'Double' constant
-  | FFRound     (RealValueFunction num)
-    -- ^ evaluates a function to an 'Int' constant by rounding
-  | FFFloor     (RealValueFunction num)
-    -- ^ evaluates a function to an 'Int' constant by taking the 'floor'
-  | FFCeiling   (RealValueFunction num)
-    -- ^ evaluates a function to an 'Int' constant by taking the 'ceiling'
-  | FFNegate    (RealValueFunction num)
-  | FFAbs       (RealValueFunction num)
-  | FFSignNum   (RealValueFunction num)
-  | FFRecip     (RealValueFunction num)
-  | FFExp       (RealValueFunction num)
+  | FFRound      (RealValueFunction num)
+    -- ^ evaluates a function to an 'Integer' constant by rounding
+  | FFFloor      (RealValueFunction num)
+    -- ^ evaluates a function to an 'Integer' constant by taking the 'floor'
+  | FFCeiling    (RealValueFunction num)
+    -- ^ evaluates a function to an 'Integer' constant by taking the 'ceiling'
+  | FFNegate     (RealValueFunction num)
+  | FFAbs        (RealValueFunction num)
+  | FFSignNum    (RealValueFunction num)
+  | FFRecip      (RealValueFunction num)
+  | FFExp        (RealValueFunction num)
     -- ^ Take the constant @e@ to the power of a value
-  | FFLog       (RealValueFunction num)
+  | FFSqrt       (RealValueFunction num)
+  | FFLog        (RealValueFunction num)
     -- ^ Take the natural logarithm of a value
-  | FFPow       (RealValueFunction num)  (RealValueFunction num)
-  | FFLogBase   (RealValueFunction num)  (RealValueFunction num)
-  | FFSin       (RealValueFunction num)
-  | FFCos       (RealValueFunction num)
-  | FFTan       (RealValueFunction num)
-  | FFASin      (RealValueFunction num)
-  | FFACos      (RealValueFunction num)
-  | FFATan      (RealValueFunction num)
-  | FFSinH      (RealValueFunction num)
-  | FFCosH      (RealValueFunction num)
-  | FFTanH      (RealValueFunction num)
-  | FFASinH     (RealValueFunction num)
-  | FFACosH     (RealValueFunction num)
-  | FFATanH     (RealValueFunction num)
-  | FFSqrt      (RealValueFunction num)
-  | FFReLU      (RealValueFunction num)
-  | FFLeakyReLU (RealValueFunction num) (RealValueFunction num)
-  | FFSawtooth  (RealValueFunction num)
-  | FFTriangle  (RealValueFunction num)
-  | FFSquare    (RealValueFunction num)
-  | FFUnitSine  (RealValueFunction num)
-  | FFBezier3   (RealValueFunction num)
-                (RealValueFunction num)
-                (RealValueFunction num)
-                (RealValueFunction num)
-                (RealValueFunction num)
-  deriving (Eq, Functor)
+  | FFPow        (RealValueFunction num)  (RealValueFunction num)
+  | FFLogBase    (RealValueFunction num)  (RealValueFunction num)
+  | FFSin        (RealValueFunction num)
+  | FFCos        (RealValueFunction num)
+  | FFTan        (RealValueFunction num)
+  | FFASin       (RealValueFunction num)
+  | FFACos       (RealValueFunction num)
+  | FFATan       (RealValueFunction num)
+  | FFSinH       (RealValueFunction num)
+  | FFCosH       (RealValueFunction num)
+  | FFTanH       (RealValueFunction num)
+  | FFASinH      (RealValueFunction num)
+  | FFACosH      (RealValueFunction num)
+  | FFATanH      (RealValueFunction num)
+  | FFReLU       (RealValueFunction num)
+  | FFLeakyReLU  (RealValueFunction num) (RealValueFunction num)
+  | FFSawtooth   (RealValueFunction num)
+  | FFTriangle   (RealValueFunction num)
+  | FFSquare     (RealValueFunction num)
+  | FFUnitSine   (RealValueFunction num)
+  | FFClamp0_1   (RealValueFunction num)
+  | FFClamp1_1   (RealValueFunction num)
+  | FFBezier3    (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFSlope      (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFSigmoid    (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFSine2      (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFFadeInOut  (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFSinePulse  (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFSinePulse3 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+                 (RealValueFunction num)
+  | FFNormal     (RealValueFunction num) (RealValueFunction num)
+  | FFBeta       (RealValueFunction num) (RealValueFunction num)
+  deriving (Eq, Ord, Functor)
+
+instance Ord num => MinMaxDomain (RealValueFunction num) where
+  minOf = FFMin
+  maxOf = FFMax
 
 instance Num (RealValueFunction num) where
   (+) a b     = FFAdd a b
@@ -692,59 +848,231 @@ instance Floating num => Floating (RealValueFunction num) where
   acosh   = FFACosH
   atanh   = FFATanH
 
+instance Ord num => ClampedDomain (RealValueFunction num) where
+  clamp0_1 = FFClamp0_1
+  clamp1_1 = FFClamp1_1
+
+instance (Ord num, RealFrac num) => ModulousDomain (RealValueFunction num) where
+  contMod = FFMod
+
+instance PeriodicDomain num => PeriodicDomain (RealValueFunction num) where
+  unitSine = FFUnitSine
+  sawtooth = FFSawtooth
+  triangle = FFTriangle
+  square   = FFSquare
+
+instance EnvelopeDomain num => EnvelopeDomain (RealValueFunction num) where
+  slope       (TimeWindow a b) = FFSlope     a b
+  sigmoid     (TimeWindow a b) = FFSigmoid   a b
+  sineSquared (TimeWindow a b) = FFSine2     a b
+  fadeInOut                    = FFFadeInOut
+
+instance ProbabilityDomain num => ProbabilityDomain (RealValueFunction num) where
+  normal = FFNormal
+  beta   = FFBeta
+
+instance PulsedSinusoidalDomain num => PulsedSinusoidalDomain (RealValueFunction num) where
+  sinePulse  = FFSinePulse
+  sinePulse3 = FFSinePulse3
+
+-- | Force computation of equation as much as possible without forcing evaluation of any of the
+-- random variables.
 reduceRealValue
-  :: forall m num . (Monad m, MonadRandom m, Num num, RealFrac num, Floating num)
+  :: forall num
+     . (RealFrac num, Floating num,
+        EnvelopeDomain num, ClampedDomain num, ModulousDomain num,
+        PeriodicDomain num, ActivationDomain num, PulsedSinusoidalDomain num)
+  => RealValueFunction num -> RealValueFunction num
+reduceRealValue a = maybe a id $ reduce a where
+  loop = reduceRealValue
+  reduce = \ case
+    a@FFConst{}       -> pure a
+    a@FFInteger{}     -> pure a
+    a@FFFloat{}       -> pure a
+    a@FFDouble{}      -> pure a
+    a@FFRatio{}       -> pure a
+    a@FFUniformRand{} -> pure a
+    a@FFNormalRand{}  -> pure a
+    a@FFBeta3Rand{}   -> pure a
+    a@FFBeta5Rand{}   -> pure a
+    FFToFloat  a      -> eval1 FFToFloat  (toFloat FFFloat)  a
+    FFToDouble a      -> eval1 FFToDouble (toFloat FFDouble) a
+    FFAdd     a b     -> eval2 FFAdd (real2 (+)) a b
+    FFMul     a b     -> eval2 FFMul (real2 (*)) a b
+    FFMod     a b     -> eval2 FFMod (float2 contMod) a b
+    FFMax     a b     -> eval2 FFMax (real2 maxOf) a b
+    FFMin     a b     -> eval2 FFMin (real2 minOf) a b
+    FFNegate  a       -> eval1 FFNegate (real1 negate) a
+    FFAbs     a       -> eval1 FFAbs (real1 abs) a
+    FFSignNum a       -> eval1 FFSignNum (real1 signum) a
+    FFRecip   a       -> eval1 FFRecip (float1 recip) a
+    FFExp     a       -> eval1 FFExp (float1 exp) a
+    FFLog     a       -> eval1 FFLog (float1 log) a
+    FFSqrt    a       -> eval1 FFSqrt (float1 sqrt) a
+    FFPow     a b     -> eval2 FFPow (float2 (**)) a b
+    FFLogBase a b     -> eval2 FFLogBase (float2 logBase) a b
+    FFSin     a       -> eval1 FFSin (float1 sin) a
+    FFCos     a       -> eval1 FFCos (float1 cos) a
+    FFTan     a       -> eval1 FFTan (float1 tan) a
+    FFASin    a       -> eval1 FFASin (float1 asin) a
+    FFACos    a       -> eval1 FFACos (float1 acos) a
+    FFATan    a       -> eval1 FFATan (float1 atan) a
+    FFSinH    a       -> eval1 FFSinH (float1 sinh) a
+    FFCosH    a       -> eval1 FFCosH (float1 cosh) a
+    FFTanH    a       -> eval1 FFTanH (float1 tanh) a
+    FFASinH   a       -> eval1 FFASinH (float1 asinh) a
+    FFACosH   a       -> eval1 FFACosH (float1 acosh) a
+    FFATanH   a       -> eval1 FFATanH (float1 atanh) a
+  ffratio r    = FFRatio (numerator r) (denominator r)
+  getConst     = \ case { FFConst   a -> pure a; _ -> empty; }
+  getInteger   = \ case { FFInteger a -> pure a; _ -> empty; }
+  getFloat     = \ case { FFFloat   a -> pure a; _ -> empty; }
+  getDouble    = \ case { FFDouble  a -> pure a; _ -> empty; }
+  getRatio     = \ case { FFRatio a b -> pure (a % b); _ -> empty; }
+  getAnyDouble = \ case
+    FFDouble a -> pure a
+    FFFloat  a -> pure $ realToFrac a
+    _          -> empty
+  getAnyRatio  = \ case
+    FFRatio a b -> pure $ a % b
+    FFInteger a -> pure $ a % 1
+    FFDouble  a -> pure $ realToFrac a
+    FFFloat   a -> pure $ realToFrac a
+    _           -> empty
+  get1Value
+    :: (v -> v)
+    -> (RealValueFunction num -> Maybe v)
+    -> (v -> RealValueFunction num)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  get1Value f get constr a = constr . f <$> get a
+  get2Values
+    :: (v -> v -> v)
+    -> (RealValueFunction num -> Maybe v)
+    -> (v -> RealValueFunction num)
+    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+  get2Values   f get constr a b = constr <$> (f <$> get a <*> get b)
+  float1
+    :: (forall n . (RealFrac n, Floating n) => n -> n)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  float1 f a =
+    get1Value f getConst     FFConst   a <|>
+    get1Value f getFloat     FFFloat   a <|>
+    get1Value f getDouble    FFDouble  a <|>
+    get1Value f getAnyDouble FFDouble  a
+  ratio1 f a = 
+    get1Value f getRatio     ffratio   a <|>
+    get1Value f getAnyRatio  ffratio   a
+  toFloat
+    :: Fractional f
+    => (f -> RealValueFunction num)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  toFloat constr = \ case
+    FFConst   a -> pure $ constr $ realToFrac a
+    FFFloat   a -> pure $ constr $ realToFrac a
+    FFDouble  a -> pure $ constr $ realToFrac a
+    FFInteger a -> pure $ constr $ realToFrac $ a % 1
+    FFRatio a b -> pure $ constr $ realToFrac $ a % b
+    _           -> empty
+  real1
+    :: (forall n . Real n => n -> n)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  real1 f a = get1Value f getInteger FFInteger a <|> float1 f a <|> ratio1 f a
+  float2
+    :: (forall n . (RealFrac n, Floating n, ModulousDomain n, MinMaxDomain n) => n -> n -> n)
+    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+  float2 f a b =
+    get2Values f getConst     FFConst   a b <|>
+    get2Values f getFloat     FFFloat   a b <|>
+    get2Values f getDouble    FFDouble  a b <|>
+    get2Values f getAnyDouble FFDouble  a b
+  ratio2 f a b =
+    get2Values f getRatio     ffratio   a b <|>
+    get2Values f getAnyRatio  ffratio   a b
+  real2
+    :: (forall n . (Real n, MinMaxDomain n) => n -> n -> n)
+    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+  real2 f a b = get2Values f getInteger FFInteger a b <|> float2 f a b <|> ratio2 f a b
+  eval1
+    :: (RealValueFunction num -> RealValueFunction num)
+    -> (RealValueFunction num -> Maybe (RealValueFunction num))
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  eval1 constr eval a' = let a = loop a' in eval a <|> pure (constr a)
+  eval2
+    :: (RealValueFunction num -> RealValueFunction num -> RealValueFunction num)
+    -> (RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num))
+    -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
+  eval2 constr eval a' b' = do
+    let a = loop a'
+    let b = loop b'
+    eval a b <|> pure (constr a b)
+
+forceRealValue
+  :: forall m num
+     . (Monad m, MonadRandom m, RealFrac num, Floating num,
+        EnvelopeDomain num, ClampedDomain num, ModulousDomain num,
+        PeriodicDomain num, ActivationDomain num, PulsedSinusoidalDomain num)
   => RealValueFunction num -> m num
-reduceRealValue = let eval = reduceRealValue in \ case
-  FFConst        a    -> pure a
-  FFInteger      a    -> pure $ realToFrac a
-  FFFloat        a    -> pure $ realToFrac a
-  FFDouble       a    -> pure $ realToFrac a
-  FFRatio        a b  -> pure $ realToFrac $ a % b
-  FFUniformRand       -> (realToFrac :: ProcGenFloat -> num) <$> getRandom
-  FFNormalRand        -> realToFrac . inverseNormal <$> getRandom
-  FFBeta3Rand         -> realToFrac . inverseBeta3  <$> getRandom
-  FFBeta5Rand         -> realToFrac . inverseBeta5  <$> getRandom
-  FFAdd          a b  -> (+)  <$> eval a <*> eval (realToFrac <$> b)
-  FFMul          a b  -> (*)  <$> eval a <*> eval (realToFrac <$> b)
-  FFMin          a b  -> min  <$> eval a <*> eval b
-  FFMax          a b  -> max  <$> eval a <*> eval b
-  FFToFloat      a    -> realToFrac <$> reduceFloat  (realToFrac <$> a)
-  FFToDouble     a    -> realToFrac <$> reduceDouble (realToFrac <$> a)
-  FFRound        a    -> fromInteger . round   <$> reduceDouble (realToFrac <$> a)
-  FFFloor        a    -> fromInteger . floor   <$> reduceDouble (realToFrac <$> a)
-  FFCeiling      a    -> fromInteger . ceiling <$> reduceDouble (realToFrac <$> a)
-  FFNegate       a    -> negate     <$> eval a
-  FFAbs          a    -> abs        <$> eval a
-  FFSignNum      a    -> signum     <$> eval a
-  FFRecip        a    -> recip      <$> eval a
-  FFExp          a    -> exp        <$> eval a
-  FFLog          a    -> log        <$> eval a
-  FFPow          a b  -> realToFrac <$> ((**) <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
-  FFLogBase      a b  -> realToFrac <$> (logBase <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
-  FFSin          a    -> sin        <$> eval a
-  FFCos          a    -> cos        <$> eval a
-  FFTan          a    -> tan        <$> eval a
-  FFASin         a    -> asin       <$> eval a
-  FFACos         a    -> acos       <$> eval a
-  FFATan         a    -> atan       <$> eval a
-  FFSinH         a    -> sinh       <$> eval a
-  FFCosH         a    -> cosh       <$> eval a
-  FFTanH         a    -> tanh       <$> eval a
-  FFASinH        a    -> asinh      <$> eval a
-  FFACosH        a    -> acosh      <$> eval a
-  FFATanH        a    -> atanh      <$> eval a
-  FFSqrt         a    -> sqrt       <$> eval a
-  FFReLU         a    -> relu       <$> eval a
-  FFLeakyReLU    a b  -> leakyReLU  <$> eval a <*> eval b
-  FFSawtooth     a    -> sawtooth   <$> eval a
-  FFTriangle     a    -> triangle   <$> eval a
-  FFSquare       a    -> square     <$> eval a
-  FFUnitSine     a    -> unitSine   <$> eval a
-  FFBezier3 a b c d t -> bezier3    <$> eval a <*> eval b <*> eval c <*> eval d <*> eval t
+forceRealValue = let eval = forceRealValue in \ case
+  FFConst        a         -> pure a
+  FFInteger      a         -> pure $ realToFrac a
+  FFFloat        a         -> pure $ realToFrac a
+  FFDouble       a         -> pure $ realToFrac a
+  FFRatio        a b       -> pure $ realToFrac $ a % b
+  FFUniformRand            -> (realToFrac :: ProcGenFloat -> num) <$> getRandom
+  FFNormalRand             -> realToFrac . inverseNormal <$> getRandom
+  FFBeta3Rand              -> realToFrac . inverseBeta3  <$> getRandom
+  FFBeta5Rand              -> realToFrac . inverseBeta5  <$> getRandom
+  FFAdd          a b       -> (+)  <$> eval a <*> eval (realToFrac <$> b)
+  FFMul          a b       -> (*)  <$> eval a <*> eval (realToFrac <$> b)
+  FFMod          a b       -> contMod     <$> eval a <*> eval b
+  FFMin          a b       -> minOf       <$> eval a <*> eval b
+  FFMax          a b       -> maxOf       <$> eval a <*> eval b
+  FFToFloat      a         -> realToFrac  <$> reduceFloat  (realToFrac <$> a)
+  FFToDouble     a         -> realToFrac  <$> reduceDouble (realToFrac <$> a)
+  FFRound        a         -> fromInteger . round   <$> reduceDouble (realToFrac <$> a)
+  FFFloor        a         -> fromInteger . floor   <$> reduceDouble (realToFrac <$> a)
+  FFCeiling      a         -> fromInteger . ceiling <$> reduceDouble (realToFrac <$> a)
+  FFNegate       a         -> negate      <$> eval a
+  FFAbs          a         -> abs         <$> eval a
+  FFSignNum      a         -> signum      <$> eval a
+  FFRecip        a         -> recip       <$> eval a
+  FFExp          a         -> exp         <$> eval a
+  FFLog          a         -> log         <$> eval a
+  FFPow          a b       -> realToFrac  <$> ((**) <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
+  FFLogBase      a b       -> realToFrac  <$> (logBase <$> reduceDouble (realToFrac <$> a) <*> reduceDouble (realToFrac <$> b))
+  FFSin          a         -> sin         <$> eval a
+  FFCos          a         -> cos         <$> eval a
+  FFTan          a         -> tan         <$> eval a
+  FFASin         a         -> asin        <$> eval a
+  FFACos         a         -> acos        <$> eval a
+  FFATan         a         -> atan        <$> eval a
+  FFSinH         a         -> sinh        <$> eval a
+  FFCosH         a         -> cosh        <$> eval a
+  FFTanH         a         -> tanh        <$> eval a
+  FFASinH        a         -> asinh       <$> eval a
+  FFACosH        a         -> acosh       <$> eval a
+  FFATanH        a         -> atanh       <$> eval a
+  FFSqrt         a         -> sqrt        <$> eval a
+  FFReLU         a         -> relu        <$> eval a
+  FFLeakyReLU    a b       -> leakyReLU   <$> eval a <*> eval b
+  FFSawtooth     a         -> sawtooth    <$> eval a
+  FFTriangle     a         -> triangle    <$> eval a
+  FFSquare       a         -> square      <$> eval a
+  FFUnitSine     a         -> unitSine    <$> eval a
+  FFSinePulse    a b     t -> sinePulse   <$> eval a <*> eval b <*> eval t
+  FFSinePulse3   a b c   t -> sinePulse3  <$> eval a <*> eval b <*> eval c <*> eval t
+  FFClamp0_1     a         -> clamp0_1    <$> eval a
+  FFClamp1_1     a         -> clamp1_1    <$> eval a
+  FFBezier3      a b c d t -> bezier3     <$> eval a <*> eval b <*> eval c <*> eval d <*> eval t
+  FFSlope        a b     t -> slope       <$> (TimeWindow <$> eval a <*> eval b) <*> eval t
+  FFSigmoid      a b     t -> sigmoid     <$> (TimeWindow <$> eval a <*> eval b) <*> eval t  
+  FFSine2        a b     t -> sineSquared <$> (TimeWindow <$> eval a <*> eval b) <*> eval t
+  FFFadeInOut    a b c d t -> fadeInOut   <$> eval a <*> eval b <*> eval c <*> eval d <*> eval t
+  FFNormal       a       t -> normal      <$> eval a <*> eval t
+  FFBeta         a       t -> beta        <$> eval a <*> eval t
 
 reduceDouble :: (Monad m, MonadRandom m) => RealValueFunction Double -> m Double
-reduceDouble = reduceRealValue
+reduceDouble = forceRealValue
 
 reduceFloat :: (Monad m, MonadRandom m) => RealValueFunction Float -> m Float
-reduceFloat = reduceRealValue
+reduceFloat = forceRealValue
