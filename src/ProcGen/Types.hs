@@ -242,6 +242,55 @@ realFracContMod a b = mod (if a<0 then negate else id)
 
 ----------------------------------------------------------------------------------------------------
 
+-- | Rounding functions for real number approximating data types i.e. the 'Float' and 'Double' data
+-- types). There is no minimal complete definition, all functions can be dervied with a stand-alone
+-- instance. This class exists to provide an alternative lazy evaluation scheme for the
+-- 'RealValueFunction' data type.
+class RoundingDomain n where
+  -- | Round to the 'floor'.
+  roundDown :: n -> n
+  -- | Round to the 'ceiling'
+  roundUp   :: n -> n
+  -- | Round down if below the mid-way point between between the floor and celing, round up
+  -- otherwise.
+  roundMid  :: n -> n
+
+fracRoundDown :: forall n . RealFrac n => n -> n
+fracRoundDown = realToFrac . (floor :: n -> Integer)
+
+fracRoundUp :: forall n . RealFrac n => n -> n
+fracRoundUp = realToFrac . (ceiling :: n -> Integer)
+
+fracRoundMid :: forall n . RealFrac n => n -> n
+fracRoundMid = realToFrac . (round :: n -> Integer)
+
+instance RoundingDomain Float where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Double where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Rational where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Int where
+  roundDown = id
+  roundUp   = id
+  roundMid  = id
+
+instance RoundingDomain Integer where
+  roundDown = id
+  roundUp   = id
+  roundMid  = id
+
+----------------------------------------------------------------------------------------------------
+
 -- | Periodic fundamental wave functions for real number approximating data types i.e. 'Float' and
 -- 'Double'. All of these functions have a period of exacly 1 unit. There is no minimal complete
 -- definition, all functions can be dervied with a stand-alone instance. This class exists to
@@ -854,6 +903,11 @@ instance Ord num => ClampedDomain (RealValueFunction num) where
 
 instance (Ord num, RealFrac num) => ModulousDomain (RealValueFunction num) where
   contMod = FFMod
+
+instance RoundingDomain (RealValueFunction num) where
+  roundDown = FFFloor
+  roundUp   = FFCeiling
+  roundMid  = FFRound
 
 instance PeriodicDomain num => PeriodicDomain (RealValueFunction num) where
   unitSine = FFUnitSine
