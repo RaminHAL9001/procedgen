@@ -43,6 +43,7 @@ import           ProcGen.Buffer
 import           ProcGen.Collapsible
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
+import           ProcGen.Script
 import           ProcGen.VectorBuilder
 
 import           Control.Arrow

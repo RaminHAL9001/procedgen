@@ -71,6 +71,7 @@ Library {
     ProcGen.PrimeNumbers
     ProcGen.Properties
     ProcGen.ReaderLogic
+    ProcGen.Script
     ProcGen.TinyRelDB
     ProcGen.Types
     ProcGen.VectorBuilder
@@ -130,6 +131,7 @@ Test-suite procgen-infra {
   OTHER-MODULES:
     ProcGen.Arbitrary
     ProcGen.PrimeNumbers
+    ProcGen.Script
     ProcGen.TinyRelDB
     ProcGen.Types
 
@@ -198,6 +200,7 @@ Test-suite procgen-live {
     ProcGen.PrimeNumbers
     ProcGen.Properties
     ProcGen.ReaderLogic
+    ProcGen.Script
     ProcGen.Types
     ProcGen.VectorBuilder
 
