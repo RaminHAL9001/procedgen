@@ -74,8 +74,8 @@ import           Text.Printf
 -- 'FDSignal' to a 'TDSignal' for that moment in time.
 data SynthComponent
   = SynthComponent
-    { theSynthCompTimeInterval :: !(Interval Moment)
-    , theSynthCompFrequency    :: !SynthComponentEquation
+    { theSynthCompTimeInterval :: !(TimeWindow Moment)
+    , theSynthCompFrequency    :: !(RealValueFunction ProcGenFloat)
     }
 
 ----------------------------------------------------------------------------------------------------
