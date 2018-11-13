@@ -897,6 +897,9 @@ reduceRealValue a = maybe a id $ reduce a where
     a@FFBeta5Rand{}   -> pure a
     FFToFloat  a      -> eval1 FFToFloat  (toFloat FFFloat)  a
     FFToDouble a      -> eval1 FFToDouble (toFloat FFDouble) a
+    FFRound    a      -> eval1 FFRound (toInt round) a
+    FFFloor    a      -> eval1 FFFloor (toInt floor) a
+    FFCeiling  a      -> eval1 FFCeiling (toInt ceiling) a
     FFAdd     a b     -> eval2 FFAdd (real2 (+)) a b
     FFMul     a b     -> eval2 FFMul (real2 (*)) a b
     FFMod     a b     -> eval2 FFMod (float2 contMod) a b
@@ -923,6 +926,16 @@ reduceRealValue a = maybe a id $ reduce a where
     FFASinH   a       -> eval1 FFASinH (float1 asinh) a
     FFACosH   a       -> eval1 FFACosH (float1 acosh) a
     FFATanH   a       -> eval1 FFATanH (float1 atanh) a
+    FFReLU    a       -> eval1 FFReLU  (float1 relu) a
+    FFLeakyReLU a b   -> eval2 FFLeakyReLU (float2 leakyReLU) a b
+    FFSawtooth  a     -> eval1 FFSawtooth (float1 sawtooth) a
+    FFTriangle  a     -> eval1 FFTriangle (float1 triangle) a
+    FFSquare    a     -> eval1 FFSquare   (float1 square)   a
+    FFUnitSine  a     -> eval1 FFUnitSine (float1 unitSine) a
+    FFClamp0_1  a     -> eval1 FFClamp0_1 (float1 clamp0_1) a
+    FFClamp1_1  a     -> eval1 FFClamp1_1 (float1 clamp1_1) a
+    FFNormal    a b   -> eval2 FFNormal (float2 normal) a b
+    FFBeta      a b   -> eval2 FFBeta   (float2 beta)   a b
   ffratio r    = FFRatio (numerator r) (denominator r)
   getConst     = \ case { FFConst   a -> pure a; _ -> empty; }
   getInteger   = \ case { FFInteger a -> pure a; _ -> empty; }
@@ -952,7 +965,11 @@ reduceRealValue a = maybe a id $ reduce a where
     -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
   get2Values   f get constr a b = constr <$> (f <$> get a <*> get b)
   float1
-    :: (forall n . (RealFrac n, Floating n) => n -> n)
+    :: (forall n .
+          (RealFrac n, Floating n,
+           ActivationDomain n, PeriodicDomain n, ClampedDomain n)
+          => n -> n
+       )
     -> RealValueFunction num -> Maybe (RealValueFunction num)
   float1 f a =
     get1Value f getConst     FFConst   a <|>
@@ -973,12 +990,26 @@ reduceRealValue a = maybe a id $ reduce a where
     FFInteger a -> pure $ constr $ realToFrac $ a % 1
     FFRatio a b -> pure $ constr $ realToFrac $ a % b
     _           -> empty
+  toInt
+    :: (forall n . RealFrac n => n -> Integer)
+    -> RealValueFunction num -> Maybe (RealValueFunction num)
+  toInt round = \ case
+    FFConst   a -> pure $ FFInteger $ round a
+    FFFloat   a -> pure $ FFInteger $ round a
+    FFDouble  a -> pure $ FFInteger $ round a
+    FFInteger a -> pure $ FFInteger a
+    FFRatio a b -> pure $ FFInteger $ round $ a % b
+    _           -> empty
   real1
     :: (forall n . Real n => n -> n)
     -> RealValueFunction num -> Maybe (RealValueFunction num)
   real1 f a = get1Value f getInteger FFInteger a <|> float1 f a <|> ratio1 f a
   float2
-    :: (forall n . (RealFrac n, Floating n, ModulousDomain n, MinMaxDomain n) => n -> n -> n)
+    :: (forall n .
+          (RealFrac n, Floating n, ModulousDomain n, MinMaxDomain n,
+           ActivationDomain n, ProbabilityDomain n)
+          => n -> n -> n
+       )
     -> RealValueFunction num -> RealValueFunction num -> Maybe (RealValueFunction num)
   float2 f a b =
     get2Values f getConst     FFConst   a b <|>
