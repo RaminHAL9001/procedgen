@@ -79,8 +79,24 @@ class HasFrequency f where
   toFreq :: f -> Frequency
 
 -- | A class of time domain functions that can produce a 'Sample' from a 'Moment'.
+--
+-- Minimal complete definition: 'sample'.
 class TimeDomain f where
+  -- | Produce a sample at a single point in time for the given function @f@.
   sample :: f -> Moment -> Sample
+  -- | Iterate over a range of moments, producing an integer number of samples. This function has a
+  -- default implementation that calls 'sample' above, but for piecewise functions like splines it
+  -- is much more efficient to iterate over the list of piecewise functions in a way that does not
+  -- require searching through the entire list for a function that contains the 'Moment' at which
+  -- you want a single 'Sample' repeatedly for each 'Moment' in the iteration.
+  iterateSamples :: f
+    -> Int -- ^ number of samples
+    -> Moment -- ^ start point of iteration
+    -> Moment -- ^ end point of iteration
+    -> [Sample]
+  iterateSamples f nelems lo hi = loop 0 where
+    stepsize = (hi - lo) / realToFrac nelems
+    loop   i = if i > nelems then [] else sample f (lo + stepsize * realToFrac i) : loop (i + 1)
 
 -- | A class of frequency domain functions that can produce an 'Amplitude' from a 'Frequency'.
 class FreqDomain f where
