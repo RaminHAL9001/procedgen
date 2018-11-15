@@ -33,6 +33,7 @@ data MathEqn num
   | FFDouble   !Double
   | FFInteger  !Integer
   | FFRatio    !Integer !Integer
+  | FFPi -- ^ the 'pi' constant
   | FFUniformRand -- ^ A unformly distributed random variable between 0 and 1
   | FFNormalRand
      -- ^ A normally distributed random variable between 0 and 1, with 0.5 being the most common
@@ -118,8 +119,8 @@ instance Fractional (MathEqn num) where
   recip          = FFRecip
   fromRational a = FFRatio (numerator a) (denominator a)
 
-instance Floating num => Floating (MathEqn num) where
-  pi      = FFConst pi
+instance Floating (MathEqn num) where
+  pi      = FFPi
   exp     = FFExp
   log     = FFLog
   sqrt    = FFSqrt
@@ -190,6 +191,7 @@ reduceMathEqn a = maybe a id $ reduce a where
     a@FFNormalRand{}  -> pure a
     a@FFBeta3Rand{}   -> pure a
     a@FFBeta5Rand{}   -> pure a
+    a@FFPi{}          -> pure a
     FFToFloat  a      -> eval1 FFToFloat  (toFloat FFFloat)  a
     FFToDouble a      -> eval1 FFToDouble (toFloat FFDouble) a
     FFRound    a      -> eval1 FFRound (toInt round) a
@@ -395,6 +397,7 @@ forceEvalMathEqn = let eval = forceEvalMathEqn in \ case
   FFFloat        a         -> pure $ realToFrac a
   FFDouble       a         -> pure $ realToFrac a
   FFRatio        a b       -> pure $ realToFrac $ a % b
+  FFPi                     -> pure pi
   FFUniformRand            -> (realToFrac :: ProcGenFloat -> num) <$> getRandom
   FFNormalRand             -> realToFrac . inverseNormal <$> getRandom
   FFBeta3Rand              -> realToFrac . inverseBeta3  <$> getRandom
