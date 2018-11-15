@@ -441,12 +441,12 @@ class (Ord n, Floating n) => ActivationDomain n where
 
   -- | The ReLU function, is an activation function used in neural networks which is defined as
   -- @(\\t -> if t < 0 then 0 else t)@
-  relu :: (Ord n, Floating n) => n -> n
+  relu :: n -> n
   relu t = if t < 0 then 0 else t
 
   -- | Like 'ReLU' but evaluates to a constant @c@ rather than 0 if the input @t@ is less than
   -- @c@. Usually @c@ is very small, like @0.001@
-  leakyReLU :: (Ord n, Floating n) => n -> n -> n
+  leakyReLU :: n -> n -> n
   leakyReLU c t = if t < c then c else t
 
 instance ActivationDomain Float
