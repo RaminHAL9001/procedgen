@@ -5,6 +5,8 @@ module ProcGen.Types
 
 import           ProcGen.PrimeNumbers
 
+import           Control.Monad
+
 import           Data.Int
 import           Data.Ratio
 import           Data.Semigroup
@@ -12,8 +14,8 @@ import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
 import           Data.Word
 
-import           Happlets.Lib.Gtk
-import           Happlets.Provider
+import           Happlets.Lib.Gtk                 (gtkHapplet, theAnimationFrameRate)
+import           Happlets.Provider                (defaultConfig)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -750,4 +752,3 @@ twIndicies :: Int -> TimeWindow Moment -> [Int]
 twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
   [Prelude.max 0 $ Prelude.min (len - 1) $ durationSampleCount t0 ..
    Prelude.min (len - 1) $ durationSampleCount end]
-
