@@ -21,7 +21,7 @@ module ProcGen.Music.Synth
     fdComponentSampleAt, fdComponentAmplitudeAt,
     -- * Signals as frequency domain functions
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
-    fdSignal, fdSize, fdMinFreq, fdMaxFreq, fdBaseFreq,
+    theFDSize, theFDMinFreq, theFDMaxFreq, theFDBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
     -- * Time Domain Function Construction
@@ -43,7 +43,6 @@ import           ProcGen.Buffer
 import           ProcGen.Collapsible
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
-import           ProcGen.Script
 import           ProcGen.VectorBuilder
 
 import           Control.Arrow
@@ -52,6 +51,7 @@ import           Control.Monad.ST
 import           Data.List         (nub)
 import           Data.Semigroup
 import qualified Data.Text                   as Strict
+import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
@@ -61,23 +61,6 @@ import           Linear.V2
 import qualified Graphics.Rendering.Cairo    as Cairo
 
 import           Text.Printf
-
-----------------------------------------------------------------------------------------------------
-
--- | A component of a synthesized sound. Components are simply functions take a base 'Frequency' and
--- a 'Moment' in time as input parameters, and producing one or more 'Frequency', 'Amplitude', and
--- 'Phase' components as an output. When you want to convert a 'SynthComponent' to a frequency
--- domain signal ('FDSignal'), choose a base frequency, for example 256 Hz, and then iterate over a
--- time interval from (for example) 0 to 1 seconds with the inverse of the 'sampleRate' as the time
--- step for each iteration. The base frequency may vary with time if you wish. After applying the
--- base frequency and current 'Moment' in time to this, a list of 'Frequency', 'Amplitude' and
--- 'Phase' components will be produced, which construct the 'FDSignal'. You can then convert the
--- 'FDSignal' to a 'TDSignal' for that moment in time.
-data SynthComponent
-  = SynthComponent
-    { theSynthCompTimeInterval :: !(TimeWindow Moment)
-    , theSynthCompFrequency    :: !FloatEqn
-    }
 
 ----------------------------------------------------------------------------------------------------
 
@@ -603,6 +586,9 @@ data FDSignal
     , theFDMaxFreq      :: !Frequency
     , theFDBaseFreq     :: !Frequency
     , theFDSize         :: !Int
+      -- ^ 'theFDSignalVector' contains all elements expanded into a 1 dimensional array.  This
+      -- parameter tells us how many actual components there are, which must be set by dividing the
+      -- length of the array by the number of parameters in each 'FDComponent' vector there are.
     , theFDSignalVector :: !(Unboxed.Vector ProcGenFloat)
     }
   deriving Eq
