@@ -64,6 +64,7 @@ Library {
     ProcGen.Music.Sequencer
     ProcGen.Music.SoundFont
     ProcGen.Music.Synth
+    ProcGen.Music.TDBezierSpline
     ProcGen.Music.WaveFile
     ProcGen.Plot
     ProcGen.Plot.Examples
