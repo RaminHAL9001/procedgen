@@ -1,5 +1,14 @@
+-- | A data type for expressing time domain (TD) functions as Cubic Bezier splines curves. These
+-- curves are essentially 2D images with time along the horizontal of the image and sample amplitude
+-- along the vertical of the image.
+--
+-- However unlike an ordinary 2D cubic bezier spline, a time splines are linear along the time
+-- dimension, rather than cubic, and furthermore the sample amplitude control points are restricted
+-- to always be directly above or below the start and end points, in order to prevent curves that
+-- can go both forward and backward in time.
 module ProcGen.Music.TDBezierSpline
-  ( TDBezier3, bezier3Duration, bezier3Start, bezier3Points,
+  ( TDBezier3, TDBezier3Part(..), TDBezier3Segment(..),
+    bezier3Duration, bezier3Start, bezier3Points,
     bezier3SegmentCount, bezier3Segments, bezier3Spline, bezier3Append,
   )
   where
@@ -8,6 +17,7 @@ import           ProcGen.Types
 
 import           Control.Monad
 
+import           Data.Function                    (fix)
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
@@ -17,6 +27,45 @@ import qualified Data.Vector.Unboxed.Mutable      as Mutable
 type StartPoint   = Sample
 type ControlPoint = Sample
 type EndPoint     = Sample
+
+-- | A vector that defines a single segment of a continuous time domain bezier spline. You can
+-- construct a 'TDBezier3' spline by passing a list of these to the 'bezier3Spline' function.
+data TDBezier3Part
+  = TDBezier3Part
+    { tdBezier3PartDuration :: !Duration
+    , tdBezier3PartCtrlP1   :: !ControlPoint
+    , tdBezier3PartCtrlP2   :: !ControlPoint
+    , tdBezier3PartEndPoint :: !EndPoint
+    }
+  deriving (Eq, Show)
+
+-- | This is a segment of a 'TDBezier3Spline' expressed in absolute time. Unlike the
+-- 'TDBezier3ContSeg' (which is a part of a whole spline of connected segments), this data does not
+-- have a 'Duration' element but a start 'Moment' and end 'Moment', which expresses each segment as
+-- a stand-alone segment, rather than as a part of a whole. You cannot construct 'TDBezeri3' splines
+-- from this data type, but this time is more useful for computing the value of the spline at a
+-- point in time.
+data TDBezier3Segment
+  = TDBezier3Segment
+    { tdBezier3StartTime  :: !Moment
+    , tdBezier3EndTime    :: !Moment
+    , tdBezier3StartPoint :: !StartPoint
+    , tdBezier3CtrlP1     :: !ControlPoint
+    , tdBezier3CtrlP2     :: !ControlPoint
+    , tdBezier3EndPoint   :: !EndPoint
+    }
+
+-- | Returns true if the given 'Moment' is within the 'tdBezier3StartTime' and the
+-- 'tdBezier3EndTime'.
+tdBezier3SegmentAround :: TDBezier3Segment -> Moment -> Bool
+tdBezier3SegmentAround seg t = tdBezier3StartTime seg <= t && t < tdBezier3EndTime seg
+
+instance TimeDomain TDBezier3Segment where
+  sample seg = bezier3
+    (tdBezier3StartPoint seg)
+    (tdBezier3CtrlP1     seg)
+    (tdBezier3CtrlP2     seg)
+    (tdBezier3EndPoint   seg)
 
 -- | A 'TimeDomain' spline constructed from the cubic Bezier formula. A 'TimeDomain' spline is
 -- constructed of several segments, each segment has a time 'Duration'. For each consucutive time
@@ -45,32 +94,28 @@ instance TimeDomain TDBezier3 where
   iterateSamples spline nelems lo hi = if nonsense then [] else loop idx trimsegs where
     top   = bezier3Duration spline
     nonsense = nelems <= 0 || lo < 0 && hi < 0 || lo > top && hi > top
-    stepsize = (hi - lo) / realToFrac nelems
     small = min lo hi
-    large = max lo hi
+    stepsize = (hi - lo) / realToFrac nelems
     base  = if small >= 0 then small else
       (realToFrac (ceiling (abs $ small / stepsize) :: Int)) * abs stepsize + small
     count = floor ((top - base) / abs stepsize) :: Int
     roof  = base + abs stepsize * realToFrac count
-    segs  = (if stepsize > 0 then id else reverse) $ bezier3Segments spline
-    idx   = [(if stepsize < 0 then roof else base) + stepsize * realToFrac i | i <- [0 .. count]]
+    forward  = lo <= hi
+    segs  = (if forward then id else reverse) $ bezier3Segments spline
+    idx   = [(if forward then base else roof) + stepsize * realToFrac i | i <- [0 .. count]]
     trimsegs = case idx of
       []  -> []
-      i:_ -> error $
-        "TODO: dropWhile segments are below the initial index, perhaps rewrite "++
-        "the 'bezier3Sample' function to output the start and end times for each"++
-        "segment, rather than just the time delta. The 'bezier3Sample' function "++
-        "could then be rewritten to take advantage of this."
+      i:_ -> dropWhile (not . (`tdBezier3SegmentAround` i)) segs
+    loop idx segs = case segs of
+      []       -> []
+      seg:segs -> let (here, next) = span (tdBezier3SegmentAround seg) idx in
+        sample seg <$> here ++ loop next segs
 
 bezier3Sample :: TDBezier3 -> Moment -> Sample
-bezier3Sample spline t = case bezier3Segments spline of
-  []      -> 0
-  px:more ->
-    if 0 > t || t >= bezier3Duration spline then 0 else loop 0 px more where
-      loop t0 (dt', p0, p1, p2, p3) more = let dt = t0 + dt' in
-        if t0 <= t && t < dt then bezier3 p0 p1 p2 p3 ((t - t0) / dt') else case more of
-          []      -> 0
-          px:more -> loop dt px more
+bezier3Sample spline t = case filter (`tdBezier3SegmentAround` t) $ bezier3Segments spline of
+  []    -> 0
+  seg:_ -> if 0 > t || t >= bezier3Duration spline then 0 else sample seg $
+    (t - tdBezier3StartTime seg) / (tdBezier3EndTime seg - tdBezier3StartTime seg)
 {-# INLINE bezier3Sample #-}
 
 -- | How many line segments exist in a 'TDBezier3'.
@@ -79,19 +124,24 @@ bezier3SegmentCount = (`div` 4) . Unboxed.length . bezier3Points
 
 -- | Obtain a list of line segments, each segment containing a start point, a control point near the
 -- start point, a control point near the end point, and an end point.
-bezier3Segments :: TDBezier3 -> [(Duration, StartPoint, ControlPoint, ControlPoint, EndPoint)]
-bezier3Segments (TDBezier3{bezier3Start=p0,bezier3Points=vec}) = loop p0 $ Unboxed.toList vec where
-  loop p0 = \ case
+bezier3Segments :: TDBezier3 -> [TDBezier3Segment]
+bezier3Segments (TDBezier3{bezier3Start=p0,bezier3Points=vec}) = fix
+  ( \ loop t0 p0 -> \ case
     []               -> []
-    dt:p1:p2:p3:more -> (dt, p0, p1, p2, p3) : loop p3 more
-    _          -> error $
+    dt:p1:p2:p3:more -> let t1 = t0 + dt in
+      (TDBezier3Segment
+       { tdBezier3StartTime  = t0
+       , tdBezier3EndTime    = t1
+       , tdBezier3StartPoint = p0
+       , tdBezier3CtrlP1     = p1
+       , tdBezier3CtrlP2     = p2
+       , tdBezier3EndPoint   = p3
+       }) : loop t1 p3 more
+    _      -> error $ let len = Unboxed.length vec in
       "INTERNAL: TDBezier3 vector must contain a number of elements divisible by 4, "++
-      "but vector contains "++show (Unboxed.length vec)++" elements."
-
-bezier3IndexSafe
-  :: TDBezier3 -> Int
-  -> Maybe (Duration, StartPoint, ControlPoint, ControlPoint, EndPoint)
-bezier3IndexSafe = error "TODO: bezier3IndexSafe"
+      "but vector contains "++show len++
+      " elements, having "++show (mod len 4)++" extraneous elements."
+  ) 0 p0 (Unboxed.toList vec)
 
 -- | Append two bezier splines. A new spline segment is created with the starting point as the
 -- 'EndPoint' of the first spline, and the ending point as the 'StartPoint' of the second
@@ -136,19 +186,23 @@ bezier3Append a mkDt mkCp1 mkCp2 b = TDBezier3
 bezier3Spline
   :: Maybe Int
   -> StartPoint
-  -> [(Duration, ControlPoint, ControlPoint, EndPoint)]
+  -> [TDBezier3Part]
   -> TDBezier3
-bezier3Spline nsegs p0 segs = spline where
+bezier3Spline nparts p0 parts = spline where
   spline = TDBezier3
-    { bezier3Duration = sum $ abs . fstOf4 <$> segs
+    { bezier3Duration = sum $ abs . tdBezier3PartDuration <$> parts
     , bezier3Start    = p0
-    , bezier3Points   = maybe Unboxed.fromList makevec nsegs $ loop segs 
+    , bezier3Points   = maybe Unboxed.fromList makevec nparts $ loop parts 
     }
-  fstOf4 (dt, _, _, _) = dt
   makevec n elems = Unboxed.create $ do
     vec <- Mutable.new $ n * 4
     forM_ (zip [0 .. n*4] elems) $ \ (i, p) -> Mutable.write vec i p
     return vec
   loop = \ case
-    []                    -> []
-    (dt, p1, p2, p3):more -> dt : p1 : p2 : p3 : loop more
+    []     -> []
+    p:more ->
+        tdBezier3PartDuration p
+      : tdBezier3PartCtrlP1   p
+      : tdBezier3PartCtrlP2   p
+      : tdBezier3PartEndPoint p
+      : loop more
