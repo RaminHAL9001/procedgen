@@ -22,7 +22,6 @@ module ProcGen.Music.Synth
     -- * Signals as frequency domain functions
     FDSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     theFDSize, theFDMinFreq, theFDMaxFreq, theFDBaseFreq,
-    theFDEnvelopeWindow, theFDFreqEnvelope,
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers, randFDSignal, randFDSignalIO,
     -- * Time Domain Function Construction
@@ -42,7 +41,6 @@ import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Buffer
 import           ProcGen.Collapsible
-import           ProcGen.Music.TDBezierSpline
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
 import           ProcGen.VectorBuilder
@@ -592,13 +590,6 @@ data FDSignal
       -- parameter tells us how many actual components there are, which must be set by dividing the
       -- length of the array by the number of parameters in each 'FDComponent' vector there are.
     , theFDSignalVector   :: !(Unboxed.Vector ProcGenFloat)
-    , theFDEnvelopeWindow :: !(TimeWindow Moment)
-      -- ^ The start and end time for which this signal is applied.
-    , theFDFreqEnvelope   :: !TDBezier3
-      -- ^ When creating a sliding sound that gradually changes frequency, the amplitude properties
-      -- of this signal can change depending on 'theFDBaseFreq' value. To compute the amplitude
-      -- properties, apply the current 'fdBaseFreq' to this bezier curve to obtain a value by which
-      -- every 'fdAmplitude' value is multiplied.
     }
   deriving Eq
 

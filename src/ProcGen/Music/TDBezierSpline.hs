@@ -8,6 +8,7 @@
 -- can go both forward and backward in time.
 module ProcGen.Music.TDBezierSpline
   ( Ord3Spline, Ord3Part(..), Ord3Segment(..), StartPoint, EndPoint, ControlPoint,
+    HasControlPoint1(..), HasControlPoint2(..), HasControlPoint3(..),
     ord3Duration, ord3Start, ord3Points,
     ord3SegmentCount, ord3Segments, ord3Spline, ord3Append,
   )
@@ -15,6 +16,7 @@ module ProcGen.Music.TDBezierSpline
 
 import           ProcGen.Types
 
+import           Control.Lens
 import           Control.Monad
 
 import           Data.Function                    (fix)
@@ -23,6 +25,10 @@ import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
 
 ----------------------------------------------------------------------------------------------------
+
+class HasControlPoint1 seg where { ctrlPt1 :: Lens' seg ControlPoint; }
+class HasControlPoint2 seg where { ctrlPt2 :: Lens' seg ControlPoint; }
+class HasControlPoint3 seg where { ctrlPt3 :: Lens' seg ControlPoint; }
 
 type StartPoint   = Sample
 type ControlPoint = Sample
@@ -39,12 +45,21 @@ data Ord3Part
     }
   deriving (Eq, Show)
 
+instance HasControlPoint1 Ord3Part where
+  ctrlPt1 = lens ord3PartP1 $ \ a b -> a{ ord3PartP1 = b }
+
+instance HasControlPoint2 Ord3Part where
+  ctrlPt2 = lens ord3PartP2 $ \ a b -> a{ ord3PartP2 = b }
+
+instance HasControlPoint3 Ord3Part where
+  ctrlPt3 = lens ord3PartP3 $ \ a b -> a{ ord3PartP3 = b }
+
 -- | This is a segment of a 'TDBezier3Spline' expressed in absolute time. Unlike the
 -- 'TDBezier3ContSeg' (which is a part of a whole spline of connected segments), this data does not
 -- have a 'Duration' element but a start 'Moment' and end 'Moment', which expresses each segment as
 -- a stand-alone segment, rather than as a part of a whole. You cannot construct 'TDBezeri3' splines
--- from this data type, but this time is more useful for computing the value of the spline at a
--- point in time.
+-- from this data type, so there are no lenses defined for this type. But this data type is more
+-- useful for computing the value of the spline at a point in time.
 data Ord3Segment
   = Ord3Segment
     { ord3Time :: !(TimeWindow Moment)
@@ -56,6 +71,8 @@ data Ord3Segment
 
 instance TimeDomain Ord3Segment where
   sample seg = bezier3 (ord3p0 seg) (ord3p1 seg) (ord3p2 seg) (ord3p3 seg)
+
+instance HasTimeWindow Ord3Segment Moment where { timeWindow = Just . ord3Time; }
 
 -- | A 'TimeDomain' spline constructed from the cubic Bezier formula. A 'TimeDomain' spline is
 -- constructed of several segments, each segment has a time 'Duration'. For each consucutive time
