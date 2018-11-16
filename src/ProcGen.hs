@@ -1,6 +1,6 @@
 module ProcGen
   ( module ProcGen.Arbitrary
-  , module ProcGen.Music.Synth
+  , module ProcGen.Music.AudioSignal
   , module ProcGen.Plot
   , module ProcGen.Plot.GUI
   , module ProcGen.ReaderLogic
@@ -14,7 +14,7 @@ module ProcGen
   ) where
 
 import ProcGen.Arbitrary
-import ProcGen.Music.Synth
+import ProcGen.Music.AudioSignal
 import ProcGen.Plot
 import ProcGen.Plot.GUI
 import ProcGen.ReaderLogic

@@ -57,7 +57,7 @@ module ProcGen.Music.Composition
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.SoundFont
+import           ProcGen.Music.AudioFont
 
 import           Control.Arrow
 import           Control.Lens

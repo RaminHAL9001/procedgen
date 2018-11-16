@@ -6,7 +6,7 @@
 -- dimension, rather than cubic, and furthermore the sample amplitude control points are restricted
 -- to always be directly above or below the start and end points, in order to prevent curves that
 -- can go both forward and backward in time.
-module ProcGen.Music.TDBezierSpline
+module ProcGen.Music.TDBezier
   ( Ord3Spline, Ord3Part(..), Ord3Segment(..), StartPoint, EndPoint, ControlPoint,
     HasControlPoint1(..), HasControlPoint2(..), HasControlPoint3(..),
     ord3Duration, ord3Start, ord3Points,

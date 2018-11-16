@@ -1,6 +1,6 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
-module ProcGen.Music.Synth
+module ProcGen.Music.AudioSignal
   ( -- * A language for defining musical sounds
     Synth(..), SynthState(..), SynthElement(..), initSynth, runSynth,
     synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal,

@@ -2,7 +2,7 @@
 -- module also defines a 'DrumKit' type which is just an arbitrary, un-indexed collection of sounds.
 -- ProcGen does not make use of any standardized or proprietary sound font formats, the sound fonts
 -- defined in this module use a formatting unique to the ProcGen project.
-module ProcGen.Music.SoundFont
+module ProcGen.Music.AudioFont
   ( NoteID(..), NoteKeyIndicies(..),
     -- * Defining Drum Sets
     DrumID, DrumIndex(..), DrumValue, DrumKeyIndicies, DrumKit,
@@ -19,7 +19,7 @@ module ProcGen.Music.SoundFont
 
 import           ProcGen.Types
 import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.Synth
+import           ProcGen.Music.AudioSignal
 
 import           Control.Lens
 import           Control.Monad.Random
@@ -135,17 +135,17 @@ soundLikelyChoice = lens theSoundLikelyChoice $ \ a b -> a{ theSoundLikelyChoice
 
 -- | Load a sound from a file without any specific meta-data about how the sound was constructed.
 soundFromFile :: FilePath -> IO Sound
-soundFromFile = error "TODO: ProcGen.Music.SoundFont.soundFromFile"
+soundFromFile = error "TODO: ProcGen.Music.AudioFont.soundFromFile"
 
 -- | Generate a sound from an 'FDSignal' using the functionality provided by the
 -- "ProcGen.Music.Synth" module.
 soundFromFDSignal :: FDSignal -> IO Sound
-soundFromFDSignal = error "TODO: ProcGen.Music.SoundFont.soundFromFDSignal"
+soundFromFDSignal = error "TODO: ProcGen.Music.AudioFont.soundFromFDSignal"
 
 -- | Load a 'FDSignal' description from a file, then use 'soundFromFDSignal' to generate the
 -- 'Sound'.
 soundFromFDSignalFile :: FilePath -> IO Sound
-soundFromFDSignalFile = error "TODO: ProcGen.Music.SoundFont.soundFromFDSignalFile"
+soundFromFDSignalFile = error "TODO: ProcGen.Music.AudioFont.soundFromFDSignalFile"
 
 ----------------------------------------------------------------------------------------------------
 

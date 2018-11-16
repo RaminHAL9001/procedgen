@@ -59,12 +59,12 @@ Library {
     ProcGen.Buffer
     ProcGen.Collapsible
     ProcGen.GHCI
+    ProcGen.Music.AudioFont
+    ProcGen.Music.AudioSignal
     ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
     ProcGen.Music.Sequencer
-    ProcGen.Music.SoundFont
-    ProcGen.Music.Synth
-    ProcGen.Music.TDBezierSpline
+    ProcGen.Music.TDBezier
     ProcGen.Music.WaveFile
     ProcGen.Plot
     ProcGen.Plot.Examples
@@ -194,7 +194,7 @@ Test-suite procgen-live {
     ProcGen.Arbitrary
     ProcGen.Buffer
     ProcGen.Collapsible
-    ProcGen.Music.Synth
+    ProcGen.Music.AudioSignal
     ProcGen.Music.WaveFile
     ProcGen.Plot
     ProcGen.Plot.GUI

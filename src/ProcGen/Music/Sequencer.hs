@@ -29,10 +29,10 @@ module ProcGen.Music.Sequencer
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Buffer
+import           ProcGen.Music.AudioFont
+import           ProcGen.Music.AudioSignal
 import           ProcGen.Music.Composition
 import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.SoundFont
-import           ProcGen.Music.Synth
 import           ProcGen.Music.WaveFile
 
 import           Control.Lens
