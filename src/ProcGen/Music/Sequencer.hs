@@ -33,6 +33,7 @@ import           ProcGen.Music.AudioFont
 import           ProcGen.Music.AudioSignal
 import           ProcGen.Music.Composition
 import           ProcGen.Music.KeyFreq88
+import           ProcGen.Music.Synth
 import           ProcGen.Music.WaveFile
 
 import           Control.Lens
