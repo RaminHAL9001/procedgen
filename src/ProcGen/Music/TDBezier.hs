@@ -122,9 +122,15 @@ instance TimeDomain Ord3Spline where
 -- polymorphic over the function type @f@, the type @f@ is 'Ord3Spline' when this function is used.
 ord3Sample :: Ord3Spline -> Moment -> Sample
 ord3Sample spline t = case filter ((`twContains` t) . ord3Time) $ ord3Segments spline of
-  []    -> 0
-  seg:_ -> if 0 > t || t >= ord3Duration spline then 0 else sample seg $
-    (t - (timeStart $ ord3Time seg)) / twDuration (ord3Time seg)
+  []    -> a0
+  seg:_ -> if 0 > t then a0 else
+    if t >= ord3Duration spline
+     then if len == 0 then a0 else vec Unboxed.! len - 1
+     else sample seg $ (t - (timeStart $ ord3Time seg)) / twDuration (ord3Time seg)
+  where
+    a0  = ord3Start spline
+    vec = ord3Points spline
+    len = Unboxed.length vec
 {-# INLINE ord3Sample #-}
 
 -- | How many line segments exist in a 'Ord3Spline'.
