@@ -1,14 +1,14 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
 module ProcGen.Music.Synth
-  ( -- * A language for defining musical sounds
-    Synth(..), SynthState(..), SynthElement(..),
-    initSynth, runSynth,  resizeSynthBuffer, resetSynthBuffer,
-    synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal,
-    synthElements, synthBuffer, synthTFGen, synthFrequency, synthFDShape,
+  ( -- * Signal Generating Functions
+    SynthSigComponent, SynthSignal(..), SynthNoise(..), synthFDComponent,
+    -- * A language for defining musical sounds
+    Synth(..), SynthState(..), initSynthIO, runSynth,
+    resizeSynthBuffer, resetSynthBuffer,
+    synthFDSignal, synthAttack, synthFDShape, synthFrequency, synthBuffer,
     -- * Constructing Frequency Domain Components
-    synthMultBaseFreq, smallFractions, bigFractions, allFractions, fractions,
-    synthPushNewElem, synthOnTopElem,
+    smallFractions, bigFractions, allFractions, fractions,
     -- * Shaping Frequency Component Levels
     ApplyShapeTo(..), synthApplyShape, synthRandomizeLevels,
     FDSignalShape(..), applyFDSignalShape, fdShapeBase,
@@ -20,10 +20,12 @@ import           Happlets.Lib.Gtk
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Music.AudioSignal
+import qualified ProcGen.Music.TDBezier      as TDBezier
 
 import           Data.List         (nub)
 import           Data.Semigroup
-import qualified Data.Text                   as Strict
+--import qualified Data.Text                   as Strict
+import qualified Data.Vector                 as Boxed
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 
@@ -52,50 +54,58 @@ synthLiftTFRandT f = use synthTFGen >>=
 
 data SynthState
   = SynthState
-    { theSynthElements  :: [SynthElement]
-      -- ^ Elements to be used to render a 'TDSignal'.
-    , theSynthFrequency :: Frequency
-      -- ^ The frequency around which procedurally generated frequency domain components are centered.
-    , theSynthFDShape   :: FDSignalShape
+    { theSynthSustain     :: !(SynthSignalGroup SynthSignal)
+      -- ^ Elements to be used to render the sustain of an 'FDSignal'.
+    , theSynthAttack      :: !(SynthSignalGroup SynthNoise)
+    , theSynthFrequency   :: !Frequency
+      -- ^ The frequency around which procedurally generated frequency domain components are
+      -- centered.
+    , theSynthFDShape     :: !FDSignalShape
       -- ^ a function used to enforce a shape on procedurally generated frequency domain components.
-    , theSynthBuffer    :: Mutable.IOVector Sample
+    , theSynthBuffer      :: !(Mutable.IOVector Sample)
       -- ^ a buffer used to render the frequency domain signal to a time domain signal. This buffer
       -- begins with enough memory to store 4.0 seconds of sound, but can be changed with
       -- 'resetSynthBuffer' and 'resizeSynthBuffer'.
-    , theSynthTFGen     :: TFGen
+    , theSynthTFGen       :: !TFGen
       -- ^ A random number generator state for the /"Two-Fish"/ PRNG algorithm.
     }
 
--- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
--- be used to display it in a GUI.
-data SynthElement
-  = SynthElement
-    { theSynthElemLabel    :: !Strict.Text
-      -- ^ A textual label that can be used to manipulate this element when it is in a list.
-    , theSynthElemColor    :: !Color
-      -- ^ When rendering this element, what color should be used to draw it?
-    , theSynthElemIsStrike :: !Bool
-      -- ^ Strike elements are always rendered first and are always rendered with a brief
-      -- envelope. A strike is the sound made when an instrument is struck, either with an implement
-      -- like a finger, a stick, a pick, or a bow, or with air in the case of woodwind and brass
-      -- instruments.
-    , theSynthElemSignal   :: !FDSignal
-      -- ^ The 'FDSignal' content of this element.
-    }
+---- | An element is a frozen vector of 'FDComponents' with a name and a few other properties that can
+---- be used to display it in a GUI.
+--data SynthElement
+--  = SynthElement
+--    { theSynthElemLabel    :: !Strict.Text
+--      -- ^ A textual label that can be used to manipulate this element when it is in a list.
+--    , theSynthElemColor    :: !Color
+--      -- ^ When rendering this element, what color should be used to draw it?
+--    , theSynthElemIsStrike :: !Bool
+--      -- ^ Strike elements are always rendered first and are always rendered with a brief
+--      -- envelope. A strike is the sound made when an instrument is struck, either with an implement
+--      -- like a finger, a stick, a pick, or a bow, or with air in the case of woodwind and brass
+--      -- instruments.
+--    , theSynthElemSignal   :: !FDSignal
+--      -- ^ The 'FDSignal' content of this element.
+--    }
 
-instance BufferIDCT SynthElement where
-  bufferIDCT mvec win = bufferIDCT mvec win . theSynthElemSignal
+--instance BufferIDCT SynthElement where
+--  bufferIDCT mvec win = bufferIDCT mvec win . theSynthElemSignal
 
-instance BufferIDCT SynthState where
-  bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthElements
+--instance BufferIDCT SynthState where
+--  bufferIDCT mvec win = mapM_ (bufferIDCT mvec win) . theSynthElemSignal
 
--- | The elements we are working with.
-synthElements :: Lens' SynthState [SynthElement]
-synthElements = lens theSynthElements $ \ a b -> a{ theSynthElements = b }
+--  synthElemLabel, synthElemColor, synthElemIsStrike, synthElemSignal,
+--  synthElements, synthTFGen, synthFDShape, synthBuffer, synthFrequency,
+
+---- | The elements we are working with.
+--synthSustain :: Lens' SynthState (SynthSignalGroup SynthSignal)
+--synthSustain = lens theSynthSustain $ \ a b -> a{ theSynthSustain = b }
+
+synthAttack :: Lens' SynthState (SynthSignalGroup SynthNoise)
+synthAttack = lens theSynthAttack $ \ a b -> a{ theSynthAttack = b }
 
 synthTFGen :: Lens' SynthState TFGen
 synthTFGen = lens theSynthTFGen $ \ a b -> a{ theSynthTFGen = b }
-
+ 
 synthFDShape :: Lens' SynthState FDSignalShape
 synthFDShape = lens theSynthFDShape $ \ a b -> a{ theSynthFDShape = b }
 
@@ -105,23 +115,101 @@ synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
 synthBuffer :: Lens' SynthState (Mutable.IOVector Sample)
 synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
 
-synthElemLabel    :: Lens' SynthElement Strict.Text
-synthElemLabel = lens theSynthElemLabel $ \ a b -> a{ theSynthElemLabel = b }
-
-synthElemColor    :: Lens' SynthElement Color
-synthElemColor = lens theSynthElemColor $ \ a b -> a{ theSynthElemColor = b }
-
-synthElemIsStrike :: Lens' SynthElement Bool
-synthElemIsStrike = lens theSynthElemIsStrike $ \ a b -> a{ theSynthElemIsStrike = b }
-
-synthElemSignal   :: Lens' SynthElement FDSignal
-synthElemSignal = lens theSynthElemSignal $ \ a b -> a{ theSynthElemSignal = b }
+--synthElemLabel    :: Lens' SynthElement Strict.Text
+--synthElemLabel = lens theSynthElemLabel $ \ a b -> a{ theSynthElemLabel = b }
+--
+--synthElemColor    :: Lens' SynthElement Color
+--synthElemColor = lens theSynthElemColor $ \ a b -> a{ theSynthElemColor = b }
+--
+--synthElemIsStrike :: Lens' SynthElement Bool
+--synthElemIsStrike = lens theSynthElemIsStrike $ \ a b -> a{ theSynthElemIsStrike = b }
+--
+--synthElemSignal   :: Lens' SynthElement FDSignal
+--synthElemSignal = lens theSynthElemSignal $ \ a b -> a{ theSynthElemSignal = b }
 
 ----------------------------------------------------------------------------------------------------
 
-initSynth :: IO SynthState
-initSynth = SynthState [] 256.0 (fdSignalShapeFlat 1.0) <$> newSampleBuffer 4.0 <*> initTFGen
+-- | A 'FDComponent' generating functions, where each parameter of an 'FDComponent' is a function
+-- from a 'Frequency' to some 'ProcGenFloat' value.
+type SynthSigComponent = TDBezier.Ord3Spline
 
+data SynthSignalGroup elem
+  = SynthSignalGroup
+    { synthSignalGroupSize :: !Int
+    , synthSignalGroupVec  :: !(Boxed.Vector elem)
+    }
+
+-- | Use the 'synthFDComponent' with the parameters set in this data structure to generate
+-- generating a single 'FDComponent'. Each component is a bezier 'TDBezier.Ord3Spline' (spline of
+-- order-3, better known as a Cubic Bezier Spline) which acts as a function from 'Frequency' to some
+-- 'ProcGenFloat' value. This allows the components to vary predictably around a given input
+-- frequency.
+data SynthSignal
+  = SynthSignal
+    { synthSigFrequency  :: !SynthSigComponent
+    , synthSigAmplitude  :: !SynthSigComponent
+    , synthSigPhaseShift :: !SynthSigComponent
+    , synthSigDecayRate  :: !SynthSigComponent
+    , synthSigNoiseLevel :: !SynthSigComponent
+    , synthSigUndertone  :: !SynthSigComponent
+    , synthSigUnderphase :: !SynthSigComponent
+    , synthSigUnderamp   :: !SynthSigComponent
+    }
+  deriving Eq
+
+-- | This data type is used to define the attack of an instrumental sound effect. It is essentially
+-- a single normal distribution with a given amplitude, variance, and median value somehwere along
+-- the frequency spectrum where random components are most likely to appear. A group of these in a
+-- 'SynthSignalGroup' allows you to define approximate most arbitrary noise envelopes.
+data SynthNoise
+  = SynthNoise
+    { synthNoiseFrequency :: !SynthSigComponent
+    , synthNoiseAmplitude :: !SynthSigComponent
+    , synthNoiseVariance  :: !SynthSigComponent
+    , synthNoiseDensity   :: !SynthSigComponent
+      -- ^ This is a function to compute the number of random noise components to be generated at
+      -- any given frequency.
+    }
+
+instance Semigroup (SynthSignalGroup elem) where
+  a <> b = SynthSignalGroup
+    { synthSignalGroupSize = synthSignalGroupSize a +  synthSignalGroupSize b
+    , synthSignalGroupVec  = synthSignalGroupVec  a <> synthSignalGroupVec  b
+    }
+
+instance Monoid (SynthSignalGroup elem) where
+  mempty  = SynthSignalGroup{ synthSignalGroupSize = 0, synthSignalGroupVec = mempty }
+  mappend = (<>)
+
+-- | Construct a new 'FDSignal' from a given 'SynthSignalGroup' around a given 'Frequency'.
+synthFDSignal :: Frequency -> SynthSignalGroup SynthSignal -> FDSignal
+synthFDSignal freq grp = fdSignal freq $ fdComponentList (synthSignalGroupSize grp) $
+  synthFDComponent freq <$> Boxed.toList (synthSignalGroupVec grp)
+
+-- | Construct a new 'FDComponent' from a given 'SynthSignal' around a given 'Frequency'. This
+-- function is usually not as useful as the 'synthFDSignal' function which converts a group of
+-- 'SynthSignals' in a 'SynthSignalGroup' into a 'FDSignal'.
+synthFDComponent :: Frequency -> SynthSignal -> FDComponent
+synthFDComponent freq signal = emptyFDComponent &~ do
+  let comp lens get = lens .= sample (get signal) freq
+  comp fdFrequency  synthSigFrequency
+  comp fdAmplitude  synthSigAmplitude
+  comp fdPhaseShift synthSigPhaseShift
+  comp fdDecayRate  synthSigDecayRate
+  comp fdNoiseLevel synthSigNoiseLevel
+  comp fdUndertone  synthSigUnderamp
+  comp fdUnderphase synthSigUnderphase
+  comp fdUnderamp   synthSigUnderamp
+
+----------------------------------------------------------------------------------------------------
+
+-- | Evaluate 'SynthState' in the IO monad, constructing the pseudo-random number generator from the
+-- operating system's initializer.
+initSynthIO :: IO SynthState
+initSynthIO =
+  SynthState mempty mempty 256.0 (fdSignalShapeFlat 1.0) <$> newSampleBuffer 4.0 <*> initTFGen
+
+-- | Evaluate a 'Synth' function.
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
 runSynth (Synth f) = runStateT f
 
@@ -181,19 +269,19 @@ bigFractions = fractions (>)
 allFractions :: [Int] -> [Int] -> [ProcGenFloat]
 allFractions = fractions (const $ const True)
 
--- | Generate a list of 'FDComponents' with fractional multiples of the current base frequency
--- 'synthFrequency', and shaped to the amplitude of the current 'synthFDShape'. Pass the fractions
--- generated by 'allFractions', 'bigFractions', or 'smallFractions'.
-synthMultBaseFreq :: [ProcGenFloat] -> Synth FDComponentList
-synthMultBaseFreq fracs = do
-  shape <- use synthFDShape
-  base  <- use synthFrequency
-  liftM fdComponentList $ mapM (\ comp -> (\ phase -> comp & fdPhaseShift .~ phase) <$> onRandFloat id)
-    [ emptyFDComponent &~ do
-        fdFrequency .= freq
-        fdAmplitude .= applyFDSignalShape shape freq
-    | frac <- fracs, let freq = frac * base
-    ]
+---- | Generate a list of 'FDComponents' with fractional multiples of the current base frequency
+---- 'synthFrequency', and shaped to the amplitude of the current 'synthFDShape'. Pass the fractions
+---- generated by 'allFractions', 'bigFractions', or 'smallFractions'.
+--synthMultBaseFreq :: [ProcGenFloat] -> Synth FDComponentList
+--synthMultBaseFreq fracs = do
+--  shape <- use synthFDShape
+--  base  <- use synthFrequency
+--  liftM fdComponentList $ mapM (\ comp -> (\ phase -> comp & fdPhaseShift .~ phase) <$> onRandFloat id)
+--    [ emptyFDComponent &~ do
+--        fdFrequency .= freq
+--        fdAmplitude .= applyFDSignalShape shape freq
+--    | frac <- fracs, let freq = frac * base
+--    ]
 
 ----------------------------------------------------------------------------------------------------
 
@@ -243,29 +331,31 @@ synthApplyShape applyTo getShape noiseLevel cross comps = do
     pure $ comp & field %~ min 1.0 . max 0.0 . abs .
       cross (noise * applyFDSignalShape shape (comp ^. fdFrequency))
 
--- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
--- 'SynthElement' on the stack of elements.
-synthPushNewElem
-  :: Strict.Text -- ^ a label by which you can refer to this component later.
-  -> Color       -- ^ the color to use when drawing an image of this element in the GUI.
-  -> Bool        -- ^ whether this element is a strike element.
-  -> FDComponentList
-  -> Synth ()
-synthPushNewElem label color strike comps = synthElements %= (:) SynthElement
-  { theSynthElemLabel    = label
-  , theSynthElemColor    = color
-  , theSynthElemIsStrike = strike
-  , theSynthElemSignal   = fdSignal comps
-  }
+---- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
+---- 'SynthElement' on the stack of elements.
+--synthPushNewElem
+--  :: Strict.Text -- ^ a label by which you can refer to this component later.
+--  -> Color       -- ^ the color to use when drawing an image of this element in the GUI.
+--  -> Bool        -- ^ whether this element is a strike element.
+--  -> SynthSignal
+--  -> Synth ()
+--synthPushNewElem label color strike comp = synthElements %= (:) SynthElement
+--  { theSynthElemLabel    = label
+--  , theSynthElemColor    = color
+--  , theSynthElemIsStrike = strike
+--  , theSynthElemSignal   = comp
+--  }
 
--- | Evaluate a mapping function on the top-most 'SynthElement in the stack. This function does
--- nothing if the 'SynthElement' stack is empty.
-synthOnTopElem :: (FDComponent -> Synth FDComponent) -> Synth ()
-synthOnTopElem f = use synthElements >>= \ case
-  []         -> return ()
-  elem:elems -> do
-    comps <- forEachFDComponent (elem ^. synthElemSignal . fdSignalComponents) f
-    synthElements .= (elem & synthElemSignal . fdSignalComponents .~ comps) : elems
+---- | Evaluate a mapping function on the top-most 'SynthElement in the stack. This function does
+---- nothing if the 'SynthElement' stack is empty.
+--synthOnTopElem :: (SynthSignal -> Synth SynthSignal) -> Synth ()
+--synthOnTopElem f = use synthElements >>= \ case
+--  []         -> return ()
+--  elem:elems -> do
+--    comps <- forEachFDComponent (elem ^. synthElemSignal . fdSignalComponents) f
+--    synthElements .= (elem & synthElemSignal . fdSignalComponents .~ comps) : elems
+
+--    synthPushNewElem, synthOnTopElem,
 
 ----------------------------------------------------------------------------------------------------
 

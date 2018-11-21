@@ -37,6 +37,7 @@ import           ProcGen.Music.Synth
 import           ProcGen.Music.WaveFile
 
 import           Control.Lens
+import           Control.Monad.Random        (MonadRandom(..), MonadSplit(..), split)
 
 import qualified Data.Map                    as Map
 import           Data.Semigroup
@@ -310,10 +311,14 @@ instance MonadRandom Sequencer where
   getRandomRs = liftTFRand . getRandomRs
   getRandoms  = liftTFRand getRandoms
 
+instance MonadSplit TFGen Sequencer where
+  getSplit = split <$> use sequencerTFGen >>= \ (g0, g1) -> sequencerTFGen .= g0 >> return g1
+
 data SequencerState
   = SequencerState
     { theSequencerSynth        :: !SynthState
     , theSequencerDrumKit      :: !DrumKit
+    , theSequencerTFGen       :: !TFGen
     , theSequencerInstruments  :: !(Map.Map InstrumentID ToneInstrument)
     }
 
@@ -323,6 +328,9 @@ sequencerSynth = lens theSequencerSynth $ \ a b -> a{ theSequencerSynth = b }
 sequencerDrumKit :: Lens' SequencerState DrumKit
 sequencerDrumKit = lens theSequencerDrumKit $ \ a b -> a{ theSequencerDrumKit = b }
 
+sequencerTFGen :: Lens' SequencerState TFGen
+sequencerTFGen = lens theSequencerTFGen $ \ a b -> a{ theSequencerTFGen = b }
+
 sequencerInstrument :: Lens' SequencerState (Map.Map InstrumentID ToneInstrument)
 sequencerInstrument = lens theSequencerInstruments $ \ a b -> a{ theSequencerInstruments = b }
 
@@ -331,10 +339,12 @@ runSequencer (Sequencer f) = runStateT f
 
 newSequencer :: IO SequencerState
 newSequencer = do
-  synth <- initSynth
+  synth <- initSynthIO
+  gen   <- initTFGen
   return SequencerState
     { theSequencerSynth       = synth
     , theSequencerDrumKit     = mempty
+    , theSequencerTFGen       = gen
     , theSequencerInstruments = Map.empty
     }
 
@@ -350,8 +360,8 @@ liftSynth f = do
 -- function.
 liftTFRand :: TFRand a -> Sequencer a
 liftTFRand f = do
-  (a, gen) <- runTFRand f <$> use (sequencerSynth . synthTFGen)
-  sequencerSynth . synthTFGen .= gen
+  gen <- getSplit
+  (a, _gen) <- pure $ runTFRand f gen
   return a
 
 -- | Associate a 'DrumID' with a 'Sound', or append the 'Sound' to the 'SoundSet' if the 'DrumID'

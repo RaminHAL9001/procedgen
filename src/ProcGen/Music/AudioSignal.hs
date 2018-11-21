@@ -7,17 +7,17 @@ module ProcGen.Music.AudioSignal
     FDComponent, emptyFDComponent,
     fdFrequency, fdAmplitude, fdPhaseShift, fdDecayRate,
     fdNoiseLevel, fdUndertone, fdUnderphase, fdUnderamp,
-    FDComponentList, fdComponentList, randFDComponents, fdComponentInsert,
-    fdSignalComponents, forEachFDComponent, forEachFDComponent_,
+    FDComponentList, fdComponentList, fdComponentInsert,
+    forEachFDComponent, forEachFDComponent_,
     fdComponentSampleAt, fdComponentAmplitudeAt,
     -- * Signals as frequency domain functions
     FDSignal, fdSignal, fdSignalVector, emptyFDSignal, nullFDSignal,
     theFDSize, theFDMinFreq, theFDMaxFreq, theFDBaseFreq,
     listFDElems, listFDAssocs, lookupFDComponent,
-    componentMultipliers, randFDSignal, randFDSignalIO,
+    componentMultipliers,
     -- * Time Domain Function Construction
     TDSignal, tdSamples, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, pureIDCT,
-    minMaxTDSignal, randTDSignalIO, writeTDSignalFile, readTDSignalFile,
+    minMaxTDSignal, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
     TDView(..), tdView, runTDView,
@@ -42,7 +42,6 @@ import           Control.Monad.ST
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
-import           Data.Word
 
 import           Linear.V2
 
@@ -161,10 +160,10 @@ nullFDComponent fd = fd ^. fdFrequency == 0 || fd ^. fdAmplitude == 0
 -- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this
 -- component. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent',
 -- because this is a pure function that has no access to a random number generator.
-fdComponentSampleAt :: FDComponent -> Moment -> Sample
-fdComponentSampleAt fd t = if fd ^. fdFrequency > nyquist then 0 else
+fdComponentSampleAt :: Frequency -> FDComponent -> Moment -> Sample
+fdComponentSampleAt base fd t = if fd ^. fdFrequency > nyquist then 0 else
   fdComponentAmplitudeAt fd t *
-  sin ((fd ^. fdFrequency ) * 2.0 * pi * (t + (fd ^. fdPhaseShift)))
+  sin ((fd ^. fdFrequency ) * base * 2.0 * pi * (t + (fd ^. fdPhaseShift)))
 
 -- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
 -- time. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent', because
@@ -201,9 +200,9 @@ instance Monoid FDComponentList where
   mempty = FDComponentList{ fdCompListLength = 0, fdCompListElems = [] }
   mappend = (<>)
 
-fdComponentList :: [FDComponent] -> FDComponentList
-fdComponentList comps = FDComponentList
-  { fdCompListLength = length comps
+fdComponentList :: Int -> [FDComponent] -> FDComponentList
+fdComponentList nelems comps = FDComponentList
+  { fdCompListLength = nelems
   , fdCompListElems  = comps
   }
 
@@ -222,46 +221,48 @@ forEachFDComponent_
   -> m ()
 forEachFDComponent_ = forM_ . fdCompListElems
 
-randFDComponents :: Frequency -> TFRand FDComponentList
-randFDComponents base = do
-  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
-    dice <- getRandom :: TFRand Word8
-    if dice > 4 then return [] else do
-      amp     <- onRandFloat $ (* (3/4) ) . (+ (1/3))
-      phase   <- onRandFloat id
-      ifUnder <- onRandFloat (\ i f -> if i < 0.2 then f else return 0.0)
-      decay   <- onRandFloat (* 2)
-      noise   <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
-      under   <- ifUnder $ onRandFloat (* 7.5)
-      undph   <- ifUnder $ onRandFloat id
-      undamp  <- ifUnder $ onBeta5RandFloat (1 -)
-      return $ do
-        let freq = base * mul
-        guard $ freq < nyquist
-        guard $ amp  > 0.1
-        return $ (,) 1 $ FDComponent
-          { theFDFrequency  = base * mul
-          , theFDAmplitude  = if mul > 1 then amp / mul else amp * mul
-          , theFDPhaseShift = phase
-          , theFDDecayRate  = decay
-          , theFDNoiseLevel = noise
-          , theFDUndertone  = under
-          , theFDUnderphase = undph
-          , theFDUnderamp   = undamp
-          }
-  return FDComponentList
-    { fdCompListLength = count + 1
-    , fdCompListElems  = FDComponent
-        { theFDFrequency  = base
-        , theFDAmplitude  = 1.0
-        , theFDPhaseShift = 0.0
-        , theFDDecayRate  = 0.0
-        , theFDNoiseLevel = 1.0
-        , theFDUndertone  = 0.0
-        , theFDUnderphase = 0.0
-        , theFDUnderamp   = 0.0
-        } : components
-    }
+--compMult :: [Frequency]
+--compMult = componentMultipliers
+
+--randFDComponents :: TFRand FDComponentList
+--randFDComponents = do
+--  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
+--    dice <- getRandom :: TFRand Word8
+--    if dice > 4 then return [] else do
+--      amp     <- onRandFloat $ (* (3/4) ) . (+ (1/3))
+--      phase   <- onRandFloat id
+--      ifUnder <- onRandFloat (\ i f -> if i < 0.2 then f else return 0.0)
+--      decay   <- onRandFloat (* 2)
+--      noise   <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
+--      under   <- ifUnder $ onRandFloat (* 7.5)
+--      undph   <- ifUnder $ onRandFloat id
+--      undamp  <- ifUnder $ onBeta5RandFloat (1 -)
+--      return $ do
+--        guard $ freq < nyquist
+--        guard $ amp  > 0.1
+--        return $ (,) 1 $ FDComponent
+--          { theFDFrequency  = mul
+--          , theFDAmplitude  = if mul > 1 then amp / mul else amp * mul
+--          , theFDPhaseShift = phase
+--          , theFDDecayRate  = decay
+--          , theFDNoiseLevel = noise
+--          , theFDUndertone  = under
+--          , theFDUnderphase = undph
+--          , theFDUnderamp   = undamp
+--          }
+--  return FDComponentList
+--    { fdCompListLength = count + 1
+--    , fdCompListElems  = FDComponent
+--        { theFDFrequency  = base
+--        , theFDAmplitude  = 1.0
+--        , theFDPhaseShift = 0.0
+--        , theFDDecayRate  = 0.0
+--        , theFDNoiseLevel = 1.0
+--        , theFDUndertone  = 0.0
+--        , theFDUnderphase = 0.0
+--        , theFDUnderamp   = 0.0
+--        } : components
+--    }
 
 fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
 fdComponentInsert c list = FDComponentList
@@ -292,8 +293,8 @@ instance Show FDSignal where
     unlines (listFDAssocs fd >>= \ (i, comp) -> [show i ++ ' ' : show comp])
 
 instance BufferIDCT FDSignal where
-  bufferIDCT mvec win = let lim f = 15.0 <= f && f <= nyquist in
-    mapM_ (bufferIDCT mvec win) . filter (lim . theFDFrequency) . fdCompListElems . listFDElems
+  bufferIDCT mvec win fd =
+    mapM_ (bufferFDComponentIDCT mvec win $ fd ^. fdBaseFreq) $ fdCompListElems $ listFDElems fd
 
 fdMinFreq :: Lens' FDSignal Frequency
 fdMinFreq = lens theFDMinFreq $ \ a b -> a{ theFDMinFreq = b }
@@ -324,16 +325,16 @@ emptyFDSignal = FDSignal
 nullFDSignal :: FDSignal -> Bool
 nullFDSignal = (<= 0) . theFDSize
 
-fdSignalComponents :: Iso' FDSignal FDComponentList
-fdSignalComponents = iso listFDElems fdSignal
+--fdSignalComponents :: Iso' FDSignal FDComponentList
+--fdSignalComponents = iso listFDElems fdSignal
 
 -- | Create a new 'FDSignal'. Provide the number of components so that the amount of space to
 -- allocate for the array does not need to be computed by counting components. Then provide a list
 -- of components. The number of components is created regardless of the number of elements in the
 -- list given, with zero values filling out space not covered by the list, or elements from the list
 -- being dropped if there are mor than the given number of components.
-fdSignal :: FDComponentList -> FDSignal
-fdSignal fdcomps = case filter (not . nullFDComponent) (fdCompListElems fdcomps) of
+fdSignal :: Frequency -> FDComponentList -> FDSignal
+fdSignal freq fdcomps = case filter (not . nullFDComponent) (fdCompListElems fdcomps) of
     []       -> emptyFDSignal
     c0:elems -> let size = fdCompListLength fdcomps in runST $ execStateT
       (do let [freqi, ampi, phasi, decai, nois, undt, undph, undam, stepsize] = [0 .. 8]
@@ -358,7 +359,7 @@ fdSignal fdcomps = case filter (not . nullFDComponent) (fdCompListElems fdcomps)
           fdSignalVector .= vec
       )
       ( emptyFDSignal &~ do
-          fdBaseFreq .= c0 ^. fdFrequency
+          fdBaseFreq .= freq
           fdMinFreq  .= c0 ^. fdFrequency
           fdMaxFreq  .= c0 ^. fdFrequency
           fdSize     .= size
@@ -405,18 +406,15 @@ componentMultipliers = do
   sevens <- f 7 2
   [twos * threes * fives * sevens]
 
-compMult :: [Frequency]
-compMult = componentMultipliers
+---- | Construct an 'ProcGen.Arbitrary.Arbitrary' 'FDSignal' with random 'ProcGen.Types.Frequency'
+---- components generated with rational-numbered scaled frequency components around a given base
+---- frequency. This will generate up to 1920 components, but is most likely to generate around 480
+---- components.
+--randFDSignal :: Frequency -> TFRand FDSignal
+--randFDSignal = fmap fdSignal . randFDComponents
 
--- | Construct an 'ProcGen.Arbitrary.Arbitrary' 'FDSignal' with random 'ProcGen.Types.Frequency'
--- components generated with rational-numbered scaled frequency components around a given base
--- frequency. This will generate up to 1920 components, but is most likely to generate around 480
--- components.
-randFDSignal :: Frequency -> TFRand FDSignal
-randFDSignal = fmap fdSignal . randFDComponents
-
-randFDSignalIO :: Frequency -> IO FDSignal
-randFDSignalIO = seedIOEvalTFRand . randFDSignal
+--randFDSignalIO :: Frequency -> IO FDSignal
+--randFDSignalIO = seedIOEvalTFRand . randFDSignal
 
 -- | Evaluates 'bufferIDCT' in the 'Control.Monad.ST.ST' monad producing a pure 'TDSignal' function.
 pureIDCT :: TFGen -> Duration -> FDSignal -> TDSignal
@@ -424,27 +422,38 @@ pureIDCT gen dt fd = TDSignal
   { tdSamples = let n = durationSampleCount dt in Unboxed.create $ flip evalTFRandT gen $
       if n <= 0 then lift $ Mutable.new 0 else do
         mvec <- lift $ Mutable.new $ n + 1
-        bufferIDCT mvec (TimeWindow{ timeStart = 0, timeEnd = dt }) fd
+        forM_ (fdCompListElems $ listFDElems fd) $
+          bufferFDComponentIDCT mvec (TimeWindow{ timeStart = 0, timeEnd = dt }) (theFDBaseFreq fd)
         lift $ minMaxBuffer mvec >>= normalizeBuffer mvec
         return mvec
   }
 
-instance BufferIDCT FDComponent where
-  bufferIDCT mvec win fd = if fd ^. fdNoiseLevel <= 0 then bufferIDCT mvec win fd else do
-    let ti = fst . timeIndex
-    let size = ti (3 / (fd ^. fdFrequency)) + 1
+-- | 'Frequency' multiplied times the 'FDComponent' 'fdFrequency' needs to be between 15.0 Hz and
+-- the 'nyquist' frequency, otherwise this function evaluation returns @()@ without performing any
+-- update on the given mutable vector.
+bufferFDComponentIDCT
+  :: PrimMonad m
+  => Mutable.MVector (PrimState m) Sample
+  -> TimeWindow Moment -> Frequency -> FDComponent -> TFRandT m ()
+bufferFDComponentIDCT mvec win base fd =
+  if 15.0 > freq || freq >= nyquist then return () else
+  if fd ^. fdNoiseLevel <= 0
+   then lift $ mapBuffer mvec (durationSampleCount <$> win) $ \ i e -> do
+          let t = indexToTime i
+          pure $ e + fdComponentSampleAt base fd t * fdComponentAmplitudeAt fd t
+   else do
     -- A table of values is used here because we are not simply summing sine waves, we are creating
     -- a sine wave with a sigmoidal fade-in and fade-out, which requires two Float32
     -- multiplications, two calls to 'exp', two calls to 'recip', and one calls to 'sin' for each
     -- index. It is probably faster on most computer hardware to store these values to a table
     -- rather than compute them on the fly.
-    if size > Mutable.length mvec then return () else do
+    if size > veclen then return () else do
       table <- lift (Mutable.new size)
       lift $ forM_ [0 .. size - 1] $ \ i -> Mutable.write table i
-        $ sinePulse3 (fd ^. fdFrequency) (0.0) (fd ^. fdPhaseShift)
+        $ sinePulse3 freq (0.0) (fd ^. fdPhaseShift)
         $ indexToTime i
       let loop  amp i j =
-            if i >= Mutable.length mvec || j >= Mutable.length table then return () else do
+            if i >= veclen || j >= Mutable.length table then return () else do
               let decamp = (fd ^. fdAmplitude) * amp * fdComponentAmplitudeAt fd (indexToTime i)
               lift $ Mutable.write mvec i =<<
                 liftM2 (+) (Mutable.read mvec i) ((* decamp) <$> Mutable.read table j)
@@ -455,6 +464,11 @@ instance BufferIDCT FDComponent where
             loop amp i 0
             pulses $! t + 2 / (fd ^. fdFrequency)
       pulses 0.0
+  where
+    ti   = fst . timeIndex
+    size = ti (3 / (fd ^. fdFrequency)) + 1
+    veclen = Mutable.length mvec
+    freq = base * (fd ^. fdFrequency)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -498,13 +512,13 @@ listTDSamples td@(TDSignal vec) =
 minMaxTDSignal :: TDSignal -> (Sample, Sample)
 minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 
--- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
--- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
-randTDSignalIO :: Duration -> Frequency -> IO (FDSignal, TDSignal)
-randTDSignalIO dt freq = do
-  gen <- initTFGen
-  (fd, gen) <- pure $ runTFRand (randFDSignal freq) gen
-  return (fd, pureIDCT gen dt fd)
+---- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
+---- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
+--randTDSignalIO :: Duration -> Frequency -> IO (FDSignal, TDSignal)
+--randTDSignalIO dt freq = do
+--  gen <- initTFGen
+--  (fd, gen) <- pure $ runTFRand (randFDSignal freq) gen
+--  return (fd, pureIDCT gen dt fd)
 
 -- | Create a RIFF-formatted WAV file at the given 'System.IO.FilePath' containing the 'TDSignal',
 -- with 'ProcGen.Types.Sample' values rounded-off to 16-bit signed integer values
