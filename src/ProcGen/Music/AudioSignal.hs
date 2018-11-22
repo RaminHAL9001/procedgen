@@ -4,8 +4,10 @@ module ProcGen.Music.AudioSignal
   ( -- * Buffering
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
+    NormFrequency, freqToNorm, normToFreq, freqToPercent, percentToNorm,
+    FreqCoeficient(..),
     FDComponent, emptyFDComponent,
-    fdFrequency, fdAmplitude, fdPhaseShift, fdDecayRate,
+    fdFreqCoef, fdAmplitude, fdPhaseShift, fdDecayRate,
     fdNoiseLevel, fdUndertone, fdUnderphase, fdUnderamp,
     FDComponentList, fdComponentList, fdComponentInsert,
     forEachFDComponent, forEachFDComponent_,
@@ -31,10 +33,10 @@ import           Happlets.Lib.Gtk
 import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Buffer
-import           ProcGen.Collapsible
+--import           ProcGen.Collapsible
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
-import           ProcGen.VectorBuilder
+--import           ProcGen.VectorBuilder
 
 import           Control.Arrow
 import           Control.Monad.ST
@@ -77,9 +79,55 @@ type ComponentCount = Int
 -- | Used to select a single component frequency from an 'FDSignal'
 type ComponentIndex = Int
 
+-- | This value stores a 'Freqency' that is understood to be in the audible range between 15.0 Hz
+-- and 22.1 KHz. The value stored within this constructor is a 'ProcGenFloat' between the value of 0
+-- and 1. When extracting this value, a result in the audible range is produced. When constructing
+-- this value, you must specify whehter the value is normalized or not using 'percentToNorm' or
+-- 'freqToNorm'. Extract the value using 'normToFreq'
+newtype NormFrequency = NormFrequency ProcGenFloat
+  deriving (Eq, Ord)
+
+instance Show NormFrequency where { show = show . normToFreq; }
+
+-- | Pass a value between 0 and 1 to construct a normalized frequency. This function is the inverse
+-- of 'freqToPercent'.
+percentToNorm :: Percentage -> NormFrequency
+percentToNorm f = NormFrequency $ max 0 $ min 1.0 f
+
+-- | Extract a normalized value between 0 and 1. This function is the inverse of 'percentToNorm'.
+freqToPercent :: NormFrequency -> Percentage
+freqToPercent (NormFrequency f) = f
+
+-- | Extract an ordinary, non-normalized 'Frequency' value from the 'NormFrequency'.
+normToFreq :: NormFrequency -> Frequency
+normToFreq (NormFrequency f) = f * (nyquist - minFrequency) + minFrequency
+
+-- | Pass an ordinary, non-normalized 'Freuquency' value in order to store it as a normalized
+-- value. 'Frequency' values beyond the audible range are truncated to the limits of audible
+-- frequency, then normalized.
+freqToNorm :: Frequency -> NormFrequency
+freqToNorm f = NormFrequency $
+  (max minFrequency (min nyquist f) - minFrequency) / (nyquist - minFrequency)
+
+----------------------------------------------------------------------------------------------------
+
+-- | A frequency coeficient is a value that will be multiplied by a base 'Frequency' to produce a
+-- new frequency. This is necessary because the 'FDSignal' data type stores component values as a
+-- multiple of some base frequency. This makes it easier to compute similar sounds at different
+-- frequencies by simply changing the base 'Frequency'. All the actual frequency values passed to
+-- the IDCT are computed by multiplying the base 'Frequenc' by some coeficient.
+newtype FreqCoeficient = FreqCoeficient { unwrapFreqCoef :: ProcGenFloat }
+  deriving (Eq, Ord, Show)
+
+-- | Unwrap a 'FreqCoeficient' and multiply it times a given base frequency.
+freqCoeficient :: NormFrequency -> FreqCoeficient -> Frequency
+freqCoeficient normf (FreqCoeficient c) = c * normToFreq normf
+
+----------------------------------------------------------------------------------------------------
+
 data FDComponent
   = FDComponent
-    { theFDFrequency  :: !Frequency  -- ^ must be between 15.0 and 22100.0 Hz
+    { theFDFreqCoef   :: !FreqCoeficient  -- ^ must be between 15.0 and 22100.0 Hz
     , theFDAmplitude  :: !Amplitude 
     , theFDPhaseShift :: !PhaseShift -- ^ must be between 0 and 1, automatically scaled to 2*pi
     , theFDDecayRate  :: !HalfLife   -- ^ set to zero for no decay
@@ -99,8 +147,8 @@ data FDComponent
     }
   deriving (Eq, Ord)
 
-fdFrequency  :: Lens' FDComponent Frequency
-fdFrequency = lens theFDFrequency $ \ a b -> a{ theFDFrequency = b }
+fdFreqCoef  :: Lens' FDComponent FreqCoeficient
+fdFreqCoef = lens theFDFreqCoef $ \ a b -> a{ theFDFreqCoef = b }
 
 fdAmplitude  :: Lens' FDComponent Amplitude
 fdAmplitude = lens theFDAmplitude $ \ a b -> a{ theFDAmplitude = b }
@@ -126,24 +174,25 @@ fdUnderamp = lens theFDUnderamp $ \ a b -> a{ theFDUnderamp = b }
 instance Show FDComponent where
   show fd = printf
     "(FD freq=%+.4f amp=%+.4f phase=%+.4f decay=%+.4f noise=%+.4f undrtone=%+.4f undrphse=%.4f)"
-    (fd ^. fdFrequency) (fd ^. fdAmplitude) (fd ^. fdPhaseShift) (fd ^. fdDecayRate)
+    (unwrapFreqCoef $ fd ^. fdFreqCoef)
+    (fd ^. fdAmplitude) (fd ^. fdPhaseShift) (fd ^. fdDecayRate)
     (fd ^. fdNoiseLevel) (fd ^. fdUndertone) (fd ^. fdUnderphase)
 
-instance Collapsible Float FDComponent where
-  collapse =
-    buildRecord theFDFrequency  <>
-    buildRecord theFDAmplitude  <>
-    buildRecord theFDPhaseShift <>
-    buildRecord theFDDecayRate  <>
-    buildRecord theFDNoiseLevel <>
-    buildRecord theFDUndertone  <>
-    buildRecord theFDUnderphase <>
-    buildRecord theFDUnderamp
-  uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
+--instance Collapsible Float FDComponent where
+--  collapse =
+--    buildRecord ((\ (NormFrequency f) -> f) . theFDFreqCoef)  <>
+--    buildRecord theFDAmplitude  <>
+--    buildRecord theFDPhaseShift <>
+--    buildRecord theFDDecayRate  <>
+--    buildRecord theFDNoiseLevel <>
+--    buildRecord theFDUndertone  <>
+--    buildRecord theFDUnderphase <>
+--    buildRecord theFDUnderamp
+--  uncollapse = error "TODO: (uncollapse :: UVec.Vector -> FDComponent)"
 
 emptyFDComponent :: FDComponent
 emptyFDComponent = FDComponent
-  { theFDFrequency  = 0
+  { theFDFreqCoef   = FreqCoeficient 0
   , theFDAmplitude  = 0
   , theFDPhaseShift = 0
   , theFDDecayRate  = 0
@@ -155,15 +204,16 @@ emptyFDComponent = FDComponent
 
 -- | Returns 'Prelude.True' if either th frequency or amplitude are zero.
 nullFDComponent :: FDComponent -> Bool
-nullFDComponent fd = fd ^. fdFrequency == 0 || fd ^. fdAmplitude == 0
+nullFDComponent fd = unwrapFreqCoef (fd ^. fdFreqCoef) == 0 || fd ^. fdAmplitude == 0
 
 -- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this
 -- component. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent',
 -- because this is a pure function that has no access to a random number generator.
-fdComponentSampleAt :: Frequency -> FDComponent -> Moment -> Sample
-fdComponentSampleAt base fd t = if fd ^. fdFrequency > nyquist then 0 else
-  fdComponentAmplitudeAt fd t *
-  sin ((fd ^. fdFrequency ) * base * 2.0 * pi * (t + (fd ^. fdPhaseShift)))
+fdComponentSampleAt :: NormFrequency -> FDComponent -> Moment -> Sample
+fdComponentSampleAt base fd t = if freq > nyquist then 0 else
+  fdComponentAmplitudeAt fd t * sin (freq * 2.0 * pi * (t + (fd ^. fdPhaseShift)))
+  where
+    freq = freqCoeficient base (fd ^. fdFreqCoef)
 
 -- | Like 'fdComponentSample' but only shows the amplitude (with half-life factored in) at any given
 -- time. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent', because
@@ -241,7 +291,7 @@ forEachFDComponent_ = forM_ . fdCompListElems
 --        guard $ freq < nyquist
 --        guard $ amp  > 0.1
 --        return $ (,) 1 $ FDComponent
---          { theFDFrequency  = mul
+--          { theFDFreqCoef  = mul
 --          , theFDAmplitude  = if mul > 1 then amp / mul else amp * mul
 --          , theFDPhaseShift = phase
 --          , theFDDecayRate  = decay
@@ -253,7 +303,7 @@ forEachFDComponent_ = forM_ . fdCompListElems
 --  return FDComponentList
 --    { fdCompListLength = count + 1
 --    , fdCompListElems  = FDComponent
---        { theFDFrequency  = base
+--        { theFDFreqCoef  = base
 --        , theFDAmplitude  = 1.0
 --        , theFDPhaseShift = 0.0
 --        , theFDDecayRate  = 0.0
@@ -276,9 +326,9 @@ fdComponentInsert c list = FDComponentList
 -- used to define a signal in terms of a frequency domain graph.
 data FDSignal
   = FDSignal
-    { theFDMinFreq        :: !Frequency
-    , theFDMaxFreq        :: !Frequency
-    , theFDBaseFreq       :: !Frequency
+    { theFDBaseFreq       :: !NormFrequency
+    , theFDMinFreq        :: !FreqCoeficient
+    , theFDMaxFreq        :: !FreqCoeficient
     , theFDSize           :: !Int
       -- ^ 'theFDSignalVector' contains all elements expanded into a 1 dimensional array.  This
       -- parameter tells us how many actual components there are, which must be set by dividing the
@@ -296,13 +346,13 @@ instance BufferIDCT FDSignal where
   bufferIDCT mvec win fd =
     mapM_ (bufferFDComponentIDCT mvec win $ fd ^. fdBaseFreq) $ fdCompListElems $ listFDElems fd
 
-fdMinFreq :: Lens' FDSignal Frequency
+fdMinFreq :: Lens' FDSignal FreqCoeficient
 fdMinFreq = lens theFDMinFreq $ \ a b -> a{ theFDMinFreq = b }
 
-fdMaxFreq :: Lens' FDSignal Frequency
+fdMaxFreq :: Lens' FDSignal FreqCoeficient
 fdMaxFreq = lens theFDMaxFreq $ \ a b -> a{ theFDMaxFreq = b }
 
-fdBaseFreq :: Lens' FDSignal Frequency
+fdBaseFreq :: Lens' FDSignal NormFrequency
 fdBaseFreq = lens theFDBaseFreq $ \ a b -> a{ theFDBaseFreq = b }
 
 fdSize :: Lens' FDSignal Int
@@ -314,9 +364,9 @@ fdSignalVector = lens theFDSignalVector $ \ a b -> a{ theFDSignalVector = b }
 -- | Construct an empty 'FDSignal'.
 emptyFDSignal :: FDSignal
 emptyFDSignal = FDSignal
-  { theFDMinFreq      = 0
-  , theFDMaxFreq      = 0
-  , theFDBaseFreq     = 0
+  { theFDBaseFreq     = NormFrequency 0
+  , theFDMinFreq      = FreqCoeficient 0
+  , theFDMaxFreq      = FreqCoeficient 0
   , theFDSize         = 0
   , theFDSignalVector = Unboxed.empty
   }
@@ -342,26 +392,26 @@ fdSignal freq fdcomps = case filter (not . nullFDComponent) (fdCompListElems fdc
           let loop i = \ case
                 []         -> return ()
                 comp:elems -> seq i $! do
-                  let wr off record = lift $ Mutable.write mvec (i + off) (comp ^. record)
-                  wr freqi fdFrequency
-                  wr ampi  fdAmplitude
-                  wr phasi fdPhaseShift
-                  wr decai fdDecayRate
-                  wr nois  fdNoiseLevel
-                  wr undt  fdUndertone
-                  wr undph fdUnderphase
-                  wr undam fdUnderamp
-                  fdMinFreq %= min (comp ^. fdFrequency)
-                  fdMaxFreq %= max (comp ^. fdFrequency)
+                  let wr off record = lift $ Mutable.write mvec (i + off) (record comp)
+                  wr freqi (unwrapFreqCoef . theFDFreqCoef)
+                  wr ampi  theFDAmplitude
+                  wr phasi theFDPhaseShift
+                  wr decai theFDDecayRate
+                  wr nois  theFDNoiseLevel
+                  wr undt  theFDUndertone
+                  wr undph theFDUnderphase
+                  wr undam theFDUnderamp
+                  fdMinFreq %= min (comp ^. fdFreqCoef)
+                  fdMaxFreq %= max (comp ^. fdFreqCoef)
                   loop (i + stepsize) elems
           loop 0 (c0 : elems)
           vec <- Unboxed.freeze mvec
           fdSignalVector .= vec
       )
       ( emptyFDSignal &~ do
-          fdBaseFreq .= freq
-          fdMinFreq  .= c0 ^. fdFrequency
-          fdMaxFreq  .= c0 ^. fdFrequency
+          fdBaseFreq .= freqToNorm freq
+          fdMinFreq  .= c0 ^. fdFreqCoef
+          fdMaxFreq  .= c0 ^. fdFreqCoef
           fdSize     .= size
       )
 
@@ -373,7 +423,7 @@ listFDElems (FDSignal{theFDSignalVector=vec}) = FDComponentList
   } where
       loop = \ case
         freq:amp:phase:decay:noise:undfrq:undphs:undamp:ax -> FDComponent
-          { theFDFrequency  = freq
+          { theFDFreqCoef   = FreqCoeficient freq
           , theFDAmplitude  = amp
           , theFDPhaseShift = phase
           , theFDDecayRate  = decay
@@ -391,8 +441,8 @@ listFDAssocs = zip [0 ..] . fdCompListElems . listFDElems
 -- | Extract a copy of a single element at a given index.
 lookupFDComponent :: FDSignal -> ComponentIndex -> Maybe FDComponent
 lookupFDComponent (FDSignal{theFDSignalVector=vec}) i =
-  let f n = vec Unboxed.!? (i + n)
-  in  FDComponent <$> f 0 <*> f 1 <*> f 2 <*> f 3 <*> f 4 <*> f 5 <*> f 6 <*> f 7
+  let f n = vec Unboxed.!? (i + n) in FDComponent
+    <$> (FreqCoeficient <$> f 0) <*> f 1 <*> f 2 <*> f 3 <*> f 4 <*> f 5 <*> f 6 <*> f 7
 
 -- | When generating a 'FDSignal' you need to generate components around a base frequency. This is a
 -- list of recommended component frequencies multipliers. Each of these numbers is a rational
@@ -428,13 +478,13 @@ pureIDCT gen dt fd = TDSignal
         return mvec
   }
 
--- | 'Frequency' multiplied times the 'FDComponent' 'fdFrequency' needs to be between 15.0 Hz and
+-- | 'Frequency' multiplied times the 'FDComponent' 'fdFreqCoef' needs to be between 15.0 Hz and
 -- the 'nyquist' frequency, otherwise this function evaluation returns @()@ without performing any
 -- update on the given mutable vector.
 bufferFDComponentIDCT
   :: PrimMonad m
   => Mutable.MVector (PrimState m) Sample
-  -> TimeWindow Moment -> Frequency -> FDComponent -> TFRandT m ()
+  -> TimeWindow Moment -> NormFrequency -> FDComponent -> TFRandT m ()
 bufferFDComponentIDCT mvec win base fd =
   if 15.0 > freq || freq >= nyquist then return () else
   if fd ^. fdNoiseLevel <= 0
@@ -462,13 +512,13 @@ bufferFDComponentIDCT mvec win base fd =
             amp <- getRandom
             let i = fst $ timeIndex t
             loop amp i 0
-            pulses $! t + 2 / (fd ^. fdFrequency)
+            pulses $! t + 2 / freq
       pulses 0.0
   where
     ti   = fst . timeIndex
-    size = ti (3 / (fd ^. fdFrequency)) + 1
+    size = ti (3 / freq) + 1
     veclen = Mutable.length mvec
-    freq = base * (fd ^. fdFrequency)
+    freq = freqCoeficient base (fd ^. fdFreqCoef)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -552,11 +602,13 @@ drawFDView :: FDView -> PixSize -> AnimationMoment -> CairoRender ()
 drawFDView fdView (V2 w h) dt = do
   cairoRender $ do
     let fd     = theFDViewSignal fdView
-    let lo     = log (fd ^. fdMinFreq)
-    let xscale = realToFrac w / (log (fd ^. fdMaxFreq) - lo)
+    let base   = fd ^. fdBaseFreq
+    let lo     = log (freqCoeficient base $ fd ^. fdMinFreq)
+    let xscale = realToFrac w / (log (freqCoeficient base $ fd ^. fdMaxFreq) - lo)
     h <- pure $ realToFrac h
     cairoClearCanvas  1.0  1.0  1.0  0.8
-    forEachFDComponent_ (listFDElems fd) $ \ fd@FDComponent{theFDFrequency=freq} -> do
+    forEachFDComponent_ (listFDElems fd) $ \ fd@FDComponent{theFDFreqCoef=freq} -> do
+      freq <- pure $ freqCoeficient base freq
       let x = realToFrac (round ((log freq - lo) * xscale) :: Int) + 0.5
       let y = realToFrac (1 - fdComponentAmplitudeAt fd (realToFrac dt)) * h + 0.5
       cairoSetColor (if fd ^. fdDecayRate == 0 then blue else red)
