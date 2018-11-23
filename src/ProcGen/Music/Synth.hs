@@ -6,11 +6,12 @@ module ProcGen.Music.Synth
     -- * A language for defining musical sounds
     Synth(..), SynthState(..), initSynthIO, runSynth,
     resizeSynthBuffer, resetSynthBuffer,
-    synthFDSignal, synthAttack, synthFDShape, synthFrequency, synthBuffer,
+    synthFDSignal, synthFDNoise,
+    synthAttack, synthFDShape, synthFrequency, synthBuffer,
     -- * Constructing Frequency Domain Components
     smallFractions, bigFractions, allFractions, fractions,
     -- * Shaping Frequency Component Levels
-    ApplyShapeTo(..), synthApplyShape, synthRandomizeLevels,
+    ApplyShapeTo(..), synthRandomizeLevels,
     FDSignalShape(..), applyFDSignalShape, fdShapeBase,
     fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
   ) where
@@ -54,9 +55,9 @@ synthLiftTFRandT f = use synthTFGen >>=
 
 data SynthState
   = SynthState
-    { theSynthSustain     :: !(SynthSignalGroup SynthSignal)
+    { theSynthSustain     :: !(Boxed.Vector SynthSignal)
       -- ^ Elements to be used to render the sustain of an 'FDSignal'.
-    , theSynthAttack      :: !(SynthSignalGroup SynthNoise)
+    , theSynthAttack      :: !(Boxed.Vector SynthNoise)
     , theSynthFrequency   :: !Frequency
       -- ^ The frequency around which procedurally generated frequency domain components are
       -- centered.
@@ -100,7 +101,7 @@ data SynthState
 --synthSustain :: Lens' SynthState (SynthSignalGroup SynthSignal)
 --synthSustain = lens theSynthSustain $ \ a b -> a{ theSynthSustain = b }
 
-synthAttack :: Lens' SynthState (SynthSignalGroup SynthNoise)
+synthAttack :: Lens' SynthState (Boxed.Vector SynthNoise)
 synthAttack = lens theSynthAttack $ \ a b -> a{ theSynthAttack = b }
 
 synthTFGen :: Lens' SynthState TFGen
@@ -133,12 +134,6 @@ synthBuffer = lens theSynthBuffer $ \ a b -> a{ theSynthBuffer = b }
 -- from a 'Frequency' to some 'ProcGenFloat' value.
 type SynthSigComponent = TDBezier.Ord3Spline
 
-data SynthSignalGroup elem
-  = SynthSignalGroup
-    { synthSignalGroupSize :: !Int
-    , synthSignalGroupVec  :: !(Boxed.Vector elem)
-    }
-
 -- | Use the 'synthFDComponent' with the parameters set in this data structure to generate
 -- generating a single 'FDComponent'. Each component is a bezier 'TDBezier.Ord3Spline' (spline of
 -- order-3, better known as a Cubic Bezier Spline) which acts as a function from 'Frequency' to some
@@ -146,7 +141,8 @@ data SynthSignalGroup elem
 -- frequency.
 data SynthSignal
   = SynthSignal
-    { synthSigFrequency  :: !SynthSigComponent
+    { synthSigFreqCoef   :: !FreqCoeficient
+    , synthSigFrequency  :: !SynthSigComponent
     , synthSigAmplitude  :: !SynthSigComponent
     , synthSigPhaseShift :: !SynthSigComponent
     , synthSigDecayRate  :: !SynthSigComponent
@@ -163,43 +159,64 @@ data SynthSignal
 -- 'SynthSignalGroup' allows you to define approximate most arbitrary noise envelopes.
 data SynthNoise
   = SynthNoise
-    { synthNoiseFrequency :: !SynthSigComponent
-    , synthNoiseAmplitude :: !SynthSigComponent
-    , synthNoiseVariance  :: !SynthSigComponent
-    , synthNoiseDensity   :: !SynthSigComponent
+    { synthNoiseFrequency     :: !SynthSigComponent
+      -- ^ This function produces a multiplier at a given base frequency which is then multiplied by
+      -- that base frequency to produce the actual frequency around which the noise components are
+      -- generated.
+    , synthNoiseFrequencyCoef :: ProcGenFloat
+      -- ^ The 'synthNoiseFrequency' function is normalized to produce a value between 0 and 1. To
+      -- get an actual frequency multiplier value, multiply the result of 'synthNoiseFrequency' by
+      -- this coeficient value.
+    , synthNoiseAmplitude     :: !SynthSigComponent
+    , synthNoiseVariance      :: !SynthSigComponent
+    , synthNoiseDensity       :: !SynthSigComponent
       -- ^ This is a function to compute the number of random noise components to be generated at
       -- any given frequency.
+    , synthNoiseDensityCoef   :: !ProcGenFloat
+      -- ^ Multiplies the 'synthNoiseDensity' value times this value and rounds to produce a number
+      -- of components. This number of random components will be generated at the given 'Frequency'.
+      -- This value allows the 'synthNoiseDensity' to be normalized to a value between 0 and 1 and
+      -- then scaled up.
     }
 
-instance Semigroup (SynthSignalGroup elem) where
-  a <> b = SynthSignalGroup
-    { synthSignalGroupSize = synthSignalGroupSize a +  synthSignalGroupSize b
-    , synthSignalGroupVec  = synthSignalGroupVec  a <> synthSignalGroupVec  b
-    }
+-- | Construct a new 'FDSignal' from a given 'SynthSignalGroup' of 'SynthNoise' values around a
+-- given base 'Frequency'.
+synthFDNoise :: Frequency -> Boxed.Vector SynthNoise -> Synth FDSignal
+synthFDNoise base grp = do
+  fmap (fdSignal base . mconcat) $ forM (Boxed.toList grp) $ \ noise -> do
+    let fcoef  = sample (synthNoiseFrequency noise) base * synthNoiseFrequencyCoef noise
+    let amp    = sample (synthNoiseAmplitude noise) base
+    --let var    = sample (synthNoiseVariance  noise) base
+    let nelems = round $ sample (synthNoiseDensity noise) base * synthNoiseDensityCoef noise
+    fmap (fdComponentList nelems) $ replicateM nelems $ do
+      freq  <- onRandFloat $ FreqCoeficient . (* (2*fcoef)) . inverseNormal
+      amp   <- onRandFloat (\ a -> (1+a/2)*amp)
+      phase <- onRandFloat id
+      return $ emptyFDComponent &~ do
+        fdFreqCoef   .= freq
+        fdAmplitude  .= amp
+        fdPhaseShift .= phase
 
-instance Monoid (SynthSignalGroup elem) where
-  mempty  = SynthSignalGroup{ synthSignalGroupSize = 0, synthSignalGroupVec = mempty }
-  mappend = (<>)
-
--- | Construct a new 'FDSignal' from a given 'SynthSignalGroup' around a given 'Frequency'.
-synthFDSignal :: Frequency -> SynthSignalGroup SynthSignal -> FDSignal
-synthFDSignal freq grp = fdSignal freq $ fdComponentList (synthSignalGroupSize grp) $
-  synthFDComponent freq <$> Boxed.toList (synthSignalGroupVec grp)
+-- | Construct a new 'FDSignal' from a given 'SynthSignalGroup' of 'SynthSignal' values around a
+-- given base 'Frequency'.
+synthFDSignal :: Frequency -> Boxed.Vector SynthSignal -> FDSignal
+synthFDSignal base grp = fdSignal base $ fdComponentList (Boxed.length grp) $
+  synthFDComponent base <$> Boxed.toList grp
 
 -- | Construct a new 'FDComponent' from a given 'SynthSignal' around a given 'Frequency'. This
 -- function is usually not as useful as the 'synthFDSignal' function which converts a group of
 -- 'SynthSignals' in a 'SynthSignalGroup' into a 'FDSignal'.
 synthFDComponent :: Frequency -> SynthSignal -> FDComponent
-synthFDComponent freq signal = emptyFDComponent &~ do
-  let comp lens get = lens .= sample (get signal) freq
-  comp fdFrequency  synthSigFrequency
+synthFDComponent base signal = emptyFDComponent &~ do
+  let comp lens get = lens .= sample (get signal) base
+  fdFreqCoef .= synthSigFreqCoef signal
   comp fdAmplitude  synthSigAmplitude
   comp fdPhaseShift synthSigPhaseShift
   comp fdDecayRate  synthSigDecayRate
   comp fdNoiseLevel synthSigNoiseLevel
   comp fdUndertone  synthSigUnderamp
   comp fdUnderphase synthSigUnderphase
-  comp fdUnderamp   synthSigUnderamp
+  comp fdUnderamp   synthSigUnderamp  
 
 ----------------------------------------------------------------------------------------------------
 
@@ -303,33 +320,33 @@ data ApplyShapeTo
   | ToUnderamp
   deriving (Eq, Ord, Show, Read, Enum)
 
--- | This function maps over each 'FDComponent' and applies the 'fdFrequency' of each component to a
--- 'FDSignalShape' function to produce a new 'ProcGen.Types.ProcGenFloat' value, then applies some
--- noise, then writes or updates this new value into the field of 'FDComponent' according to which
--- 'ApplyToShape' is given.
-synthApplyShape
-  :: ApplyShapeTo        -- ^ which field of the 'FDComponent' to modify
-  -> Synth FDSignalShape -- ^ the shape to use, usually @('Control.Lens.use' 'synthFDShape')@
-  -> NoiseLevel          -- ^ how much noise to apply to the shape, pass 0.0 for a perfect shape.
-  -> (ProcGenFloat -> ProcGenFloat -> ProcGenFloat)
-     -- ^ a function to apply the new value to the old value, usually pass @('Prelude.*')@ or
-     -- 'Prelude.const'. The new value is passed as the first (left-hand) parameter.
-  -> FDComponentList     -- ^ the list of elements to which changes should be applied.
-  -> Synth FDComponentList
-synthApplyShape applyTo getShape noiseLevel cross comps = do
-  shape <- getShape
-  noiseLevel <- pure $ max 0.0 $ min 1.0 $ abs noiseLevel
-  let getNoise = if noiseLevel == 0 then return 1.0 else onRandFloat $ (1.0 -) . (noiseLevel *)
-  forEachFDComponent comps $ \ comp -> do
-    let field = case applyTo of
-          ToAmplitude  -> fdAmplitude
-          ToDecayRate  -> fdDecayRate
-          ToNoiseLevel -> fdNoiseLevel
-          ToUnderamp   -> fdUnderamp
-          ToUndertone  -> fdUndertone
-    noise <- getNoise
-    pure $ comp & field %~ min 1.0 . max 0.0 . abs .
-      cross (noise * applyFDSignalShape shape (comp ^. fdFrequency))
+---- | This function maps over each 'FDComponent' and applies the 'fdFrequency' of each component to a
+---- 'FDSignalShape' function to produce a new 'ProcGen.Types.ProcGenFloat' value, then applies some
+---- noise, then writes or updates this new value into the field of 'FDComponent' according to which
+---- 'ApplyToShape' is given.
+--synthApplyShape
+--  :: ApplyShapeTo        -- ^ which field of the 'FDComponent' to modify
+--  -> Synth FDSignalShape -- ^ the shape to use, usually @('Control.Lens.use' 'synthFDShape')@
+--  -> NoiseLevel          -- ^ how much noise to apply to the shape, pass 0.0 for a perfect shape.
+--  -> (ProcGenFloat -> ProcGenFloat -> ProcGenFloat)
+--     -- ^ a function to apply the new value to the old value, usually pass @('Prelude.*')@ or
+--     -- 'Prelude.const'. The new value is passed as the first (left-hand) parameter.
+--  -> FDComponentList     -- ^ the list of elements to which changes should be applied.
+--  -> Synth FDComponentList
+--synthApplyShape applyTo getShape noiseLevel cross comps = do
+--  shape <- getShape
+--  noiseLevel <- pure $ max 0.0 $ min 1.0 $ abs noiseLevel
+--  let getNoise = if noiseLevel == 0 then return 1.0 else onRandFloat $ (1.0 -) . (noiseLevel *)
+--  forEachFDComponent comps $ \ comp -> do
+--    let field = case applyTo of
+--          ToAmplitude  -> fdAmplitude
+--          ToDecayRate  -> fdDecayRate
+--          ToNoiseLevel -> fdNoiseLevel
+--          ToUnderamp   -> fdUnderamp
+--          ToUndertone  -> fdUndertone
+--    noise <- getNoise
+--    pure $ comp & field %~ min 1.0 . max 0.0 . abs .
+--      cross (noise * applyFDSignalShape shape (comp ^. fdFrequency))
 
 ---- | Take a cluster of 'FDComponent's and form a 'FDSignal', then push this 'FDSignal' as a
 ---- 'SynthElement' on the stack of elements.

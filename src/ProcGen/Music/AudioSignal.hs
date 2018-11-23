@@ -5,7 +5,7 @@ module ProcGen.Music.AudioSignal
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
     NormFrequency, freqToNorm, normToFreq, freqToPercent, percentToNorm,
-    FreqCoeficient(..),
+    FreqCoeficient(..), freqCoeficient,
     FDComponent, emptyFDComponent,
     fdFreqCoef, fdAmplitude, fdPhaseShift, fdDecayRate,
     fdNoiseLevel, fdUndertone, fdUnderphase, fdUnderamp,

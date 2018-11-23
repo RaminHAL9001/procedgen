@@ -152,7 +152,7 @@ shapedSound snd = squareShapedSignal snd (tdDuration $ soundTDSignal snd) &~
   case soundRenderedFromFDSignal snd of
     Nothing -> return ()
     Just fd -> do
-      let fadetime = 2.0 / theFDBaseFreq fd
+      let fadetime = 2.0 / freqCoeficient (theFDBaseFreq fd) (FreqCoeficient 1.0)
       shapeAttackDuration .= fadetime
       shapeDecayDuration  .= fadetime
 
@@ -173,7 +173,7 @@ setShapedSignalDuration td decay snd = snd &~ do
 setShapedSoundDuration :: Duration -> ShapedSignal Sound -> ShapedSignal Sound
 setShapedSoundDuration td snd = fmap (const $ theShapedSignal snd) $
   setShapedSignalDuration td
-    (maybe (1/15) theFDBaseFreq $ soundRenderedFromFDSignal $ theShapedSignal snd)
+    (maybe (1/15) (normToFreq . theFDBaseFreq) $ soundRenderedFromFDSignal $ theShapedSignal snd)
     (soundTDSignal <$> snd)
 
 -- | The @signal@ itself.
@@ -393,4 +393,3 @@ getTone :: InstrumentID -> ToneID -> Sequencer (Maybe Sound)
 getTone instrm toneID =
   (join . fmap (view $ toneSounds toneID) . Map.lookup instrm) <$> use sequencerInstrument >>=
   maybe (pure Nothing) chooseSound
-
