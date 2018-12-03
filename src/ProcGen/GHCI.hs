@@ -206,10 +206,11 @@ rakeDown
   -> GtkGUI model [func num]
 rakeDown = partLayers (\ (yes, no) -> (no ++ yes, yes))
 
--- | Insert a plot function at the top of the stack, use the state lens update functions to define the plot.
+-- | Insert a plot function at the top of the stack, use the state lens update functions to define
+-- the plot.
 addLayer
   :: (HasPlotWindow plot, HasPlotFunction plot func, HasDefaultPlot func,
-      Typeable model, Num num, model ~ plot num)
+      Typeable model, Ord num, Num num, Fractional num, model ~ plot num)
   => State (func num) ()
   -> GtkGUI model ()
 addLayer select = modifyLayers () $ return . ((execState select defaultPlot) :)
@@ -286,6 +287,7 @@ exampleCart = makeCartesian &~ do
   cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
   lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
   lineWeight   .= 3.0
+  plotLabel    .= "example: f(x) = 1 - sigmoid(x)"
 
 ----------------------------------------------------------------------------------------------------
 

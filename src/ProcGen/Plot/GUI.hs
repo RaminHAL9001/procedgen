@@ -75,22 +75,20 @@ renderCartesian plot size@(V2 w _h) = cairoRender $ do
   let drawAxis isAbove = do
         isAbove (plot ^. xDimension . axisAbove) $ drawPlotWindow plotwin size
         isAbove (plot ^. yDimension . axisAbove) $ drawPlotWindow plotwin size
-  clearWithBGColor (plot ^. plotWindow ^. bgColor)
+  clearWithBGColor (plotwin ^. bgColor)
   drawAxis unless
-  let sc2d  = (+ 0.5) . (realToFrac :: Int -> Double) . (fromIntegral :: SampCoord -> Int)
-  let wp2pp =       winToPlotPoint plotwin size  :: Iso' (SampCoord, SampCoord) (num, num)
-  let pp2wp = from (winToPlotPoint plotwin size) :: Iso' (num, num) (SampCoord, SampCoord)
-  let undefined_y = error "renderCartesian: winToPlotPoint evaluated unused Y value"
-  let xOnly x = fst $ (x :: SampCoord, undefined_y :: SampCoord) ^. wp2pp
   forM_ (reverse $ plot ^. plotFunctionList) $ \ cart -> do
-    let f = theCartFunction cart
-    case (sc2d *** sc2d) . view pp2wp . (id &&& f) . xOnly <$> [0 .. w] of
-      []              -> return ()
-      (x0, y0):points -> do
+    let f   = theCartIterator cart
+    let win = uncurry TimeWindow $ plotwin ^. dimX ^. axisBounds
+    case f (fromIntegral $ div w 2) win :: [(num, num)] of
+      []        -> return ()
+      p0:points -> do
         cairoSetColor $ cart ^. lineColor
         Cairo.setLineWidth $ realToFrac $ cart ^. lineWeight
-        Cairo.moveTo x0 y0
-        forM_ points $ uncurry Cairo.lineTo
+        let pp2wp = from (winToPlotPoint plotwin size) :: Iso' (num, num) (SampCoord, SampCoord)
+        let r2f2 = realToFrac *** realToFrac :: (SampCoord, SampCoord) -> (Double, Double)
+        uncurry Cairo.moveTo $ r2f2 $ p0 ^. pp2wp
+        forM_ points $ uncurry Cairo.lineTo . r2f2 . (^. pp2wp)
         Cairo.stroke
   drawAxis when
 {-# SPECIALIZE renderCartesian :: PlotCartesian ProcGenFloat -> PixSize -> CairoRender () #-}
@@ -114,9 +112,7 @@ runCartesian = do
           ]
     let negColor = const black -- TODO: negate color, set alpha channel to 1.0
     plotwin <- use plotWindow
-    let wp2pp =       winToPlotPoint plotwin winsize  :: Iso' (SampCoord, SampCoord) (num, num)
-    let pp2wp = from (winToPlotPoint plotwin winsize) :: Iso' (num, num) (SampCoord, SampCoord)
-    let (x, y) = (pt1 ^. pointXY) ^. wp2pp :: (num, num)
+    let (x, y) = pt1 ^. pointXY ^. winToPlotPoint plotwin winsize :: (num, num)
     let drawGuideLine = unless (null funcList) $
           drawLine (negColor $ plotwin ^. bgColor) 1.0 $ line2D &~ do
             let x = realToFrac x1 + 0.5
@@ -126,7 +122,7 @@ runCartesian = do
           let y = theCartFunction (func :: Cartesian num) x
               -- HERE ^ is where the plot function is evaluaed
           let cairoCoord = (+ 0.5) . realToFrac :: SampCoord -> Double
-          let (xp, yp) = cairoCoord *** cairoCoord $ (x, y) ^. pp2wp
+          let (xp, yp) = cairoCoord *** cairoCoord $ (x, y) ^. from (winToPlotPoint plotwin winsize)
           cairoRender $ do
             Cairo.setOperator Cairo.OperatorSource
             Cairo.arc xp yp (realToFrac maxLineWidth) 0 (2*pi)

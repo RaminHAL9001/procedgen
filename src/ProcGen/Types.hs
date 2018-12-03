@@ -5,6 +5,7 @@ module ProcGen.Types
 
 import           ProcGen.PrimeNumbers
 
+import           Control.Arrow                    ((&&&))
 import           Control.Monad
 
 import           Data.Int
@@ -81,22 +82,36 @@ class HasFrequency f where
 -- | A class of time domain functions that can produce a 'Sample' from a 'Moment'.
 --
 -- Minimal complete definition: 'sample'.
-class TimeDomain f where
+class (Ord num, Num num, Fractional num) => TimeDomain f num where
   -- | Produce a sample at a single point in time for the given function @f@.
-  sample :: f -> Moment -> Sample
+  sample :: f -> num -> num
   -- | Iterate over a range of moments, producing an integer number of samples. This function has a
   -- default implementation that calls 'sample' above, but for piecewise functions like splines it
   -- is much more efficient to iterate over the list of piecewise functions in a way that does not
   -- require searching through the entire list for a function that contains the 'Moment' at which
   -- you want a single 'Sample' repeatedly for each 'Moment' in the iteration.
-  iterateSamples :: f
+  iterateSamples
+    :: f -- ^ the function over which to iterate the samples points.
     -> Int -- ^ number of samples
-    -> Moment -- ^ start point of iteration
-    -> Moment -- ^ end point of iteration
-    -> [Sample]
-  iterateSamples f nelems lo hi = loop 0 where
-    stepsize = (hi - lo) / realToFrac nelems
-    loop   i = if i > nelems then [] else sample f (lo + stepsize * realToFrac i) : loop (i + 1)
+    -> TimeWindow num -- ^ the time interval over which to iterate
+    -> [(num, num)]
+  iterateSamples = iterateSamplesWith . sample
+
+-- | This is the function which is used to instantiate the 'iterateSamples' function of the
+-- 'TimeDomain' typeclass by default if none is specified in the @instance@ for type @f@. This
+-- function operates with any pure function over the domain of 'Moment's, not just functions which
+-- instantiate the 'TimeDomain' typeclass.
+iterateSamplesWith
+  :: (Ord num, Num num, Fractional num)
+  => (num -> num) -- ^ the function @f@ over which the range of 'Moment's is applied
+  -> Int -- ^ the number of 'Moment' values to apply to the function @f@
+  -> TimeWindow num -- ^ the time interval over which we iterate
+  -> [(num, num)]
+iterateSamplesWith f nelems win' = loop 0 where
+  win      = twCanonicalize win'
+  stepsize = twDuration win / realToFrac nelems
+  loop   i = if i > nelems then [] else
+    (id &&& f) (timeStart win + stepsize * realToFrac i) : loop (i + 1)
 
 -- | A class of frequency domain functions that can produce an 'Amplitude' from a 'Frequency'.
 class FreqDomain f where
@@ -690,6 +705,11 @@ instance HasTimeWindow (TimeWindow Moment) Moment where { timeWindow = Just; }
 instance HasTimeWindow (TimeWindow Int   ) Int    where { timeWindow = Just; }
 instance HasTimeWindow [TimeWindow Moment] Moment where { timeWindow = twMinBoundsAll; }
 instance HasTimeWindow [TimeWindow Int   ] Int    where { timeWindow = twMinBoundsAll; }
+
+-- | Canonicalize the 'TimeWindow' value, which means this function evaluates to 'TimeWindow' value
+-- such that the 'timeStart' value is always less than or equal to the 'timeEnd' value.
+twCanonicalize :: Ord t => TimeWindow t -> TimeWindow t
+twCanonicalize (TimeWindow{timeStart=t0,timeEnd=t1}) = TimeWindow{ timeStart = t1, timeEnd = t0 }
 
 -- | Returns 'Prelude.True' if the given point @t@ is contained within the -- 'TimeWindow'.
 -- 'TimeWindow's are inclusive intervlas, meaning if the point @t@ is equal to either of the

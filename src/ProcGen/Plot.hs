@@ -4,6 +4,8 @@
 -- the associated GUI functions.
 module ProcGen.Plot where
 
+import           ProcGen.Types
+
 import           Control.Lens
 
 import qualified Data.Text       as Strict
@@ -121,9 +123,22 @@ axisMin = lens thePlotAxisMin $ \ a b -> a{ thePlotAxisMin = b }
 axisMax :: Lens' (PlotAxis num) num
 axisMax = lens thePlotAxisMax $ \ a b -> a{ thePlotAxisMax = b }
 
+-- | Get the upper and lower bounds of the plot axis.
 axisBounds :: Lens' (PlotAxis num) (num, num)
 axisBounds = lens (\ a -> (a ^. axisMin, a ^. axisMax))
   (\ a (min, max) -> a & axisMin .~ min & axisMax .~ max)
+
+-- | A lens to obtain the @num@ distance between 'axisMin' and 'axisMax'. Setting this value scales
+-- 'axisMin' and 'axisMax' up or down around the median between those two points.
+axisSpan :: (Num num, Fractional num) => Lens' (PlotAxis num) num
+axisSpan = lens (\ a -> uncurry subtract $ a ^. axisBounds)
+  (\ a newLen ->
+     let (lo, hi)  = a ^. axisBounds
+         diam      = hi - lo
+         center    = lo + diam / 2
+         newRadius = newLen / 2
+     in  a & axisBounds .~ (center - newRadius, center + newRadius)
+  )
 
 ----------------------------------------------------------------------------------------------------
 
@@ -179,16 +194,8 @@ dimY = yDimension
 -- spans.
 plotWinSpan :: Fractional num => Lens' (PlotWindow num) (V2 num)
 plotWinSpan = lens
-  (\ plotwin -> let (axX, axY) = (plotwin ^. xDimension, plotwin ^. yDimension) in
-      V2 (axX ^. axisMax - axX ^. axisMin) (axY ^. axisMax - axY ^. axisMin)
-  )
-  (\ plotwin (V2 w0 h0) ->
-     let (V2 x y) = plotwin ^. plotWinOrigin
-         (w , h ) = (w0 / 2.0, h0 / 2.0)
-     in  plotwin &~ do
-           xDimension . axisBounds .= (x - w, x + w)
-           yDimension . axisBounds .= (y - h, y + h)
-  )
+  (\ plotwin -> V2 (plotwin ^. dimX ^. axisSpan) (plotwin ^. dimY ^. axisSpan))
+  (\ plotwin (V2 w h) -> plotwin & xDimension . axisSpan .~ w & yDimension . axisSpan .~ h)
 
 -- | Return or set the origin point of the plot window.
 plotWinOrigin :: (HasPlotWindow win, Fractional num) => Lens' (win num) (V2 num)
@@ -262,8 +269,6 @@ winToPlotOffset plotwin winsize@(V2 w0 h0) =
       (w , h ) = (w1 / 2.0, h1 / 2.0)
   in  iso (\ (x, y) -> (x + dx - w, y + dy - h))
           (\ (x, y) -> (x - dx + w, y - dy + h))
-   -- x  (-) (-) -5.00->-0.00 || (+) (+) +5.00->+10.00
-   -- y  (+) (+) +3.75->+1.25 || (-) (-) -1.25->-3.75
 
 -- | Create a 'Happlets.Types2D.Rect2D' that demarks the boundary (in plot units) of the view screen
 -- window.
@@ -278,13 +283,16 @@ winToPlotRect plotwin size@(V2 w h) = rect2D &~ do
 class HasPlotFunction plot func | plot -> func where
   plotFunctionList :: Lens' (plot num) [func num]
 
-class HasDefaultPlot func where { defaultPlot :: Num num => func num; }
+class HasDefaultPlot func where { defaultPlot :: (Num num, Ord num, Fractional num) => func num; }
 
 data Cartesian num
   = Cartesian
     { theCartLabel    :: !Strict.Text
     , theCartStyle    :: !(LineStyle num)
     , theCartFunction :: num -> num
+    , theCartIterator :: Int -> TimeWindow num -> [(num, num)]
+      -- ^ This field is usually constructed by calling 'iterateSamples' on some 'TimeDomain' data
+      -- type on the same function that was used to set 'theCartFunction'.
     }
 
 data PlotCartesian num
@@ -308,15 +316,41 @@ instance HasPlotFunction PlotCartesian Cartesian where
 
 instance HasDefaultPlot Cartesian where { defaultPlot = makeCartesian; }
 
-makeCartesian :: Num num => Cartesian num
+makeCartesian :: (Num num, Ord num, Fractional num)  => Cartesian num
 makeCartesian = Cartesian
   { theCartLabel    = ""
   , theCartStyle    = makeLineStyle{ theLineColor = packRGBA32 0x00 0x00 0xFF 0xFF }
   , theCartFunction = const 0
+  , theCartIterator = iterateSamplesWith (const 0)
   }
 
-cartFunction :: Lens' (Cartesian num) (num -> num)
-cartFunction = lens theCartFunction $ \ a b -> a{ theCartFunction = b }
+-- | This function sets 'theCartFunction', and also sets 'theCartIterator' using
+-- 'iterateSamplesWith'. Although this breaks the lens rules because the value returns is not
+-- exactly the same as the value set, for most functions this is a perfectly reasonable thing to
+-- do. However if you decide to set this 'cartFunction' to a peicewise function (like a Bezier
+-- spline), it is a good idea to set 'cartIterator' to the 'iterateSamples' function to use a more
+-- efficient, specialized algorithm. Alternatively, you can use 'setCartFuncIter' which allows you
+-- to explicitly set both the 'cartFunction' and 'cartIterator' at the same time without using a
+-- lens.
+cartFunction :: (Ord num, Num num, Fractional num) => Lens' (Cartesian num) (num -> num)
+cartFunction = lens theCartFunction $ \ a b ->
+  a{ theCartFunction = b, theCartIterator = iterateSamplesWith b }
+
+-- | For piecewise functions it is more efficient to use a specialize iterator rather than simply
+-- repeatedly call the 'cartFunction' on a sequence of points. Therefore the 'cartIterator' function
+-- can be set separately. Calling 'cartFunction' sets this value by default.
+--
+-- Please be careful to set an iterator that is identical to the function set by the 'cartFunction'
+-- when calling this function. Some functions use 'cartIterator', others use 'cartFunction' to draw
+-- points to the graphics screen, if these functions are set differently this will result some
+-- confusing program behavior for end users.
+cartIterator :: Lens' (Cartesian num) (Int -> TimeWindow num -> [(num, num)])
+cartIterator = lens theCartIterator $ \ a b -> a{ theCartIterator = b }
+
+-- | Set the 'Cartesian' 'cartFunction' to the function 'sample' for the type @f@, set the
+-- 'cartIterator' to the function 'iterateSamples' for the type @f@.
+setCartFuncIter :: TimeDomain f num => f -> Cartesian num -> Cartesian num
+setCartFuncIter f = (cartIterator .~ iterateSamples f) . (cartFunction .~ sample f)
 
 plotCartesian :: Num num => PlotCartesian num
 plotCartesian = PlotCartesian

@@ -526,7 +526,7 @@ bufferFDComponentIDCT mvec win base fd =
 newtype TDSignal = TDSignal { tdSamples :: Unboxed.Vector Sample }
   deriving Eq
 
-instance TimeDomain TDSignal where
+instance TimeDomain TDSignal Sample where
   sample td@(TDSignal vec) t =
     let (i, r) = timeIndex t
         a = vec Unboxed.! i

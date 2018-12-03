@@ -16,6 +16,7 @@ module ProcGen.Music.TDBezier
 
 import           ProcGen.Types
 
+import           Control.Arrow                    ((&&&))
 import           Control.Lens
 import           Control.Monad
 
@@ -69,7 +70,7 @@ data Ord3Segment
     , ord3p3   :: !EndPoint
     }
 
-instance TimeDomain Ord3Segment where
+instance TimeDomain Ord3Segment ProcGenFloat where
   sample seg = bezier3 (ord3p0 seg) (ord3p1 seg) (ord3p2 seg) (ord3p3 seg)
 
 instance HasTimeWindow Ord3Segment Moment where { timeWindow = Just . ord3Time; }
@@ -96,9 +97,10 @@ instance Ord Ord3Spline where
 instance Semigroup Ord3Spline where
   a <> b = ord3Append a subtract id id b
 
-instance TimeDomain Ord3Spline where
+instance TimeDomain Ord3Spline ProcGenFloat where
   sample = ord3Sample
-  iterateSamples spline nelems lo hi = if nonsense then [] else loop idx trimsegs where
+  iterateSamples spline nelems win = if nonsense then [] else loop idx trimsegs where
+    TimeWindow{timeStart=lo,timeEnd=hi} = win
     top   = ord3Duration spline
     nonsense = nelems <= 0 || lo < 0 && hi < 0 || lo > top && hi > top
     small = min lo hi
@@ -113,10 +115,11 @@ instance TimeDomain Ord3Spline where
     trimsegs = case idx of
       []  -> []
       i:_ -> dropWhile (not . (`twContains` i) . ord3Time) segs
+    loop :: [Moment] -> [Ord3Segment] -> [(Moment, Sample)]
     loop idx segs = case segs of
       []       -> []
       seg:segs -> let (here, next) = span (twContains $ ord3Time seg) idx in
-        sample seg <$> here ++ loop next segs
+        fmap (id &&& sample seg) here ++ loop next segs
 
 -- | This function is identical to the 'ProcGen.Types.sample' function, except it its not
 -- polymorphic over the function type @f@, the type @f@ is 'Ord3Spline' when this function is used.
