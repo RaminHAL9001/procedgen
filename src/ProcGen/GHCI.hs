@@ -7,7 +7,7 @@
 module ProcGen.GHCI
   ( GHCIDisp(..), setDisp, disp, chapp,
     -- * Cartesian Plotting
-    newCartWin, cart, exampleCart,
+    newCartWin, cart, exampleCart, exampleTDBezierCart,
     -- * Parametric Plotting
     newPlotWin, newParamWin, param,
     -- * Plot Lists
@@ -26,6 +26,7 @@ module ProcGen.GHCI
 
 import           ProcGen
 import           ProcGen.Music.Sequencer (musicToFile)
+import           ProcGen.Music.TDBezier
 
 import           Control.Arrow
 import           Control.Concurrent
@@ -280,14 +281,29 @@ cart = liveUpdate
 -- | This is an example cartesian plot. Use this command to view it:
 --
 -- @
--- 'ProcGen.Plot.plotFunctions' 'Control.Lens..=' ['exampleCart']
+-- 'newPlotWin' ('plotCartesian' &~ do { ... configure plot settings ... } ) >>= chapp
+-- 'cart' $ 'addLayer' $ 'Control.Monad.State.put' $ 'exampleCart' &~ do { ... modify plot ... }
 -- @
 exampleCart :: Cartesian ProcGenFloat
 exampleCart = makeCartesian &~ do
   cartFunction .= sigmoid TimeWindow{ timeStart = (-1), timeEnd = 1 } . negate
-  lineColor    .= packRGBA32 0x00 0x00 0xFF 0xFF
+  lineColor    .= blue
   lineWeight   .= 3.0
   plotLabel    .= "example: f(x) = 1 - sigmoid(x)"
+
+-- | This is an example cartiean plot which displays a 'TDBezier' spline. See 'exampleCart' for more
+-- information on how to use this function.
+exampleTDBezierCart :: Cartesian ProcGenFloat
+exampleTDBezierCart = makeCartesian &~ do
+  modify $ setCartFuncIter $
+    ord3Spline (Just 3) (TimeWindow{ timeStart = (-1.0), timeEnd = 1.0 }) 1.0
+      [ Ord3Part 0.25 1.0 0.0 0.0
+      , Ord3Part 0.50 0.0 1.0 1.0
+      , Ord3Part 0.25 1.0 0.0 0.0
+      ]
+  lineColor  .= red
+  lineWeight .= 3.0
+  plotLabel  .= "Example TDBezier spline"
 
 ----------------------------------------------------------------------------------------------------
 
