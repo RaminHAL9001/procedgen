@@ -9,11 +9,12 @@
 module ProcGen.Music.TDBezier
   ( Ord3Spline, Ord3Part(..), Ord3Segment(..), StartPoint, EndPoint, ControlPoint,
     HasControlPoint1(..), HasControlPoint2(..), HasControlPoint3(..),
-    ord3Window, ord3Duration, ord3Start, ord3End,
+    theOrd3Window, ord3Window, ord3Duration, ord3Start, ord3End,
     ord3SegmentCount, ord3Segments, ord3Parts, ord3Spline,
   )
   where
 
+import           ProcGen.Arbitrary
 import           ProcGen.Types
 
 import           Control.Lens
@@ -53,6 +54,9 @@ instance HasControlPoint2 Ord3Part where
 instance HasControlPoint3 Ord3Part where
   ctrlPt3 = lens ord3PartP3 $ \ a b -> a{ ord3PartP3 = b }
 
+instance Arbitrary Ord3Part where
+  arbitrary = Ord3Part <$> getRandom <*> getRandom <*> getRandom <*> getRandom
+
 -- | This is a single segment of a 'TDBezier3Spline' expressed in absolute time. Unlike the
 -- 'Ord3Part' (which is a part of a whole spline of connected segments), this data has it's own
 -- 'TimeWindow' expressed in non-normalized, absolute units of time, making each segment a fully
@@ -85,19 +89,29 @@ instance HasTimeWindow Ord3Segment Moment where { timeWindow = Just . ord3Time; 
 -- a 'Ord3Spline' as a function, use the 'sample' function of the 'TimeDomain' type class.
 data Ord3Spline
   = Ord3Spline
-    { ord3Window :: !(TimeWindow Moment)
+    { theOrd3Window :: !(TimeWindow Moment)
     , ord3Start  :: !StartPoint
       -- ^ The first control point, which sets value of the spline at and before the 'timeStart' fo
-      -- the 'ord3Window'.
+      -- the 'theOrd3Window'.
     , ord3Points :: !(Unboxed.Vector ControlPoint)
     }
   deriving Eq
 
 instance Ord Ord3Spline where
   compare a b =
-    compare (ord3Window b) (ord3Window a) <>
+    compare (theOrd3Window b) (theOrd3Window a) <>
     compare (ord3Start  a) (ord3Start  b) <>
     compare (ord3Points a) (ord3Points b)
+
+instance Arbitrary Ord3Spline where
+  arbitrary = do
+    n  <- onBeta5RandFloat $ round . (* 20)
+    ord3Spline (Just n) (TimeWindow{ timeStart = 0, timeEnd = 1 })
+      <$> getRandom
+      <*> replicateM n arbitrary
+
+instance HasTimeWindow Ord3Spline Moment where
+  timeWindow = Just . theOrd3Window
 
 --instance Semigroup Ord3Spline where
 --  a <> b = ord3Append a subtract id id b
@@ -134,7 +148,7 @@ instance TimeDomain Ord3Spline ProcGenFloat where
           zip hi (repeat $ ord3Start spline)
     -- TODO: find a more elegant, mathematical way to do this without all these darn conditionals.
     where
-      swin        = ord3Window spline
+      swin        = theOrd3Window spline
       iterFwd     = twDuration iter >= 0
       splnFwd     = twDuration swin >= 0
       stepsize    = twDuration iter / realToFrac nelems
@@ -148,22 +162,25 @@ instance TimeDomain Ord3Spline ProcGenFloat where
         seg:segs -> let (idx, more) = span (twContains $ ord3Time seg) idx0 in
           zip idx (sample seg <$> idx) ++ loop more segs
 
+ord3Window :: Lens' Ord3Spline (TimeWindow Moment)
+ord3Window = lens theOrd3Window $ \ a b -> a{ theOrd3Window = b }
+
 -- | Similar to 'ord3Start', gets the final control point that sets the value of the curve at and
--- beyond the 'timeEnd' of the 'ord3Window'.
+-- beyond the 'timeEnd' of the 'theOrd3Window'.
 ord3End :: Ord3Spline -> Sample
 ord3End (Ord3Spline{ord3Start=p0,ord3Points=vec}) = let len = Unboxed.length vec in
   if len <= 0 then p0 else vec Unboxed.! (len - 1)
 
--- | Get the time span (the 'twDuration') of the 'ord3Window', that is the total amount of time this
+-- | Get the time span (the 'twDuration') of the 'theOrd3Window', that is the total amount of time this
 -- spline spans.
 ord3Duration :: Ord3Spline -> Duration
-ord3Duration = twDuration . ord3Window
+ord3Duration = twDuration . theOrd3Window
 
 -- | This function is identical to the 'ProcGen.Types.sample' function, except it is not polymorphic
 -- over the function type @f@, the type @f@ is 'Ord3Spline' when this function is used.
 ord3Sample :: Ord3Spline -> Moment -> Sample
 ord3Sample spline t = case filter ((`twContains` t) . ord3Time) $ ord3Segments spline of
-  []    -> let TimeWindow{timeStart=lo} = twCanonicalize (ord3Window spline) in
+  []    -> let TimeWindow{timeStart=lo} = twCanonicalize (theOrd3Window spline) in
     (if t <= lo then ord3Start else ord3End) spline
   seg:_ -> sample seg t
 {-# INLINE ord3Sample #-}
@@ -189,7 +206,7 @@ ord3Parts spline = loop $ Unboxed.toList $ ord3Points spline where
 -- | Obtain a list of line segments, each segment containing a start point, a control point near the
 -- start point, a control point near the end point, and an end point.
 ord3Segments :: Ord3Spline -> [Ord3Segment]
-ord3Segments spline@(Ord3Spline{ord3Start=p0,ord3Window=win}) = loop 0 p0 $ ord3Parts spline where
+ord3Segments spline@(Ord3Spline{ord3Start=p0,theOrd3Window=win}) = loop 0 p0 $ ord3Parts spline where
   loop t0 p0 = \ case
     []        -> []
     part:more -> let t1 = t0 + ord3PartDt part in
@@ -250,7 +267,7 @@ ord3Spline nparts win p0 parts' = spline where
   parts   = filter ((> 0) . ord3PartDt) parts'
   winsize = sum $ abs . ord3PartDt <$> parts
   spline  = Ord3Spline
-    { ord3Window = win
+    { theOrd3Window = win
     , ord3Start  = p0
     , ord3Points = maybe Unboxed.fromList makevec nparts $ loop parts 
     }
