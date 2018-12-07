@@ -5,7 +5,10 @@
 -- construct a 'Happlets.Happlet.Happlet' value, and provide this value along with an initializing
 -- 'Happlets.GUI.GUI' function to the 'setDisp' function to set an arbitrary model-view-controller.
 module ProcGen.GHCI
-  ( GHCIDisp(..), setDisp, disp, chapp,
+  ( -- * Generating random values
+    rand, arb, reseedRand, resetRand,
+    currentRandSeed, currentRandState, RandState(..),
+    GHCIDisp(..), setDisp, disp, chapp,
     -- * Cartesian Plotting
     newCartWin, cart, exampleCart, exampleTDBezierCart,
     -- * Parametric Plotting
@@ -36,9 +39,91 @@ import           Happlets.Provider
 
 import           Data.Dynamic
 import           Data.List      (partition)
+import           Data.Proxy
 import           Data.Typeable
 
 import           System.IO.Unsafe
+
+----------------------------------------------------------------------------------------------------
+
+-- | This function lets you evaluate a function of type @'ProcGen.Arbitrary.TFRandT' IO@, but in the
+-- IO monad. This function uses a stateful pseudo-random number generator which you can seed by
+-- passing a 'TFRandSeed' to the using 'reseedRand' function. 'TFRandSeed' instantiates
+-- 'Prelude.Num' so you can pass a literal number and GHCI will do the right thing and convert it to
+-- a 'TFRandSeed'.
+--
+-- When the GHCI session first launches, this random number generator is always seeded with the
+-- number zero. You can randomize it using 'scrambleRand', which is shorthand for
+-- @'ProcGen.Arbitrary.newTFRandSeed' >>= 'reseedRand'@.
+--
+-- The seed value and the current random number generator are stored together in a 'RandState' which
+-- you can bind to a variable using 'currentRandState', and restore the state later using
+-- 'resetRand'.
+rand :: TFRandT IO a -> IO a
+rand f = modifyMVar randgenMVar $ \ sg -> do
+  (a, tf) <- runTFRandT f $ theRandTFGen sg
+  return (sg{ theRandTFGen = tf }, a)
+
+-- | Shorthand for @'rand' 'ProcGen.Arbitrary.arbitrary'@, except it takes a 'Data.Proxy.Proxy' type
+-- which is best used when the @TypeApplications@ language flag is used.
+--
+-- @
+-- :set -XTypeApplications
+-- 'arb' @Int
+-- @
+arb :: Arbitrary a => Proxy a -> IO a
+arb Proxy = rand arbitrary
+
+-- | This function lets you reset the pseudo-random number generator used by the 'rand' function to
+-- a seed value of type 'ProcGen.Arbitrary.TFRandSeed'. The current 'RandState' stored by the 'rand'
+-- function is returned so you can bind it to a variable name should you want to revisit it
+-- later. You can use 'resetRand' to set a 'RandState' to a previous state value.
+--
+-- This is useful if you want to use a known random sequnce, for example when experimenting with
+-- procedurally generated values, and you discover an interesting series of random values for seed
+-- number 0, you can use @reseedRand 0@ to recreate that random sequence.
+--
+-- 'ProcGen.Arbitrary.TFRandSeed' instantiates the 'Prelude.Num' typeclass, so passing a literal
+-- integer as a parameter to this function will work well:
+--
+-- @
+-- reseedRand 42
+-- @
+--
+-- The real question is this: if the meaning of life, the universe, and everything, are all
+-- currently being procedurally generated using a Twofish pseudo-random number generator, then what
+-- was the seed number used to initalize that random number generator?
+reseedRand :: TFRandSeed -> IO RandState
+reseedRand seed = modifyMVar randgenMVar $ \ sg -> return
+  (RandState{ theRandSeed = seed, theRandTFGen = tfGen seed }, sg)
+
+-- | If you have obtained a copy of the current 'RandState' using 'currentRandState', you can
+-- restore the state using this function.
+resetRand :: RandState -> IO RandState
+resetRand = swapMVar randgenMVar
+
+-- | Obtain a copy of the current 'RandState' being used by the 'rand' function. You can bind this
+-- to a variable and keep it for as long as the GHCI session lasts, restoring this state using the
+-- 'resetRand' function. 
+currentRandState :: IO RandState
+currentRandState = readMVar randgenMVar
+
+-- | If you want a reminder of what random seed was used to seed this generator, this function will
+-- report it to you. This function is a shorthand for:
+-- @'theRandSeed' 'Control.Applicative.<$>' 'currentRandState'@.
+currentRandSeed :: IO TFRandSeed
+currentRandSeed = theRandSeed <$> currentRandState
+
+-- | This is the stateful data used by the 'rand' function. You can bind a copy of it to a variable
+-- in your GHCI session using 'currentRandState', and restore this state using 'resetRand'.
+data RandState = RandState{ theRandSeed :: !TFRandSeed, theRandTFGen :: !TFGen }
+
+-- not for export
+randgenMVar :: MVar RandState
+randgenMVar = unsafePerformIO $ do
+  seed <- newTFRandSeed
+  newMVar $ RandState{ theRandSeed = seed, theRandTFGen = tfGen seed }
+{-# NOINLINE randgenMVar #-}
 
 ----------------------------------------------------------------------------------------------------
 
