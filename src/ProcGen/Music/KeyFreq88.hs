@@ -26,6 +26,7 @@ module ProcGen.Music.KeyFreq88
   )
   where
 
+import           ProcGen.Arbitrary
 import           ProcGen.Types
 
 import           Control.Arrow
@@ -221,6 +222,9 @@ toneName = (toneNameTable Unboxed.!) . fromEnum
 
 newtype KeyIndex = KeyIndex { keyIndexToWord8 :: Word8 }
   deriving (Eq, Ord, Show, Read)
+
+instance Arbitrary KeyIndex where
+  arbitrary = onRandFloat $ KeyIndex . round . (* 87) . inverseNormal
 
 -- | Construct a 'KeyIndex', evaluates to an error value if the given
 -- number is less than zero or greater than 87.
