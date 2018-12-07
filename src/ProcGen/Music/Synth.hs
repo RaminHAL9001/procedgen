@@ -7,13 +7,11 @@ module ProcGen.Music.Synth
     Synth(..), SynthState(..), initSynthIO, runSynth,
     resizeSynthBuffer, resetSynthBuffer,
     synthFDSignal, synthFDNoise,
-    synthAttack, synthFDShape, synthFrequency, synthBuffer,
+    synthAttack, synthFrequency, synthBuffer,
     -- * Constructing Frequency Domain Components
     smallFractions, bigFractions, allFractions, fractions,
     -- * Shaping Frequency Component Levels
-    ApplyShapeTo(..), synthRandomizeLevels,
-    FDSignalShape(..), applyFDSignalShape, fdShapeBase,
-    fdShapeLowerLimit, fdShapeUpperLimit, fdShapeLoEnvelope, fdShapeHiEnvelope,
+    synthRandomizeLevels,
   ) where
 
 import           Happlets.Lib.Gtk
@@ -61,8 +59,8 @@ data SynthState
     , theSynthFrequency   :: !Frequency
       -- ^ The frequency around which procedurally generated frequency domain components are
       -- centered.
-    , theSynthFDShape     :: !FDSignalShape
-      -- ^ a function used to enforce a shape on procedurally generated frequency domain components.
+--    , theSynthFDShape     :: !FDSignalShape
+--      -- ^ a function used to enforce a shape on procedurally generated frequency domain components.
     , theSynthBuffer      :: !(Mutable.IOVector Sample)
       -- ^ a buffer used to render the frequency domain signal to a time domain signal. This buffer
       -- begins with enough memory to store 4.0 seconds of sound, but can be changed with
@@ -107,8 +105,8 @@ synthAttack = lens theSynthAttack $ \ a b -> a{ theSynthAttack = b }
 synthTFGen :: Lens' SynthState TFGen
 synthTFGen = lens theSynthTFGen $ \ a b -> a{ theSynthTFGen = b }
  
-synthFDShape :: Lens' SynthState FDSignalShape
-synthFDShape = lens theSynthFDShape $ \ a b -> a{ theSynthFDShape = b }
+--synthFDShape :: Lens' SynthState FDSignalShape
+--synthFDShape = lens theSynthFDShape $ \ a b -> a{ theSynthFDShape = b }
 
 synthFrequency :: Lens' SynthState Frequency
 synthFrequency = lens theSynthFrequency $ \ a b -> a{ theSynthFrequency = b }
@@ -224,7 +222,7 @@ synthFDComponent base signal = emptyFDComponent &~ do
 -- operating system's initializer.
 initSynthIO :: IO SynthState
 initSynthIO =
-  SynthState mempty mempty 256.0 (fdSignalShapeFlat 1.0) <$> newSampleBuffer 4.0 <*> initTFGen
+  SynthState mempty mempty 256.0 <$> newSampleBuffer 4.0 <*> initTFGen
 
 -- | Evaluate a 'Synth' function.
 runSynth :: Synth a -> SynthState -> IO (a, SynthState)
@@ -311,14 +309,14 @@ synthRandomizeLevels a b comps = do
   forEachFDComponent comps $ \ comp ->
     scale (comp ^. fdAmplitude) >>= \ amp -> pure (comp & fdAmplitude .~ amp)
 
--- | A data type specifically used by the 'synthApplyShape' function.
-data ApplyShapeTo
-  = ToAmplitude
-  | ToDecayRate
-  | ToNoiseLevel
-  | ToUndertone
-  | ToUnderamp
-  deriving (Eq, Ord, Show, Read, Enum)
+---- | A data type specifically used by the 'synthApplyShape' function.
+--data ApplyShapeTo
+--  = ToAmplitude
+--  | ToDecayRate
+--  | ToNoiseLevel
+--  | ToUndertone
+--  | ToUnderamp
+--  deriving (Eq, Ord, Show, Read, Enum)
 
 ---- | This function maps over each 'FDComponent' and applies the 'fdFrequency' of each component to a
 ---- 'FDSignalShape' function to produce a new 'ProcGen.Types.ProcGenFloat' value, then applies some
@@ -376,57 +374,58 @@ data ApplyShapeTo
 
 ----------------------------------------------------------------------------------------------------
 
--- | A data type for declaring the shape of an 'FDSignal'.
-data FDSignalShape
-  = FDSignalShape
-    { theFDShapeBase       :: Frequency
-      -- ^ The base frequency, which splits the audible spectrum into "lower" and "upper" bands.
-    , theFDShapeLowerLimit :: Frequency
-      -- ^ The lowest audible frequency of the shape
-    , theFDShapeLoEnvelope :: Envelope
-      -- ^ The envelope that defines the shape of the 'FDSignal' to be produced by this
-      -- structure. The 'ProcGen.Types.Envelope' function is expected to be defined only on the
-      -- range between and including 0.0 and 1.0, and will be transformed to fit in the region of
-      -- frequencies between 'theFDShapeLowerLimit' and 'theFDShapeBase'.
-    , theFDShapeUpperLimit :: Frequency
-      -- ^ Like 'theFDShapeLowerLimit' but defines a point above 'theFDShapeBase' frequency.
-    , theFDShapeHiEnvelope :: Envelope
-      -- ^ Like 'theFDShapeLoEnvelope' but defines an envelope applied to the region of frequencies
-      -- between 'theFDShapeBase' and 'theFDShapeUpperLimit'.
-    }
-
--- | A default 'FDSignalShape' which always evaluates to 1.0.
-fdSignalShapeFlat :: Amplitude -> FDSignalShape
-fdSignalShapeFlat a = FDSignalShape
-  { theFDShapeBase       = 256.0
-  , theFDShapeLowerLimit = 15.0
-  , theFDShapeLoEnvelope = const $ const a
-  , theFDShapeUpperLimit = nyquist
-  , theFDShapeHiEnvelope = const $ const a
-  }
-
-fdShapeBase :: Lens' FDSignalShape Frequency
-fdShapeBase = lens theFDShapeBase $ \ a b -> a{ theFDShapeBase = b }
-
-fdShapeLowerLimit :: Lens' FDSignalShape Frequency
-fdShapeLowerLimit = lens theFDShapeLowerLimit $ \ a b -> a{ theFDShapeLowerLimit = b }
-
-fdShapeUpperLimit :: Lens' FDSignalShape Frequency
-fdShapeUpperLimit = lens theFDShapeUpperLimit $ \ a b -> a{ theFDShapeUpperLimit = b }
-
-fdShapeLoEnvelope :: Lens' FDSignalShape Envelope
-fdShapeLoEnvelope = lens theFDShapeLoEnvelope $ \ a b -> a{ theFDShapeLoEnvelope = b }
-
-fdShapeHiEnvelope :: Lens' FDSignalShape Envelope
-fdShapeHiEnvelope = lens theFDShapeHiEnvelope $ \ a b -> a{ theFDShapeHiEnvelope = b }
-
--- | Given a 'Frequency', return an amplitude for that frequency that fits the 'FDSignalShape'.
-applyFDSignalShape :: FDSignalShape -> Frequency -> Amplitude
-applyFDSignalShape sh freq =
-  if sh ^. fdShapeLowerLimit <= freq || freq <= sh ^. fdShapeUpperLimit then 0.0 else
-    case compare freq $ sh ^. fdShapeBase of
-      EQ -> 1.0
-      LT -> freq & (sh ^. fdShapeLoEnvelope)
-        (TimeWindow{ timeStart = sh ^. fdShapeLowerLimit, timeEnd = sh ^. fdShapeBase })
-      GT -> freq & (sh ^. fdShapeHiEnvelope)
-        (TimeWindow{ timeStart = sh ^. fdShapeBase, timeEnd = sh ^. fdShapeUpperLimit })
+---- | A data type for declaring the shape of an 'FDSignal'.
+--data FDSignalShape
+--  = FDSignalShape
+--    { theFDShapeBase       :: Frequency
+--      -- ^ The base frequency, which splits the audible spectrum into "lower" and "upper" bands.
+--    , theFDShapeLowerLimit :: Frequency
+--      -- ^ The lowest audible frequency of the shape
+--    , theFDShapeLoEnvelope :: Envelope
+--      -- ^ The envelope that defines the shape of the 'FDSignal' to be produced by this
+--      -- structure. The 'ProcGen.Types.Envelope' function is expected to be defined only on the
+--      -- range between and including 0.0 and 1.0, and will be transformed to fit in the region of
+--      -- frequencies between 'theFDShapeLowerLimit' and 'theFDShapeBase'.
+--    , theFDShapeUpperLimit :: Frequency
+--      -- ^ Like 'theFDShapeLowerLimit' but defines a point above 'theFDShapeBase' frequency.
+--    , theFDShapeHiEnvelope :: Envelope
+--      -- ^ Like 'theFDShapeLoEnvelope' but defines an envelope applied to the region of frequencies
+--      -- between 'theFDShapeBase' and 'theFDShapeUpperLimit'.
+--    }
+--
+---- | A default 'FDSignalShape' which always evaluates to 1.0.
+--fdSignalShapeFlat :: Amplitude -> FDSignalShape
+--fdSignalShapeFlat a = FDSignalShape
+--  { theFDShapeBase       = 256.0
+--  , theFDShapeLowerLimit = 15.0
+--  , theFDShapeLoEnvelope = const $ const a
+--  , theFDShapeUpperLimit = nyquist
+--  , theFDShapeHiEnvelope = const $ const a
+--  }
+--
+--fdShapeBase :: Lens' FDSignalShape Frequency
+--fdShapeBase = lens theFDShapeBase $ \ a b -> a{ theFDShapeBase = b }
+--
+--fdShapeLowerLimit :: Lens' FDSignalShape Frequency
+--fdShapeLowerLimit = lens theFDShapeLowerLimit $ \ a b -> a{ theFDShapeLowerLimit = b }
+--
+--fdShapeUpperLimit :: Lens' FDSignalShape Frequency
+--fdShapeUpperLimit = lens theFDShapeUpperLimit $ \ a b -> a{ theFDShapeUpperLimit = b }
+--
+--fdShapeLoEnvelope :: Lens' FDSignalShape Envelope
+--fdShapeLoEnvelope = lens theFDShapeLoEnvelope $ \ a b -> a{ theFDShapeLoEnvelope = b }
+--
+--fdShapeHiEnvelope :: Lens' FDSignalShape Envelope
+--fdShapeHiEnvelope = lens theFDShapeHiEnvelope $ \ a b -> a{ theFDShapeHiEnvelope = b }
+--
+---- | Given a 'Frequency', return an amplitude for that frequency that fits the 'FDSignalShape'.
+--applyFDSignalShape :: FDSignalShape -> Frequency -> Amplitude
+--applyFDSignalShape sh freq =
+--  if sh ^. fdShapeLowerLimit <= freq || freq <= sh ^. fdShapeUpperLimit then 0.0 else
+--    case compare freq $ sh ^. fdShapeBase of
+--      EQ -> 1.0
+--      LT -> freq & (sh ^. fdShapeLoEnvelope)
+--        (TimeWindow{ timeStart = sh ^. fdShapeLowerLimit, timeEnd = sh ^. fdShapeBase })
+--      GT -> freq & (sh ^. fdShapeHiEnvelope)
+--        (TimeWindow{ timeStart = sh ^. fdShapeBase, timeEnd = sh ^. fdShapeUpperLimit })
+--

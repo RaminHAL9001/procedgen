@@ -34,6 +34,8 @@ import           ProcGen.Types
 import           ProcGen.Arbitrary
 import           ProcGen.Buffer
 --import           ProcGen.Collapsible
+import           ProcGen.Music.KeyFreq88
+import           ProcGen.Music.TDBezier
 import           ProcGen.Music.WaveFile
 import           ProcGen.Properties
 --import           ProcGen.VectorBuilder
@@ -44,6 +46,7 @@ import           Control.Monad.ST
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
+import           Data.Word
 
 import           Linear.V2
 
@@ -88,6 +91,10 @@ newtype NormFrequency = NormFrequency ProcGenFloat
   deriving (Eq, Ord)
 
 instance Show NormFrequency where { show = show . normToFreq; }
+
+instance Arbitrary NormFrequency where
+  -- produce an arbitrary frequency from one of the keys on the 88-key keyboard
+  arbitrary = onArbitrary $ freqToNorm . keyboard88
 
 -- | Pass a value between 0 and 1 to construct a normalized frequency. This function is the inverse
 -- of 'freqToPercent'.
@@ -271,48 +278,41 @@ forEachFDComponent_
   -> m ()
 forEachFDComponent_ = forM_ . fdCompListElems
 
---compMult :: [Frequency]
---compMult = componentMultipliers
+compMult :: [Frequency]
+compMult = componentMultipliers
 
---randFDComponents :: TFRand FDComponentList
---randFDComponents = do
---  (count, components) <- fmap (first sum . unzip . concat) $ forM compMult $ \ mul -> do
---    dice <- getRandom :: TFRand Word8
---    if dice > 4 then return [] else do
---      amp     <- onRandFloat $ (* (3/4) ) . (+ (1/3))
---      phase   <- onRandFloat id
---      ifUnder <- onRandFloat (\ i f -> if i < 0.2 then f else return 0.0)
---      decay   <- onRandFloat (* 2)
---      noise   <- onRandFloat (\ x -> if x <= 0.2 then x * 5.0 else 0.0)
---      under   <- ifUnder $ onRandFloat (* 7.5)
---      undph   <- ifUnder $ onRandFloat id
---      undamp  <- ifUnder $ onBeta5RandFloat (1 -)
---      return $ do
---        guard $ freq < nyquist
---        guard $ amp  > 0.1
---        return $ (,) 1 $ FDComponent
---          { theFDFreqCoef  = mul
---          , theFDAmplitude  = if mul > 1 then amp / mul else amp * mul
---          , theFDPhaseShift = phase
---          , theFDDecayRate  = decay
---          , theFDNoiseLevel = noise
---          , theFDUndertone  = under
---          , theFDUnderphase = undph
---          , theFDUnderamp   = undamp
---          }
---  return FDComponentList
---    { fdCompListLength = count + 1
---    , fdCompListElems  = FDComponent
---        { theFDFreqCoef  = base
---        , theFDAmplitude  = 1.0
---        , theFDPhaseShift = 0.0
---        , theFDDecayRate  = 0.0
---        , theFDNoiseLevel = 1.0
---        , theFDUndertone  = 0.0
---        , theFDUnderphase = 0.0
---        , theFDUnderamp   = 0.0
---        } : components
---    }
+instance Arbitrary FDComponentList where
+  arbitrary = do
+    (count, components) <- fmap (first sum . unzip . concat) $ do
+      let mkenv = (ord3Window .~ compMultWin) <$> arbitrary
+      ampEnv   <- mkenv
+      noiseEnv <- mkenv
+      forM compMult $ \ mul -> do
+        dice <- getRandom
+        let amp = sample ampEnv mul
+        if (dice :: Word8) > 4 || amp <= 0.1 then return [] else do
+          amp <- onRandFloat $ sample ampEnv
+          if amp < 0.1 then return [] else do
+            phase   <- getRandom
+            decay   <- onRandFloat (* amp)
+            noise   <- onRandFloat $ sample noiseEnv
+            under   <- getRandom
+            undph   <- getRandom
+            undamp  <- getRandom
+            return $ pure $ (,) 1 $ FDComponent
+              { theFDFreqCoef   = FreqCoeficient mul
+              , theFDAmplitude  = amp
+              , theFDPhaseShift = phase
+              , theFDDecayRate  = decay
+              , theFDNoiseLevel = noise
+              , theFDUndertone  = under
+              , theFDUnderphase = undph
+              , theFDUnderamp   = undamp
+              }
+    return FDComponentList
+      { fdCompListLength = count + 1
+      , fdCompListElems  = components
+      }
 
 fdComponentInsert :: FDComponent -> FDComponentList -> FDComponentList
 fdComponentInsert c list = FDComponentList
@@ -345,6 +345,9 @@ instance Show FDSignal where
 instance BufferIDCT FDSignal where
   bufferIDCT mvec win fd =
     mapM_ (bufferFDComponentIDCT mvec win $ fd ^. fdBaseFreq) $ fdCompListElems $ listFDElems fd
+
+instance Arbitrary FDSignal where
+  arbitrary = fdSignal <$> onArbitrary keyboard88 <*> arbitrary
 
 fdMinFreq :: Lens' FDSignal FreqCoeficient
 fdMinFreq = lens theFDMinFreq $ \ a b -> a{ theFDMinFreq = b }
@@ -449,22 +452,18 @@ lookupFDComponent (FDSignal{theFDSignalVector=vec}) i =
 -- number. Simply multiply a these numbers times a base frequency to get your components.
 componentMultipliers :: [Frequency]
 componentMultipliers = do
-  let f prime n = fmap (prime **) $ [negate n .. n]
+  let f prime n = (prime **) <$> [negate n .. n]
   twos   <- f 2 5
   threes <- f 3 4
   fives  <- f 5 3
   sevens <- f 7 2
   [twos * threes * fives * sevens]
 
----- | Construct an 'ProcGen.Arbitrary.Arbitrary' 'FDSignal' with random 'ProcGen.Types.Frequency'
----- components generated with rational-numbered scaled frequency components around a given base
----- frequency. This will generate up to 1920 components, but is most likely to generate around 480
----- components.
---randFDSignal :: Frequency -> TFRand FDSignal
---randFDSignal = fmap fdSignal . randFDComponents
-
---randFDSignalIO :: Frequency -> IO FDSignal
---randFDSignalIO = seedIOEvalTFRand . randFDSignal
+compMultWin :: TimeWindow Frequency
+compMultWin = TimeWindow
+  { timeStart = 2**(-5) * 3**(-4) * 5**(-3) * 7**(-2)
+  , timeEnd   = 2 ** 5  * 3 ** 4  * 5 ** 3  * 7 ** 2
+  }
 
 -- | Evaluates 'bufferIDCT' in the 'Control.Monad.ST.ST' monad producing a pure 'TDSignal' function.
 pureIDCT :: TFGen -> Duration -> FDSignal -> TDSignal
