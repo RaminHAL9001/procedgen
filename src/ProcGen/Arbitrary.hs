@@ -8,7 +8,7 @@ module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
     shuffleTake, randSelect,
-    Word256, TFRandSeed, tfGen,
+    Word256, TFRandSeed, tfGen, newTFRandSeed,
     TFRandT(..), TFRand, arbTFRand, seedIOArbTFRand,
     seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
      seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT,  runTFRand,  runTFRandT,
@@ -199,6 +199,12 @@ word64MultWithCarry a b = word64SumWithCarry
 tfGen :: TFRandSeed -> TFGen
 tfGen (Word256 s3 s2 s1 s0) = seedTFGen (s3, s2, s1, s0)
 
+-- | Ask the operating system to create a new random seed from it's store of entropy.
+newTFRandSeed :: IO TFRandSeed
+newTFRandSeed = do
+  (a, b, c, d) <- mkSeedUnix
+  pure $ Word256 a b c d
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A simple default pure random number generator based on the Twofish pseudo-random number
@@ -279,7 +285,7 @@ seedIOArbTFRand = seedIOEvalTFRand arbitrary
 -- | Run a 'TFRand' function with an already-existing Twofish generator. This function is not very
 -- useful unless you choose to use the 'System.Random.split' function to evaluate a nested 'TFRand'
 -- function within another 'TFRand' function. If you simply want to generate a random value, it is
--- better to use 'runTFRandSeed' or 'runTFRandIO'.
+-- better to use 'runTFRandSeed' or 'runTFRandT'.
 evalTFRand :: TFRand a -> TFGen -> a
 evalTFRand (TFRandT f) = evalRand f
 
