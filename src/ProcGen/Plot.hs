@@ -13,8 +13,6 @@ import           Data.Typeable
 
 import           Happlets.Lib.Gtk
 
-import           Linear.V2
-
 ----------------------------------------------------------------------------------------------------
 
 class HasPlotLabel func where { plotLabel :: Lens' (func num) Strict.Text }

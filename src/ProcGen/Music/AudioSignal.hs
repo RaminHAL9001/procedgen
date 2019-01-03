@@ -48,8 +48,6 @@ import qualified Data.Vector.Unboxed         as Unboxed
 import qualified Data.Vector.Unboxed.Mutable as Mutable
 import           Data.Word
 
-import           Linear.V2
-
 import qualified Graphics.Rendering.Cairo    as Cairo
 
 import           Text.Printf
@@ -631,7 +629,7 @@ resizeFDView = drawFDView <$> getModel <*> getWindowSize <*> use animFrame >>= o
 
 runFDView :: GtkGUI FDView ()
 runFDView = do
-  resizeEvents $ const resizeFDView
+  resizeEvents ClearCanvasMode $ \ _ _ -> resizeFDView
   keyboardEvents $ \ key -> do
     case key of
       Keyboard True mod key | noModifiers==mod -> case key of
@@ -640,7 +638,7 @@ runFDView = do
         _            -> return ()
       _ -> return ()
     isNowAnimated <- use animRun
-    stepFrameEvents $ if isNowAnimated then animateFDView else const disable
+    stepFrameEvents $ if isNowAnimated then animateFDView else const deleteEventHandler
   resizeFDView
 
 ----------------------------------------------------------------------------------------------------
@@ -730,13 +728,13 @@ drawTDView v (V2 (SampCoord w) (SampCoord h)) = do
     gridColumn .= 0
     displayString (printf "time = %+.4f" (realToFrac (v ^. animFrame) :: ProcGenFloat))
 
-resizeTDView :: GtkGUI TDView ()
-resizeTDView = drawTDView <$> getModel <*> getWindowSize >>= onCanvas
+resizeTDView :: OldPixSize -> NewPixSize -> GtkGUI TDView ()
+resizeTDView _ siz = drawTDView <$> getModel <*> pure siz >>= onCanvas
 
 animateTDView :: AnimationMoment -> GtkGUI TDView ()
 animateTDView = realToFrac >>> \ dt -> do
   beyond <- gets $ (>=) dt . tdDuration . theTDViewSignal
-  if beyond then stepFrameEvents $ const disable else do
+  if beyond then stepFrameEvents $ const deleteEventHandler else do
     animFrame .= realToFrac dt
     drawTDView <$> getModel <*> getWindowSize >>= onCanvas
 
@@ -749,7 +747,7 @@ clickMouseTDView (Mouse _ pressed _mod button _loc) = when pressed $ case button
   _          -> do
     animRun %= not -- This couldn't possibly toggle the animate bit.... NOT!!!
     isNowAnimated <- use animRun
-    stepFrameEvents $ if isNowAnimated then animateTDView else const disable
+    stepFrameEvents $ if isNowAnimated then animateTDView else const deleteEventHandler
 
 -- | Use this to attach a @('Happlets.GUI.Happlet' 'TDView')@ to a window.
 runTDView :: GtkGUI TDView ()
@@ -763,9 +761,8 @@ runTDView = do
         _            -> return ()
       _ -> return ()
     isNowAnimated <- use animRun
-    unless isNowAnimated $ stepFrameEvents $ const disable
-  resizeEvents $ const resizeTDView
-  resizeTDView
+    unless isNowAnimated $ stepFrameEvents $ const deleteEventHandler
+  resizeEvents ClearCanvasMode resizeTDView
 
 ----------------------------------------------------------------------------------------------------
 

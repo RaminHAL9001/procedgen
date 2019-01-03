@@ -15,8 +15,6 @@ import qualified Graphics.Rendering.Cairo as Cairo
 
 import           Happlets.Lib.Gtk
 
-import           Linear.V2
-
 import           Text.Printf
 
 ----------------------------------------------------------------------------------------------------
@@ -25,7 +23,6 @@ clearWithBGColor :: Color -> Cairo.Render ()
 clearWithBGColor c = do
   let (r,g,b,a) = unpackRGBA32Color c
   cairoClearCanvas r g b a
-{-# SPECIALIZE resizeCart :: GtkGUI (PlotCartesian ProcGenFloat) () #-}
 
 setLineStyle :: (Real num, Fractional num) => LineStyle num -> Cairo.Render ()
 setLineStyle style = do
@@ -93,14 +90,15 @@ renderCartesian plot size@(V2 w _h) = cairoRender $ do
   drawAxis when
 {-# SPECIALIZE renderCartesian :: PlotCartesian ProcGenFloat -> PixSize -> CairoRender () #-}
 
-resizeCart :: RealFrac num => GtkGUI (PlotCartesian num) ()
-resizeCart = renderCartesian <$> getModel <*> getWindowSize >>= onCanvas
+resizeCart :: RealFrac num => OldPixSize -> NewPixSize -> GtkGUI (PlotCartesian num) ()
+resizeCart _ siz = renderCartesian <$> getModel <*> pure siz >>= onCanvas
+{-# SPECIALIZE resizeCart :: OldPixSize -> NewPixSize -> GtkGUI (PlotCartesian ProcGenFloat) () #-}
 
 ----------------------------------------------------------------------------------------------------
 
 runCartesian :: forall num . RealFrac num => GtkGUI (PlotCartesian num) ()
 runCartesian = do
-  resizeEvents $ const resizeCart
+  resizeEvents CopyCanvasMode resizeCart
   mouseEvents MouseAll $ \ mouse1@(Mouse _ press1 _mod1 _button1 pt1@(V2 x1 _y1)) -> do
     funcList <- use plotFunctionList :: GtkGUI (PlotCartesian num) [Cartesian num]
     winsize@(V2 _ winH) <- getWindowSize
@@ -164,5 +162,4 @@ runCartesian = do
       screenPrinter $ forM_ points $ \ (label, color, y) -> do
         printerFontStyle . fontForeColor .= color
         displayString (printf "%s = %+.4f\n" label (realToFrac y :: Float))
-  resizeCart
 {-# SPECIALIZE runCartesian :: GtkGUI (PlotCartesian ProcGenFloat) () #-}

@@ -38,10 +38,12 @@ import           Happlets.Lib.Gtk
 import           Happlets.Provider
 
 import           Data.Dynamic
-import           Data.List      (partition)
+import           Data.List               (partition)
 import           Data.Proxy
+import qualified Data.Text            as Strict
 import           Data.Typeable
 
+import           System.IO
 import           System.IO.Unsafe
 
 ----------------------------------------------------------------------------------------------------
@@ -171,16 +173,20 @@ disp = makeHapplet >=> flip setDisp (const initDisp)
 
 data CurrentHapplet
   = CurrentHapplet
-    { dynamicHapplet  :: Dynamic
-    , switchToHapplet :: IO ()
+    { dynamicHapplet     :: Dynamic
+    , switchToHapplet    :: IO ()
+    , currentWorkerUnion :: WorkerUnion
     }
   deriving Typeable
 
 theCurrentHapplet :: MVar CurrentHapplet
-theCurrentHapplet = unsafePerformIO $ newMVar $ CurrentHapplet
-   { dynamicHapplet  = toDyn ()
-   , switchToHapplet = error "Must first call 'chapp'"
-   }
+theCurrentHapplet = unsafePerformIO $ do
+  workerUnion <- newWorkerUnion
+  newMVar $ CurrentHapplet
+    { dynamicHapplet     = toDyn ()
+    , switchToHapplet    = error "Must first call 'chapp'"
+    , currentWorkerUnion = workerUnion
+    }
 
 -- | Change the Happlet that will be displayed in the view window for live coding, passing an
 -- initializing 'Happlets.GUI.GUI' function to install the event handlers. This function operates
@@ -190,7 +196,7 @@ theCurrentHapplet = unsafePerformIO $ newMVar $ CurrentHapplet
 currentHapplet :: Typeable model => Happlet model -> GtkGUI model () -> IO ()
 currentHapplet happ initDisp = do
   let switch = setDisp happ $ const initDisp
-  modifyMVar_ theCurrentHapplet $ const $ return $ CurrentHapplet
+  modifyMVar_ theCurrentHapplet $ \ curr -> return $ curr
     { dynamicHapplet  = toDyn happ
     , switchToHapplet = switch
     }
@@ -202,17 +208,33 @@ currentHapplet happ initDisp = do
 chapp :: (GHCIDisp model, Typeable model) => Happlet model -> IO ()
 chapp happ = currentHapplet happ initDisp
 
-_live :: Typeable model => model -> GtkGUI model a -> IO a
-_live ~witness f = do
-  mvar <- newEmptyMVar
-  withMVar theCurrentHapplet $ dynamicHapplet >>> \ dyn ->
-    let happ = fromDyn dyn $ error $ "live: cannot evaluate GUI function of type "++
-          show (typeOf witness)++", current Happlet set by 'chapp' is of type "++
-          show (dynTypeRep dyn)
-    in  fmap fst $ onHapplet happ $
-          evalGUI (f >>= liftIO . putMVar mvar) happ theWindow >=> \ st ->
-          takeMVar mvar >>= \ a ->
-          return (a, theGUIModel st)
+dynHapplet :: Typeable model => Proxy model -> Dynamic -> Happlet model
+dynHapplet proxy dyn = fromDyn dyn $ error msg where
+  [modelTyp] = typeRepArgs (typeRep proxy)
+  msg = "live: cannot evaluate GUI function of type "++
+    show modelTyp++", current Happlet set by 'chapp' is of type "++
+    show (dynTypeRep dyn)
+
+_live :: Typeable model => Proxy model -> GtkGUI model a -> IO (Maybe a)
+_live proxy f = withMVar theCurrentHapplet $ \ curr -> do
+  let happ = dynHapplet proxy $ dynamicHapplet curr
+  fmap fst $ onHapplet happ $ \ model -> do
+    (result, guist) <- runGUI f $ GUIState
+      { theGUIModel   = model
+      , theGUIHapplet = happ
+      , theGUIWindow  = theWindow
+      , theGUIWorkers = currentWorkerUnion curr
+      }
+    (a, guist) <- case result of
+      EventHandlerContinue a -> return (Just  a, guist)
+      EventHandlerCancel     -> return (Nothing, guist)
+      EventHandlerHalt       -> do
+        (_ , guist) <- runGUI (windowVisible False) guist
+        return (Nothing, guist)
+      EventHandlerFail  msg  -> do
+        hPutStrLn stderr $ Strict.unpack msg
+        return (Nothing, guist)
+    return (a, theGUIModel guist)
 
 -- | Evaluate a 'Happlets.Lib.Gtk.GtkGUI' function on the 'Happlets.Happlet.Happlet' most recently
 -- selected by the 'chapp' function. This function alone isn't terribly useful when your 'GtkGUI'
@@ -220,8 +242,8 @@ _live ~witness f = do
 -- want to evaluate. However this function can be used to delcare type-specific updates on the
 -- current Happlet. So you can use 'liveUpdate' to declare other "live" functions with more specific
 -- types, like 'cart' and 'param' are specifically-typed versions of this 'liveUpdate' function.
-liveUpdate :: Typeable model => GtkGUI model a -> IO a
-liveUpdate = _live (error "'ProcGen.GHCI.live' function attempted to evaluate a witness value")
+liveUpdate :: Typeable model => GtkGUI model a -> IO (Maybe a)
+liveUpdate = _live Proxy
 
 newPlotWin :: HasPlotWindow plot => plot ProcGenFloat -> IO (Happlet (plot ProcGenFloat))
 newPlotWin makeWin = makeHapplet $ makeWin &~ do
@@ -360,7 +382,7 @@ newCartWin :: IO (Happlet (PlotCartesian ProcGenFloat))
 newCartWin = newPlotWin plotCartesian
 
 -- | If you have 'chapp'-ed to a 'PlotCartesian' view, you can use 'cart' to live-update the view.
-cart :: GtkGUI (PlotCartesian ProcGenFloat) a -> IO a
+cart :: GtkGUI (PlotCartesian ProcGenFloat) a -> IO (Maybe a)
 cart = liveUpdate
 
 -- | This is an example cartesian plot. Use this command to view it:
@@ -399,5 +421,5 @@ newParamWin :: IO (Happlet (PlotParametric ProcGenFloat))
 newParamWin = newPlotWin plotParam
 
 -- | If you have 'chapp'-ed to a 'PlotParametric' view, you can use 'param' to live-update the view.
-param :: GtkGUI (PlotParametric ProcGenFloat) a -> IO a
+param :: GtkGUI (PlotParametric ProcGenFloat) a -> IO (Maybe a)
 param = liveUpdate

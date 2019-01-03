@@ -103,10 +103,11 @@ soundSource dev newSt callback = Linux.SoundSource
       (st, continue) <- run dev st $ signalStartAudioFrame callback
       if not continue then return (st, 0) else
         let loop i = if i >= siz then return i else do
+              let sz = sizeOf (1::Int16)
               (sampL, sampR) <- signalProduceNextSamples callback $! div i 2
-              liftIO $ pokeElemOff ptr (i + 0) sampL
-              liftIO $ pokeElemOff ptr (i + 1) sampR
-              loop $!     (i + 2)
+              liftIO $ pokeElemOff ptr (i + 0 * sz) sampL
+              liftIO $ pokeElemOff ptr (i + 1 * sz) sampR
+              loop $! i + 2 * sz
         in  run dev st $ loop 0
   }
 
