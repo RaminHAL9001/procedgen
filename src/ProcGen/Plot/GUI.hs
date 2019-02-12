@@ -141,11 +141,11 @@ runCartesian = do
           cancelIfBusy
           (V2 x y) <- use plotWinOrigin
           renderCartesian <$> get <*> pure winsize >>= onCanvas
-          onOSBuffer $ screenPrinter $ do
-            printerFontStyle . fontForeColor .= black
-            printerFontStyle . fontBold .= True
+          void $ onOSBuffer $ screenPrinter $ do
+            fontStyle . fontForeColor .= black
+            fontStyle . fontBold .= True
             () <- "Axis Offset:\n"
-            printerFontStyle . fontBold .= False
+            fontStyle . fontBold .= False
             displayString
               (printf "x = %+.4f\ny = %+.4f\n" (realToFrac x :: Float) (realToFrac y :: Float))
          else clearRegion pt0
@@ -154,12 +154,12 @@ runCartesian = do
       screenPrinter $ do
         textCursor . gridRow    .= 0
         textCursor . gridColumn .= 0
-        printerFontStyle . fontForeColor .= black
+        fontStyle . fontForeColor .= black
         displayString
           (printf "mouse: x = %+.4f, y = %+.4f\n"
             (realToFrac x :: Float) (realToFrac y :: Float))
       points <- drawGuidePoints
       screenPrinter $ forM_ points $ \ (label, color, y) -> do
-        printerFontStyle . fontForeColor .= color
+        fontStyle . fontForeColor .= color
         displayString (printf "%s = %+.4f\n" label (realToFrac y :: Float))
 {-# SPECIALIZE runCartesian :: GtkGUI (PlotCartesian ProcGenFloat) () #-}

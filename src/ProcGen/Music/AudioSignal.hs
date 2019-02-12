@@ -614,7 +614,7 @@ drawFDView fdView (V2 w h) dt = do
       Cairo.stroke
       Cairo.arc     x  y  1.5  0.0  (2.0 * pi)
       Cairo.fill
-  screenPrinter $ do
+  void $ screenPrinter $ do
     gridRow    .= 0
     gridColumn .= 0
     displayString (printf "time = %+.4f" (realToFrac (fdView ^. animFrame) :: ProcGenFloat))
@@ -723,7 +723,7 @@ drawTDView v (V2 (SampCoord w) (SampCoord h)) = do
       let y = f t
       Cairo.lineTo x y
     Cairo.stroke
-  screenPrinter $ do
+  void $ screenPrinter $ do
     gridRow    .= 0
     gridColumn .= 0
     displayString (printf "time = %+.4f" (realToFrac (v ^. animFrame) :: ProcGenFloat))
