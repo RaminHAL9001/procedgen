@@ -25,7 +25,8 @@ import qualified Data.Text as Strict
 import           Foreign.Storable
 
 #if GNU_LINUX
-import qualified Sound.ALSA.PCM as Linux
+import qualified Sound.ALSA.PCM     as Linux
+import qualified Sound.Frame.Stereo as Stereo
 #endif
 
 -- | A signal callback should take a function that returns a right and left channel, even on
@@ -73,9 +74,11 @@ testSignalCallback = SignalCallback
   { signalStartAudioFrame    = return True
   , signalProduceNextSamples = const $ do
       t <- state $ \ i -> (2 * pi * realToFrac i / sampleRate :: Moment, i+1)
-      let vol  = 1 + sin t / 2
-      let samp = sin (256.0*t)
-      return (toPulseCode $ samp * vol, toPulseCode $ samp * (1 - vol))
+      let toSample = round . (* 32767)
+      let vol   = (1 + sin t) / 2
+      let sampL = sin (128.0*t)
+      let sampR = sin (256.0*t)
+      return (toSample $ sampL * vol, toSample $ sampR * (1 - vol))
   }
 
 stopPlayback :: AudioPlaybackThread -> IO ()
@@ -93,7 +96,7 @@ newtype LinuxHandle st y = LinuxHandle (MVar st)
 
 soundSource
   :: forall st . AudioDevice -> IO st -> SignalCallback st
-  -> Linux.SoundSource (LinuxHandle st) Int16
+  -> Linux.SoundSource (LinuxHandle st) (Stereo.T Int16)
 soundSource dev newSt callback = Linux.SoundSource
   { Linux.soundSourceOpen  = LinuxHandle <$> (newSt >>= newMVar) --newEmptyMVar
   , Linux.soundSourceClose = \ (LinuxHandle _mvar) -> return () --void $ takeMVar mvar
@@ -103,11 +106,10 @@ soundSource dev newSt callback = Linux.SoundSource
       (st, continue) <- run dev st $ signalStartAudioFrame callback
       if not continue then return (st, 0) else
         let loop i = if i >= siz then return i else do
-              let sz = sizeOf (1::Int16)
-              (sampL, sampR) <- signalProduceNextSamples callback $! div i 2
-              liftIO $ pokeElemOff ptr (i + 0 * sz) sampL
-              liftIO $ pokeElemOff ptr (i + 1 * sz) sampR
-              loop $! i + 2 * sz
+              (sampL, sampR) <- signalProduceNextSamples callback $! i
+              liftIO $ pokeElemOff ptr i (Stereo.cons sampL sampR)
+              -- liftIO $ pokeElemOff ptr (i + 1 * sz) sampR
+              loop $! i + 1
         in  run dev st $ loop 0
   }
 
@@ -133,7 +135,7 @@ startPlaybackTo dev newSt callback = fmap AudioPlayback $ forkOS $ do
   let numFrames = round $ audioDeviceSampleRate dev / animationRate
   let sink = Linux.alsaSoundSink
         (Strict.unpack $ audioDeviceID dev)
-        ((Linux.SoundFmt $ round $ audioDeviceSampleRate dev) :: Linux.SoundFmt Int16)
+        ((Linux.SoundFmt $ round $ audioDeviceSampleRate dev) :: Linux.SoundFmt (Stereo.T Int16))
   Linux.copySound (soundSource dev newSt callback) sink (channels * numFrames)
 
 #endif
