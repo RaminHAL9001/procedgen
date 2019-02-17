@@ -507,13 +507,12 @@ bufferFDComponentIDCT mvec win base fd =
               loop amp (i + 1) (j + 1)
       let pulses t = if t >= timeEnd win then return () else do
             amp <- getRandom
-            let i = fst $ timeIndex t
+            let i = timeIndex t
             loop amp i 0
             pulses $! t + 2 / freq
       pulses 0.0
   where
-    ti   = fst . timeIndex
-    size = ti (3 / freq) + 1
+    size = timeIndex (3 / freq) + 1
     veclen = Mutable.length mvec
     freq = freqCoeficient base (fd ^. fdFreqCoef)
 
@@ -525,12 +524,12 @@ newtype TDSignal = TDSignal { tdSamples :: Unboxed.Vector Sample }
 
 instance TimeDomain TDSignal Sample where
   sample td@(TDSignal vec) t =
-    let (i, r) = timeIndex t
+    let (i, r) = modTimeIndex t
         a = vec Unboxed.! i
         b = vec Unboxed.! (i + 1)
     in  if i < tdSize td then a + (if i + 1 < tdSize td then (b - a) * r else 0.0) else 0.0
 
-instance HasTimeWindow TDSignal SampleIndex where
+instance HasTimeWindow TDSignal (SampleIndex Int) where
   timeWindow = Just . tdTimeWindow
 
 tdSize :: TDSignal -> Int
@@ -541,7 +540,7 @@ allTDSamples :: TDSignal -> (Int, [Sample])
 allTDSamples (TDSignal vec) = (Unboxed.length vec, Unboxed.toList vec)
 
 -- | Produce the time 'ProcGen.Types.Duration' value for the given 'TDSignal'.
-tdTimeWindow :: TDSignal -> TimeWindow SampleIndex
+tdTimeWindow :: TDSignal -> TimeWindow (SampleIndex Int)
 tdTimeWindow (TDSignal vec) = TimeWindow{ timeStart = 0, timeEnd = Unboxed.length vec }
 
 tdDuration :: TDSignal -> Duration
@@ -552,7 +551,7 @@ listTDSamples :: TDSignal -> TimeWindow Moment -> [Sample]
 listTDSamples td@(TDSignal vec) =
   maybe [] (fmap (vec Unboxed.!) . twEnum) .
   (\ tw -> join $ twIntersect <$> timeWindow td <*> pure tw) .
-  fmap (fst . timeIndex)
+  fmap timeIndex
 
 -- | Compute minimum and maximum values of the 'TDSignal'. 'TDSignals' that have been normalized
 -- will almost always return values of @-1.0@ and @1.0@.
@@ -661,7 +660,7 @@ data TDView
       -- ^ The signal to visualize.
     , theTDViewBaseFreq    :: !Frequency
       -- ^ The frequency at which a redraw is triggered.
-    , theTDViewSampleCount :: !SampleCount
+    , theTDViewSampleCount :: !(SampleCount Int)
       -- ^ A signal sampled at 44100 Hz animated at 60 FPS means each animation frame can depict
       -- exactly 735 samples in real time. However if you prefer to have a 1-sample = 1-pixel
       -- visualization of the 'TDSignal' regardless of the actual GUI window size, set this value to

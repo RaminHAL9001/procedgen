@@ -59,7 +59,7 @@ type Source a = a
 trackTime :: Track -> Duration
 trackTime = sampleCountDuration . trackSampleCount
 
-trackSampleCount :: Track -> SampleCount
+trackSampleCount :: Track -> SampleCount Int
 trackSampleCount (Track vec) = Mutable.length vec
 
 newTrack :: MonadIO m => Duration -> m Track

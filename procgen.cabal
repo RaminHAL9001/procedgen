@@ -63,7 +63,6 @@ Library {
     ProcGen.Music.AudioSignal
     ProcGen.Music.Composition
     ProcGen.Music.KeyFreq88
-    ProcGen.Music.OS
     ProcGen.Music.Sequencer
     ProcGen.Music.Synth
     ProcGen.Music.TDBezier

@@ -1,6 +1,28 @@
 module ProcGen.Types
-  ( module ProcGen.Types
-  , module ProcGen.PrimeNumbers
+  ( module ProcGen.Types,
+    module ProcGen.PrimeNumbers,
+    Happlets.Audio.BufferSizeRequest,
+    Happlets.Audio.AudioRealApprox,
+    Happlets.Audio.Frequency,
+    Happlets.Audio.Duration,
+    Happlets.Audio.Moment,
+    Happlets.Audio.Sample,
+    Happlets.Audio.PulseCode,
+    Happlets.Audio.LeftPulseCode,
+    Happlets.Audio.RightPulseCode,
+    Happlets.Audio.SampleCount,
+    Happlets.Audio.SampleIndex,
+    Happlets.Audio.audioSampleRate,
+    Happlets.Audio.unitQuanta,
+    Happlets.Audio.maxFrequency,
+    Happlets.Audio.minFrequency,
+    Happlets.Audio.toPulseCode,
+    Happlets.Audio.toSample,
+    Happlets.Audio.modTimeIndex,
+    Happlets.Audio.timeIndex,
+    Happlets.Audio.indexToTime,
+    Happlets.Audio.sampleCountDuration,
+    Happlets.Audio.durationSampleCount,
   ) where
 
 import           ProcGen.PrimeNumbers
@@ -8,13 +30,13 @@ import           ProcGen.PrimeNumbers
 import           Control.Arrow                    ((&&&))
 import           Control.Monad
 
-import           Data.Int
 import           Data.Ratio
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
 import           Data.Word
 
+import           Happlets.Audio
 import           Happlets.Lib.Gtk                 (gtkHapplet, theAnimationFrameRate)
 import           Happlets.Provider                (defaultConfig)
 
@@ -30,19 +52,12 @@ data FuzzyParam
 
 ----------------------------------------------------------------------------------------------------
 
-type SampleCount = Int
-type SampleIndex = Int
-
 -- | A single float type used by all other float types. Change this from Float to Double to change
 -- the percision of all computations from 32 to 64-bit floating point values.
-type ProcGenFloat = Float
+type ProcGenFloat = AudioRealApprox
 
-type Frequency   = ProcGenFloat
-type Sample      = ProcGenFloat
 type TimeScale   = ProcGenFloat
-type Moment      = ProcGenFloat
 type Amplitude   = ProcGenFloat
-type Duration    = ProcGenFloat
 type Wavelength  = ProcGenFloat
 type PhaseShift  = ProcGenFloat
 type Probability = ProcGenFloat
@@ -158,56 +173,13 @@ sampleRate = 44100.0
 nyquist :: Frequency
 nyquist = sampleRate / 2
 
--- | The minimum bound for a 'Frequency' value, which is set (somewhat arbitrarily) to 15.0 Hz.
-minFrequency :: Frequency
-minFrequency = 15.0
-
--- | This is the amount of time a single unit sample of a quantized time domain function that a PCM
--- allows a PCM to reamin at a single value. This is also the reciporical of the @'sampleRate' ::
--- 'Frequency'@.
-unitQuanta :: Duration
-unitQuanta = recip sampleRate
-
--- | Compute the number of 'unitQuanta' exist in the time interval between zero and the given
--- moment. This value can be used to select an index from a vector containing samples. The
--- 'ProcGenFloat' value returned along with the index value is the percentage along the path between
--- the returned index and the next index that the moment point in time had progressed. This value
--- can be used to antialias.
-timeIndex :: Moment -> (Int, ProcGenFloat)
-timeIndex t = let { d = t * sampleRate; r = floor d :: Int; } in (r, d - realToFrac r)
-
--- | When converting some index of a 'Data.Vector.Vector' of 'Sample's in a quantized time domain
--- function, this function converts that index value into the point in time at which that sample
--- exists.
-indexToTime :: Int -> Moment
-indexToTime = (/ sampleRate) . realToFrac
-
--- | Convert a 'Sample' to a signed 16-bit integer suitable for storage to a file.
-toPulseCode :: Sample -> Int16
-toPulseCode = round . (* 32704) . clamp1_1
-
 -- | Like 'toPulseCode' but evaluates to a 'Data.Word.Word16' value
 toPulseCodeWord :: Sample -> Word16
 toPulseCodeWord = fromIntegral . toPulseCode
 
--- | Convert a signed 16-bit integer sample value to a floating-point 'Sample' value.
-toSample :: Int16 -> Sample
-toSample = (* (32704.0 / (32768.0 * 32768.0))) . realToFrac
-
 -- | Like 'toSample' but takes a 'Data.Word.Word16' input instead of an 'Data.Int.Int16' input.
 wordToSample :: Word16 -> Sample
 wordToSample = toSample . fromIntegral
-
--- | Convert a 'SampleCount' (the number of samples in a quantized time domain function) to a time
--- 'Duration' measured in seconds.
-sampleCountDuration :: SampleCount -> Duration
-sampleCountDuration = (/ sampleRate) . realToFrac
-
--- | Convert a 'Duration' measured in seconds to a 'SampleCount' (the number of samples in a
--- quantized time domain function), and round up so the value returned represents the minimum number
--- of samples required to span the given time 'Duration'.
-durationSampleCount :: Duration -> SampleCount
-durationSampleCount = ceiling . (* sampleRate)
 
 -- | Prepare a list of elements for a discrete differentiation by pairing each element with it's
 -- neighbour. For example, the expression @('diffList' [1,2,3,4])@ will yield the result:
@@ -779,7 +751,7 @@ twMoments = twParametric unitQuanta
 
 -- | Similar to 'twMoments' but maps the results with @('timeIndex')@
 twIterate :: TimeWindow Moment -> [(Int, ProcGenFloat)]
-twIterate = fmap timeIndex . twMoments
+twIterate = fmap modTimeIndex . twMoments
 
 -- | Similar to 'twIterate' but is designed for use with vectors, this function does bounds checking
 -- on the vector once to make sure the 'TimeWindow' given does not exceed the bounds of the

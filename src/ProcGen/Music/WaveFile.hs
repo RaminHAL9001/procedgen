@@ -158,7 +158,8 @@ loadRiffWaveToBufferIO
           -- to be buffered.
   -> Handle -- ^ an already-open file 'System.IO.Handle' from which to read the wave file.
   -> Mutable.IOVector Sample -- ^ the buffer into which samples from the file should be copied.
-  -> SampleIndex -- ^ The index within the buffer at which to begin writing samples from the file.
+  -> SampleIndex Int
+      -- ^ The index within the buffer at which to begin writing samples from the file.
   -> IO (Int, Mutable.IOVector Sample)
 loadRiffWaveToBufferIO = error "TODO: ProcGen.Music.WaveFile.loadRiffWaveToBufferIO"
 
