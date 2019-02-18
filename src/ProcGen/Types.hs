@@ -7,6 +7,8 @@ module ProcGen.Types
     Happlets.Audio.Duration,
     Happlets.Audio.Moment,
     Happlets.Audio.Sample,
+    Happlets.Audio.LeftSample,
+    Happlets.Audio.RightSample,
     Happlets.Audio.PulseCode,
     Happlets.Audio.LeftPulseCode,
     Happlets.Audio.RightPulseCode,
@@ -23,6 +25,8 @@ module ProcGen.Types
     Happlets.Audio.indexToTime,
     Happlets.Audio.sampleCountDuration,
     Happlets.Audio.durationSampleCount,
+    Happlets.Audio.mapTimeToStereo,
+    Happlets.Audio.mapTimeToMono,
   ) where
 
 import           ProcGen.PrimeNumbers

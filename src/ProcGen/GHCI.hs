@@ -9,6 +9,8 @@ module ProcGen.GHCI
     rand, arb, reseedRand, resetRand,
     currentRandSeed, currentRandState, RandState(..),
     GHCIDisp(..), setDisp, disp, chapp,
+    -- * Audio
+    soundOn, soundOff, soundStatus, monoSound, stereoSound,
     -- * Cartesian Plotting
     newCartWin, cart, exampleCart, exampleTDBezierCart,
     -- * Parametric Plotting
@@ -34,6 +36,7 @@ import           ProcGen.Music.TDBezier
 import           Control.Arrow
 import           Control.Concurrent
 
+import           Happlets.Audio
 import           Happlets.Lib.Gtk
 import           Happlets.Provider
 
@@ -176,16 +179,19 @@ data CurrentHapplet
     { dynamicHapplet     :: Dynamic
     , switchToHapplet    :: IO ()
     , currentWorkerUnion :: WorkerUnion
+    , emptyHapplet       :: Happlet ()
     }
   deriving Typeable
 
 theCurrentHapplet :: MVar CurrentHapplet
 theCurrentHapplet = unsafePerformIO $ do
-  workerUnion <- newWorkerUnion
+  workerUnion  <- newWorkerUnion
+  nullHap      <- makeHapplet ()
   newMVar $ CurrentHapplet
     { dynamicHapplet     = toDyn ()
     , switchToHapplet    = error "Must first call 'chapp'"
     , currentWorkerUnion = workerUnion
+    , emptyHapplet       = nullHap
     }
 
 -- | Change the Happlet that will be displayed in the view window for live coding, passing an
@@ -202,7 +208,7 @@ currentHapplet happ initDisp = do
     }
   switch
 
--- | "Change Happlet": this function is just ilke 'currentHapplet', this function changes the
+-- | "Change Happlet": this function is just like 'currentHapplet', this function changes the
 -- Happlet that will be displayed in the view window for live coding. However 'chapp' uses the
 -- 'GHCIDisp' default function as the initializing function.
 chapp :: (GHCIDisp model, Typeable model) => Happlet model -> IO ()
@@ -222,6 +228,27 @@ _live proxy f = withMVar theCurrentHapplet $ \ curr -> do
     (result, guist) <- runGUI f $ GUIState
       { theGUIModel   = model
       , theGUIHapplet = happ
+      , theGUIWindow  = theWindow
+      , theGUIWorkers = currentWorkerUnion curr
+      }
+    (a, guist) <- case result of
+      EventHandlerContinue a -> return (Just  a, guist)
+      EventHandlerCancel     -> return (Nothing, guist)
+      EventHandlerHalt       -> do
+        (_ , guist) <- runGUI (windowVisible False) guist
+        return (Nothing, guist)
+      EventHandlerFail  msg  -> do
+        hPutStrLn stderr $ Strict.unpack msg
+        return (Nothing, guist)
+    return (a, theGUIModel guist)
+
+onEmptyHapplet :: GtkGUI () a -> IO (Maybe a)
+onEmptyHapplet f = withMVar theCurrentHapplet $ \ curr -> do
+  let nullHapp = emptyHapplet curr
+  fmap fst $ onHapplet nullHapp $ \ () -> do
+    (result, guist) <- runGUI f GUIState
+      { theGUIModel   = ()
+      , theGUIHapplet = nullHapp
       , theGUIWindow  = theWindow
       , theGUIWorkers = currentWorkerUnion curr
       }
@@ -266,6 +293,31 @@ newPlotWin makeWin = makeHapplet $ makeWin &~ do
     (do dimX .= axis
         dimY .= axis
     )
+
+-- | Turn on the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
+-- control pannel and you'll see an entry for the GHCI process appear in the list of output devices.
+soundOn :: IO (Maybe PCMActivation)
+soundOn = onEmptyHapplet $ startupAudioPlayback 735
+
+-- | Turn off the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
+-- control pannel and you'll see an entry for the GHCI process disappear from the list of output
+-- devices.
+soundOff :: IO (Maybe PCMActivation)
+soundOff = onEmptyHapplet shutdownAudioPlayback
+
+-- | Reports whether the sound is on or off.
+soundStatus :: IO (Maybe PCMActivation)
+soundStatus = onEmptyHapplet audioPlaybackState
+
+-- | The audio device is always set to stereo mode, this function simply copies every sample
+-- produced by a monochannel generator to both the left and right channel.
+monoSound :: (Moment -> Sample) -> IO ()
+monoSound = stereoSound . ((\ a -> (a, a)) .)
+
+-- | Change the sound generator function as soon as the current sample frame has completed writing
+-- to the PCM, the sound generator passed to this function will begin generating samples 
+stereoSound :: (Moment -> (LeftSample, RightSample)) -> IO ()
+stereoSound = void . onEmptyHapplet . audioPlayback . mapTimeToStereo
 
 ----------------------------------------------------------------------------------------------------
 

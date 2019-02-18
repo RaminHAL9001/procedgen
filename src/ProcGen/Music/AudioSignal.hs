@@ -776,5 +776,3 @@ data CreateRandomFD
     }
 
 data DrawingMode = InsertMode | RemoveMode deriving (Eq, Ord, Show, Read)
-
-
