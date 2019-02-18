@@ -8,7 +8,7 @@ module ProcGen.GHCI
   ( -- * Generating random values
     rand, arb, reseedRand, resetRand,
     currentRandSeed, currentRandState, RandState(..),
-    GHCIDisp(..), setDisp, disp, chapp,
+    GHCIDisp(..), setDisp, disp, chapp, onWindow,
     -- * Audio
     soundOn, soundOff, soundStatus, monoSound, stereoSound,
     -- * Cartesian Plotting
@@ -174,20 +174,23 @@ disp = makeHapplet >=> flip setDisp (const initDisp)
 
 ----------------------------------------------------------------------------------------------------
 
-data CurrentHapplet
-  = CurrentHapplet
+data GHCIHappletSession
+  = GHCIHappletSession
     { dynamicHapplet     :: Dynamic
     , switchToHapplet    :: IO ()
     , currentWorkerUnion :: WorkerUnion
     , emptyHapplet       :: Happlet ()
+      -- ^ Used to perform updates on 'theWindow' without performing a Happlet context
+      -- switch. Additional event handlers can also be installed along side the event handlers for
+      -- the current 'dynamicHapplet'.
     }
   deriving Typeable
 
-theCurrentHapplet :: MVar CurrentHapplet
-theCurrentHapplet = unsafePerformIO $ do
+theGHCIHappletSession :: MVar GHCIHappletSession
+theGHCIHappletSession = unsafePerformIO $ do
   workerUnion  <- newWorkerUnion
   nullHap      <- makeHapplet ()
-  newMVar $ CurrentHapplet
+  newMVar $ GHCIHappletSession
     { dynamicHapplet     = toDyn ()
     , switchToHapplet    = error "Must first call 'chapp'"
     , currentWorkerUnion = workerUnion
@@ -202,7 +205,7 @@ theCurrentHapplet = unsafePerformIO $ do
 currentHapplet :: Typeable model => Happlet model -> GtkGUI model () -> IO ()
 currentHapplet happ initDisp = do
   let switch = setDisp happ $ const initDisp
-  modifyMVar_ theCurrentHapplet $ \ curr -> return $ curr
+  modifyMVar_ theGHCIHappletSession $ \ curr -> return $ curr
     { dynamicHapplet  = toDyn happ
     , switchToHapplet = switch
     }
@@ -221,9 +224,9 @@ dynHapplet proxy dyn = fromDyn dyn $ error msg where
     show modelTyp++", current Happlet set by 'chapp' is of type "++
     show (dynTypeRep dyn)
 
-_live :: Typeable model => Proxy model -> GtkGUI model a -> IO (Maybe a)
-_live proxy f = withMVar theCurrentHapplet $ \ curr -> do
-  let happ = dynHapplet proxy $ dynamicHapplet curr
+sessionUpdate :: (GHCIHappletSession -> Happlet model) -> GtkGUI model a -> IO (Maybe a)
+sessionUpdate getHapplet f = withMVar theGHCIHappletSession $ \ curr -> do
+  let happ = getHapplet curr
   fmap fst $ onHapplet happ $ \ model -> do
     (result, guist) <- runGUI f $ GUIState
       { theGUIModel   = model
@@ -242,26 +245,17 @@ _live proxy f = withMVar theCurrentHapplet $ \ curr -> do
         return (Nothing, guist)
     return (a, theGUIModel guist)
 
-onEmptyHapplet :: GtkGUI () a -> IO (Maybe a)
-onEmptyHapplet f = withMVar theCurrentHapplet $ \ curr -> do
-  let nullHapp = emptyHapplet curr
-  fmap fst $ onHapplet nullHapp $ \ () -> do
-    (result, guist) <- runGUI f GUIState
-      { theGUIModel   = ()
-      , theGUIHapplet = nullHapp
-      , theGUIWindow  = theWindow
-      , theGUIWorkers = currentWorkerUnion curr
-      }
-    (a, guist) <- case result of
-      EventHandlerContinue a -> return (Just  a, guist)
-      EventHandlerCancel     -> return (Nothing, guist)
-      EventHandlerHalt       -> do
-        (_ , guist) <- runGUI (windowVisible False) guist
-        return (Nothing, guist)
-      EventHandlerFail  msg  -> do
-        hPutStrLn stderr $ Strict.unpack msg
-        return (Nothing, guist)
-    return (a, theGUIModel guist)
+onDynamicHapplet :: Typeable model => Proxy model -> GtkGUI model a -> IO (Maybe a)
+onDynamicHapplet proxy = sessionUpdate $ dynHapplet proxy . dynamicHapplet
+
+-- | Execute a 'GUI' function on the current Happlet window regardless of what the current Happlet
+-- has been set to with 'chapp'. No Happlet context switch occurs, and any event handlers you
+-- install will coexist along with the event handlers setup by Happlet most recently set by the
+-- 'chapp' function, and these event handlers will exist until the next call to 'chapp', although
+-- these event handlers will not be able to do much since the @model@ is the "unit" @()@ data
+-- value. Still, it can be useful to perform updates on the GHCI Happlet window.
+onWindow :: GtkGUI () a -> IO (Maybe a)
+onWindow = sessionUpdate emptyHapplet
 
 -- | Evaluate a 'Happlets.Lib.Gtk.GtkGUI' function on the 'Happlets.Happlet.Happlet' most recently
 -- selected by the 'chapp' function. This function alone isn't terribly useful when your 'GtkGUI'
@@ -270,7 +264,7 @@ onEmptyHapplet f = withMVar theCurrentHapplet $ \ curr -> do
 -- current Happlet. So you can use 'liveUpdate' to declare other "live" functions with more specific
 -- types, like 'cart' and 'param' are specifically-typed versions of this 'liveUpdate' function.
 liveUpdate :: Typeable model => GtkGUI model a -> IO (Maybe a)
-liveUpdate = _live Proxy
+liveUpdate = onDynamicHapplet Proxy
 
 newPlotWin :: HasPlotWindow plot => plot ProcGenFloat -> IO (Happlet (plot ProcGenFloat))
 newPlotWin makeWin = makeHapplet $ makeWin &~ do
@@ -297,17 +291,17 @@ newPlotWin makeWin = makeHapplet $ makeWin &~ do
 -- | Turn on the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
 -- control pannel and you'll see an entry for the GHCI process appear in the list of output devices.
 soundOn :: IO (Maybe PCMActivation)
-soundOn = onEmptyHapplet $ startupAudioPlayback 735
+soundOn = onWindow $ startupAudioPlayback 735
 
 -- | Turn off the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
 -- control pannel and you'll see an entry for the GHCI process disappear from the list of output
 -- devices.
 soundOff :: IO (Maybe PCMActivation)
-soundOff = onEmptyHapplet shutdownAudioPlayback
+soundOff = onWindow shutdownAudioPlayback
 
 -- | Reports whether the sound is on or off.
 soundStatus :: IO (Maybe PCMActivation)
-soundStatus = onEmptyHapplet audioPlaybackState
+soundStatus = onWindow audioPlaybackState
 
 -- | The audio device is always set to stereo mode, this function simply copies every sample
 -- produced by a monochannel generator to both the left and right channel.
@@ -317,7 +311,7 @@ monoSound = stereoSound . ((\ a -> (a, a)) .)
 -- | Change the sound generator function as soon as the current sample frame has completed writing
 -- to the PCM, the sound generator passed to this function will begin generating samples 
 stereoSound :: (Moment -> (LeftSample, RightSample)) -> IO ()
-stereoSound = void . onEmptyHapplet . audioPlayback . mapTimeToStereo
+stereoSound = void . onWindow . audioPlayback . mapTimeToStereo
 
 ----------------------------------------------------------------------------------------------------
 
