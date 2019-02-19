@@ -18,7 +18,8 @@ module ProcGen.Music.AudioSignal
     listFDElems, listFDAssocs, lookupFDComponent,
     componentMultipliers,
     -- * Time Domain Function Construction
-    TDSignal, tdSamples, allTDSamples, listTDSamples, tdTimeWindow, tdDuration, pureIDCT,
+    TDSignal, tdSize, tdSample, tdSampleVector,
+    allTDSamples, listTDSamples, tdTimeWindow, tdDuration, pureIDCT,
     minMaxTDSignal, writeTDSignalFile, readTDSignalFile,
     -- * Graphical Representations of Functions
     FDView(..), fdView, runFDView,
@@ -466,7 +467,7 @@ compMultWin = TimeWindow
 -- | Evaluates 'bufferIDCT' in the 'Control.Monad.ST.ST' monad producing a pure 'TDSignal' function.
 pureIDCT :: TFGen -> Duration -> FDSignal -> TDSignal
 pureIDCT gen dt fd = TDSignal
-  { tdSamples = let n = durationSampleCount dt in Unboxed.create $ flip evalTFRandT gen $
+  { tdSampleVector = let n = durationSampleCount dt in Unboxed.create $ flip evalTFRandT gen $
       if n <= 0 then lift $ Mutable.new 0 else do
         mvec <- lift $ Mutable.new $ n + 1
         forM_ (fdCompListElems $ listFDElems fd) $
@@ -519,7 +520,7 @@ bufferFDComponentIDCT mvec win base fd =
 ----------------------------------------------------------------------------------------------------
 
 -- | Time domain signal.
-newtype TDSignal = TDSignal { tdSamples :: Unboxed.Vector Sample }
+newtype TDSignal = TDSignal { tdSampleVector :: Unboxed.Vector Sample }
   deriving Eq
 
 instance TimeDomain TDSignal Sample where
@@ -534,6 +535,9 @@ instance HasTimeWindow TDSignal (SampleIndex Int) where
 
 tdSize :: TDSignal -> Int
 tdSize (TDSignal vec) = Unboxed.length vec
+
+tdSample :: TDSignal -> Int -> Maybe Sample
+tdSample (TDSignal vec) = (vec Unboxed.!?)
 
 -- | Produces a list of all samples contained within the 'TDSignal' in order.
 allTDSamples :: TDSignal -> (Int, [Sample])
@@ -570,7 +574,7 @@ minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 -- with 'ProcGen.Types.Sample' values rounded-off to 16-bit signed integer values
 -- (little-endian). See "ProcGen.Music.WaveFile" for more information.
 writeTDSignalFile :: FilePath -> TDSignal -> IO ()
-writeTDSignalFile path = writeWave path . tdSamples
+writeTDSignalFile path = writeWave path . tdSampleVector
 
 readTDSignalFile :: FilePath -> IO TDSignal
 readTDSignalFile = fmap TDSignal . readWave

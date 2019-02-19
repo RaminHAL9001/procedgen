@@ -145,7 +145,7 @@ squareShapedSignal sig dt = ShapedSignal
 -- | Construct a 'squareShapedSignal' from a 'ProcGen.Music.Synth.TDSignal' that encompases the
 -- entire 'ProcGen.Music.Synth.TDSignal'.
 shapedTDSignal :: TDSignal -> ShapedSignal TDSignal
-shapedTDSignal sig = squareShapedSignal sig $ indexToTime $ Unboxed.length (tdSamples sig) - 1
+shapedTDSignal sig = squareShapedSignal sig $ indexToTime $ Unboxed.length (tdSampleVector sig) - 1
 
 shapedSound :: Sound -> ShapedSignal Sound
 shapedSound snd = squareShapedSignal snd (tdDuration $ soundTDSignal snd) &~
@@ -237,7 +237,7 @@ instance PlayToTrack Track where
     copyVecToTrack (Mutable.length . vec) (Mutable.read . vec)
 
 instance PlayToTrack TDSignal where
-  playToTrack track t0 = playToTrack track t0 . fmap tdSamples
+  playToTrack track t0 = playToTrack track t0 . fmap tdSampleVector
 
 instance PlayToTrack (Unboxed.Vector Sample) where
   playToTrack = copyVecToTrack Unboxed.length (\ vec -> pure . (vec Unboxed.!))

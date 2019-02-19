@@ -10,7 +10,8 @@ module ProcGen.GHCI
     currentRandSeed, currentRandState, RandState(..),
     GHCIDisp(..), setDisp, disp, chapp, onWindow,
     -- * Audio
-    soundOn, soundOff, soundStatus, monoSound, stereoSound,
+    soundOn, soundOff, soundStatus,
+    AudioSignalHandle, playTD, stopTD, stopTDAll, resetTD,
     -- * Cartesian Plotting
     newCartWin, cart, exampleCart, exampleTDBezierCart,
     -- * Parametric Plotting
@@ -176,10 +177,10 @@ disp = makeHapplet >=> flip setDisp (const initDisp)
 
 data GHCIHappletSession
   = GHCIHappletSession
-    { dynamicHapplet     :: Dynamic
-    , switchToHapplet    :: IO ()
-    , currentWorkerUnion :: WorkerUnion
-    , emptyHapplet       :: Happlet ()
+    { dynamicHapplet       :: Dynamic
+    , switchToHapplet      :: IO ()
+    , currentWorkerUnion   :: WorkerUnion
+    , emptyHapplet         :: Happlet ()
       -- ^ Used to perform updates on 'theWindow' without performing a Happlet context
       -- switch. Additional event handlers can also be installed along side the event handlers for
       -- the current 'dynamicHapplet'.
@@ -188,14 +189,15 @@ data GHCIHappletSession
 
 theGHCIHappletSession :: MVar GHCIHappletSession
 theGHCIHappletSession = unsafePerformIO $ do
-  workerUnion  <- newWorkerUnion
-  nullHap      <- makeHapplet ()
+  workerUnion   <- newWorkerUnion
+  nullHap       <- makeHapplet ()
   newMVar $ GHCIHappletSession
-    { dynamicHapplet     = toDyn ()
-    , switchToHapplet    = error "Must first call 'chapp'"
-    , currentWorkerUnion = workerUnion
-    , emptyHapplet       = nullHap
+    { dynamicHapplet       = toDyn ()
+    , switchToHapplet      = error "Must first call 'chapp'"
+    , currentWorkerUnion   = workerUnion
+    , emptyHapplet         = nullHap
     }
+{-# NOINLINE theGHCIHappletSession #-}
 
 -- | Change the Happlet that will be displayed in the view window for live coding, passing an
 -- initializing 'Happlets.GUI.GUI' function to install the event handlers. This function operates
@@ -287,11 +289,96 @@ newPlotWin makeWin = makeHapplet $ makeWin &~ do
     (do dimX .= axis
         dimY .= axis
     )
+  
+----------------------------------------------------------------------------------------------------
+
+-- | Assign an arbitrary number to a signal so it can be used to select signals for removal.
+type AudioSignalHandle = Int
+
+data AudioPlayerState
+  = AudioPlayerState
+    { theSignalCount :: !Int
+    , theSignalList  :: [AudioPlayerSignal]
+    }
+
+data AudioPlayerSignal = AudioPlayerSignal !AudioSignalHandle !Int !TDSignal
+
+data AudioPlayerControl
+  = AudioSilenceAll
+  | AudioPlaySignal  !AudioSignalHandle !TDSignal
+  | AudioResetSignal !AudioSignalHandle
+  | AudioStopSignal  !AudioSignalHandle
+
+initAudioPlayerRef :: AudioPlayerState
+initAudioPlayerRef = AudioPlayerState{ theSignalCount = 0, theSignalList = [] }
+
+signalCount :: Lens' AudioPlayerState Int
+signalCount = lens theSignalCount $ \ a b -> a{ theSignalCount = b }
+
+signalList :: Lens' AudioPlayerState [AudioPlayerSignal]
+signalList = lens theSignalList $ \ a b -> a{ theSignalList = b }
+
+theAudioPlaybackState   :: PCMRef  AudioPlayerState
+theAudioPlaybackState = unsafePerformIO $ newPCMRef initAudioPlayerRef
+{-# NOINLINE theAudioPlaybackState #-}
+
+theAudioPlaybackControl :: PCMControl AudioPlayerControl
+theAudioPlaybackControl = unsafePerformIO $ newPCMControl
+{-# NOINLINE theAudioPlaybackControl #-}
+
+runAudioPlayerControl :: AudioPlayerControl -> StatePCM AudioPlayerState ()
+runAudioPlayerControl = \ case
+  AudioSilenceAll           -> put initAudioPlayerRef
+  AudioPlaySignal  hand sig -> do
+    signalCount += 1
+    signalList  %= ((AudioPlayerSignal hand 0 sig) :)
+  AudioResetSignal hand     -> signalList %= fmap
+    (\ a@(AudioPlayerSignal h _ sig) -> if h /= hand then a else AudioPlayerSignal h 0 sig)
+  AudioStopSignal  hand     -> do
+    (list, size) <- fmap sum . unzip . (`zip` (repeat 1)) .
+      filter (\ (AudioPlayerSignal h _ _) -> h /= hand) <$> use signalList
+    put AudioPlayerState{ theSignalCount = size, theSignalList = list }
+
+theAudioPlayer :: FrameCounter -> StatePCM AudioPlayerState PulseCode
+theAudioPlayer _fc = ctrls >> get >>= loop id 0 0.0 . theSignalList where
+  ctrls = checkPCMControl theAudioPlaybackControl >>= mapM_ runAudioPlayerControl
+  loop stk count sumSamps = \ case
+    [] -> state $ const $ (,) (toPulseCode $ sumSamps / realToFrac count) AudioPlayerState
+      { theSignalCount = count
+      , theSignalList  = stk []
+      }
+    AudioPlayerSignal handl i sig : more -> case tdSample sig i of
+      Nothing   -> loop stk count sumSamps more
+      Just samp -> let item = AudioPlayerSignal handl (i + 1) sig in
+        (((loop $ stk . (item :)) $! count + 1) $! samp + sumSamps) more
+
+-- | Play a 'TDSignal', assigning it whatever 'AudioSignalHandle' value that is easiest for you to
+-- remember.
+playTD :: AudioSignalHandle -> TDSignal -> IO ()
+playTD h = signalPCMControl theAudioPlaybackControl . AudioPlaySignal h
+
+-- | Stop playing any 'TDSignal' that was assigned the given 'AudioSignalHandle' when it was
+-- evaluated with 'playTD', so hopefully you remember the 'AudioSignalHandle' of the signal you
+-- actually want to stop playing.
+stopTD :: AudioSignalHandle -> IO ()
+stopTD = signalPCMControl theAudioPlaybackControl . AudioStopSignal
+
+-- | Stop playing all 'TDSignal's.
+stopTDAll :: IO ()
+stopTDAll = signalPCMControl theAudioPlaybackControl AudioSilenceAll
+
+-- | Reset any 'TDSignal' that was assigned the given 'AudioSignalHandle' when it was evaluated with
+-- 'playTD' such that it begins playing again from the begininig of it's track. Hopefully you
+-- remember the 'AudioSignalHandle' of the signal you actually want to stop playing.
+resetTD :: AudioSignalHandle -> IO ()
+resetTD = signalPCMControl theAudioPlaybackControl . AudioResetSignal
 
 -- | Turn on the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
 -- control pannel and you'll see an entry for the GHCI process appear in the list of output devices.
 soundOn :: IO (Maybe PCMActivation)
-soundOn = onWindow $ startupAudioPlayback 735
+soundOn = onWindow $ do
+  audioPlayback $ monoStatePCMGenerator theAudioPlaybackState theAudioPlayer
+  startupAudioPlayback 735
 
 -- | Turn off the sound generator. On Linux with Pulse Audio, you can open the pulse audio mixer
 -- control pannel and you'll see an entry for the GHCI process disappear from the list of output
@@ -302,16 +389,6 @@ soundOff = onWindow shutdownAudioPlayback
 -- | Reports whether the sound is on or off.
 soundStatus :: IO (Maybe PCMActivation)
 soundStatus = onWindow audioPlaybackState
-
--- | The audio device is always set to stereo mode, this function simply copies every sample
--- produced by a monochannel generator to both the left and right channel.
-monoSound :: (Moment -> Sample) -> IO ()
-monoSound = stereoSound . ((\ a -> (a, a)) .)
-
--- | Change the sound generator function as soon as the current sample frame has completed writing
--- to the PCM, the sound generator passed to this function will begin generating samples 
-stereoSound :: (Moment -> (LeftSample, RightSample)) -> IO ()
-stereoSound = void . onWindow . audioPlayback . mapTimeToStereo
 
 ----------------------------------------------------------------------------------------------------
 
