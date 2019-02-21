@@ -1,19 +1,48 @@
 module ProcGen.Types
-  ( module ProcGen.Types
-  , module ProcGen.PrimeNumbers
+  ( module ProcGen.Types,
+    module ProcGen.PrimeNumbers,
+    Happlets.Audio.BufferSizeRequest,
+    Happlets.Audio.AudioRealApprox,
+    Happlets.Audio.Frequency,
+    Happlets.Audio.Duration,
+    Happlets.Audio.Moment,
+    Happlets.Audio.Sample,
+    Happlets.Audio.LeftSample,
+    Happlets.Audio.RightSample,
+    Happlets.Audio.PulseCode,
+    Happlets.Audio.LeftPulseCode,
+    Happlets.Audio.RightPulseCode,
+    Happlets.Audio.SampleCount,
+    Happlets.Audio.SampleIndex,
+    Happlets.Audio.audioSampleRate,
+    Happlets.Audio.unitQuanta,
+    Happlets.Audio.maxFrequency,
+    Happlets.Audio.minFrequency,
+    Happlets.Audio.toPulseCode,
+    Happlets.Audio.toSample,
+    Happlets.Audio.modTimeIndex,
+    Happlets.Audio.timeIndex,
+    Happlets.Audio.indexToTime,
+    Happlets.Audio.sampleCountDuration,
+    Happlets.Audio.durationSampleCount,
+    Happlets.Audio.mapTimeToStereo,
+    Happlets.Audio.mapTimeToMono,
   ) where
 
 import           ProcGen.PrimeNumbers
 
+import           Control.Arrow                    ((&&&))
 import           Control.Monad
 
-import           Data.Int
+import           Data.Ratio
 import           Data.Semigroup
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
+import           Data.Word
 
-import           Happlets.Lib.Gtk
-import           Happlets.Provider
+import           Happlets.Audio
+import           Happlets.Lib.Gtk                 (gtkHapplet, theAnimationFrameRate)
+import           Happlets.Provider                (defaultConfig)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -27,23 +56,17 @@ data FuzzyParam
 
 ----------------------------------------------------------------------------------------------------
 
-type SampleCount = Int
-type SampleIndex = Int
-
 -- | A single float type used by all other float types. Change this from Float to Double to change
 -- the percision of all computations from 32 to 64-bit floating point values.
-type ProcGenFloat = Float
+type ProcGenFloat = AudioRealApprox
 
-type Frequency   = ProcGenFloat
-type Sample      = ProcGenFloat
 type TimeScale   = ProcGenFloat
-type Moment      = ProcGenFloat
 type Amplitude   = ProcGenFloat
-type Duration    = ProcGenFloat
 type Wavelength  = ProcGenFloat
 type PhaseShift  = ProcGenFloat
 type Probability = ProcGenFloat
 type HalfLife    = ProcGenFloat
+type NoiseLevel  = ProcGenFloat
 type Bandwidth   = ProcGenFloat
 type Percentage  = ProcGenFloat
 
@@ -56,7 +79,8 @@ type Percentage  = ProcGenFloat
 --
 -- As a law, the output of an 'Envelope' function must be on the inclusive interval
 -- @[0 .. 1]@ for all input 'Moment's, although there is no type-level enforcement of this law.
-type Envelope = TimeWindow Moment -> Moment -> Amplitude
+type GenEnvelope n = TimeWindow n -> n -> n
+type Envelope = GenEnvelope ProcGenFloat
 
 -- | A 1-D continuous probability fistribution function
 type CPDFunction = Moment -> Probability
@@ -75,12 +99,60 @@ class HasFrequency f where
   toFreq :: f -> Frequency
 
 -- | A class of time domain functions that can produce a 'Sample' from a 'Moment'.
-class TimeDomain f where
-  sample :: f -> Moment -> Sample
+--
+-- Minimal complete definition: 'sample'.
+class (Ord num, Num num, Fractional num) => TimeDomain f num where
+  -- | Produce a sample at a single point in time for the given function @f@.
+  sample :: f -> num -> num
+  -- | Iterate over a range of moments, producing an integer number of samples. This function has a
+  -- default implementation that calls 'sample' above, but for piecewise functions like splines it
+  -- is much more efficient to iterate over the list of piecewise functions in a way that does not
+  -- require searching through the entire list for a function that contains the 'Moment' at which
+  -- you want a single 'Sample' repeatedly for each 'Moment' in the iteration.
+  iterateSamples
+    :: f -- ^ the function over which to iterate the samples points.
+    -> Int -- ^ number of samples
+    -> TimeWindow num -- ^ the time interval over which to iterate
+    -> [(num, num)]
+  iterateSamples = iterateSamplesWith . sample
+
+-- | This is the function which is used to instantiate the 'iterateSamples' function of the
+-- 'TimeDomain' typeclass by default if none is specified in the @instance@ for type @f@. This
+-- function operates with any pure function over the domain of 'Moment's, not just functions which
+-- instantiate the 'TimeDomain' typeclass.
+iterateSamplesWith
+  :: (Ord num, Num num, Fractional num)
+  => (num -> num) -- ^ the function @f@ over which the range of 'Moment's is applied
+  -> Int -- ^ the number of 'Moment' values to apply to the function @f@
+  -> TimeWindow num -- ^ the time interval over which we iterate
+  -> [(num, num)]
+iterateSamplesWith f nelems win' = loop 0 where
+  win      = twCanonicalize win'
+  stepsize = twDuration win / realToFrac nelems
+  loop   i = if i > nelems then [] else
+    (id &&& f) (timeStart win + stepsize * realToFrac i) : loop (i + 1)
 
 -- | A class of frequency domain functions that can produce an 'Amplitude' from a 'Frequency'.
 class FreqDomain f where
   amplitude :: f -> Frequency -> Amplitude
+
+-- | A type class for functions that have a 'Prelude.min', 'Prelude.max', 'Prelude.minimum', and
+-- 'Prelude.maximum' implementation.
+class Ord n => MinMaxDomain n where
+  minOf :: n -> n -> n
+  minOf = min
+  maxOf :: n -> n -> n
+  maxOf = max
+  foldMin :: n -> [n] -> n
+  foldMin = foldr minOf
+  foldMax :: n -> [n] -> n
+  foldMax = foldr maxOf
+
+instance MinMaxDomain Int
+instance MinMaxDomain Float
+instance MinMaxDomain Double
+instance MinMaxDomain Integer
+instance (Integral n, MinMaxDomain n) => MinMaxDomain (Ratio n)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -105,61 +177,13 @@ sampleRate = 44100.0
 nyquist :: Frequency
 nyquist = sampleRate / 2
 
--- | This is the amount of time a single unit sample of a quantized time domain function that a PCM
--- allows a PCM to reamin at a single value. This is also the reciporical of the @'sampleRate' ::
--- 'Frequency'@.
-unitQuanta :: Duration
-unitQuanta = recip sampleRate
+-- | Like 'toPulseCode' but evaluates to a 'Data.Word.Word16' value
+toPulseCodeWord :: Sample -> Word16
+toPulseCodeWord = fromIntegral . toPulseCode
 
--- | Compute the number of 'unitQuanta' exist in the time interval between zero and the given
--- moment. This value can be used to select an index from a vector containing samples. The
--- 'ProcGenFloat' value returned along with the index value is the percentage along the path between
--- the returned index and the next index that the moment point in time had progressed. This value
--- can be used to antialias.
-timeIndex :: Moment -> (Int, ProcGenFloat)
-timeIndex t = let { d = t * sampleRate; r = floor d :: Int; } in (r, d - realToFrac r)
-
--- | When converting some index of a 'Data.Vector.Vector' of 'Sample's in a quantized time domain
--- function, this function converts that index value into the point in time at which that sample
--- exists.
-indexToTime :: Int -> Moment
-indexToTime = (/ sampleRate) . realToFrac
-
--- | Convert a 'Sample' to a signed 16-bit integer suitable for storage to a file.
-toPulseCode :: Sample -> Int16
-toPulseCode = round . (* 32704) . clamp1_1
-
--- | Convert a signed 16-bit integer sample value to a floating-point 'Sample' value.
-toSample :: Int16 -> Sample
-toSample = (* (32704.0 / (32768.0 * 32768.0))) . realToFrac
-
--- | Clamp a value between 0 and 1.
-clamp0_1 :: (Fractional x, Ord x) => x -> x
-clamp0_1 = min 1.0 . max 0.0
-
--- | Clamp a value between -1 and 1.
-clamp1_1 :: (Fractional x, Ord x) => x -> x
-clamp1_1 = min 1.0 . max (negate 1.0)
-
--- | Convert a 'SampleCount' (the number of samples in a quantized time domain function) to a time
--- 'Duration' measured in seconds.
-sampleCountDuration :: SampleCount -> Duration
-sampleCountDuration = (/ sampleRate) . realToFrac
-
--- | Convert a 'Duration' measured in seconds to a 'SampleCount' (the number of samples in a
--- quantized time domain function), and round up so the value returned represents the minimum number
--- of samples required to span the given time 'Duration'.
-durationSampleCount :: Duration -> SampleCount
-durationSampleCount = ceiling . (* sampleRate)
-
--- | Continuous modulus function, useful for points traversing continuous cyclical curves. The
--- result of @contMod a b@ is a value between 0 and @b@ (or between @-b@ and 0 if @a@ is negative).
-contMod :: ProcGenFloat -> ProcGenFloat -> ProcGenFloat
-contMod a b = mod (if a<0 then negate else id)
-  (if b<0 then ceiling :: ProcGenFloat -> Integer else floor :: ProcGenFloat -> Integer)
-  (abs a) (abs b)
-  where
-    mod negate round a b = negate $ a - realToFrac (round (a / b)) * b
+-- | Like 'toSample' but takes a 'Data.Word.Word16' input instead of an 'Data.Int.Int16' input.
+wordToSample :: Word16 -> Sample
+wordToSample = toSample . fromIntegral
 
 -- | Prepare a list of elements for a discrete differentiation by pairing each element with it's
 -- neighbour. For example, the expression @('diffList' [1,2,3,4])@ will yield the result:
@@ -183,109 +207,287 @@ diffList = init where
     [a]    -> [(a, a0)]
     a:b:ax -> (a, b) : loop a0 (b:ax)
 
--- | Given 4 control points, compute the curve value for a single parametric value.
-bezier3 :: ProcGenFloat -> ProcGenFloat -> ProcGenFloat -> ProcGenFloat -> Moment -> Sample
-bezier3 a b c d t = a*(1-t)**3 + b*3*t*(1-t)**2 + c*3*(1-t)*t**2 + d*t**3
+----------------------------------------------------------------------------------------------------
 
--- | A time domain function computing unit sine wave function, where the period of the sineusoid is
--- 1, rather than 2π.
-unitSine :: ProcGenFloat -> ProcGenFloat
-unitSine = sin . ((2*pi) *)
+-- | Clamping values to a limit between 0 and 1, or between -1 and 1. There is no minimal complete
+-- definition, all functions can be dervied with a stand-alone instance. This class exists to
+-- provide an alternative lazy evaluation scheme for the 'RealValueFunction' data type.
+class (Fractional n, MinMaxDomain n) => ClampedDomain n where
+  -- | Clamp a value between 0 and 1.
+  clamp0_1 :: n -> n
+  clamp0_1 = min 1.0 . max 0.0
 
--- | A time domain function computing periodic unit sawtooth function.
-sawtooth :: ProcGenFloat -> ProcGenFloat
-sawtooth t0 = let t = 2*t0 + 0.5 in 2*(t - realToFrac (floor t :: Integer)) - 1
+  -- | Clamp a value between -1 and 1.
+  clamp1_1 :: n -> n
+  clamp1_1 = min 1.0 . max (negate 1.0)
 
--- | A time domain function computing periodic unit triangular function.
-triangle :: ProcGenFloat -> ProcGenFloat
-triangle t0 = let t = 2*t0 + 0.5 in 2*(abs $ sawtooth t) - 1
+instance ClampedDomain Float
+instance ClampedDomain Double
 
--- | A time domain function computing periodic unit triangular function.
-square :: ProcGenFloat -> ProcGenFloat
-square t0 = (if t0 - (realToFrac (round t0 :: Int)) < 0.5 then id else negate) 1
+----------------------------------------------------------------------------------------------------
 
--- | An 'Envelope' increasing linearly from zero to one starting at a given 'Moment' and increasing
--- to one over a period of 'TimeSpan' amount of time.
+-- | Modulous over real number approximating data types i.e. the 'Float' and 'Double' data
+-- types). There is no minimal complete definition, all functions can be dervied with a stand-alone
+-- instance. This class exists to provide an alternative lazy evaluation scheme for the
+-- 'RealValueFunction' data type.
+class ModulousDomain n where
+  -- | Modulous over a continuous value, implemented in terms of the 'Prelude.round' function.
+  contMod  :: n -> n -> n
+
+instance ModulousDomain Float    where { contMod = realFracContMod; }
+instance ModulousDomain Double   where { contMod = realFracContMod; }
+instance ModulousDomain Rational where { contMod = realFracContMod; }
+
+-- | A generalized version of 'contMod' which works for any 'Ord' 'RealFrac' data type.
+realFracContMod :: forall n . (Ord n, RealFrac n) => n -> n -> n
+realFracContMod a b = mod (if a<0 then negate else id)
+  (if b<0 then ceiling :: n -> Integer else floor :: n -> Integer)
+  (abs a) (abs b)
+  where
+    mod negate round a b = negate $ a - realToFrac (round (a / b)) * b
+
+----------------------------------------------------------------------------------------------------
+
+-- | Rounding functions for real number approximating data types i.e. the 'Float' and 'Double' data
+-- types). There is no minimal complete definition, all functions can be dervied with a stand-alone
+-- instance. This class exists to provide an alternative lazy evaluation scheme for the
+-- 'RealValueFunction' data type.
+class RoundingDomain n where
+  -- | Round to the 'floor'.
+  roundDown :: n -> n
+  -- | Round to the 'ceiling'
+  roundUp   :: n -> n
+  -- | Round down if below the mid-way point between between the floor and celing, round up
+  -- otherwise.
+  roundMid  :: n -> n
+
+fracRoundDown :: forall n . RealFrac n => n -> n
+fracRoundDown = realToFrac . (floor :: n -> Integer)
+
+fracRoundUp :: forall n . RealFrac n => n -> n
+fracRoundUp = realToFrac . (ceiling :: n -> Integer)
+
+fracRoundMid :: forall n . RealFrac n => n -> n
+fracRoundMid = realToFrac . (round :: n -> Integer)
+
+instance RoundingDomain Float where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Double where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Rational where
+  roundDown = fracRoundDown
+  roundUp   = fracRoundUp
+  roundMid  = fracRoundMid
+
+instance RoundingDomain Int where
+  roundDown = id
+  roundUp   = id
+  roundMid  = id
+
+instance RoundingDomain Integer where
+  roundDown = id
+  roundUp   = id
+  roundMid  = id
+
+----------------------------------------------------------------------------------------------------
+
+-- | Periodic fundamental wave functions for real number approximating data types i.e. 'Float' and
+-- 'Double'. All of these functions have a period of exacly 1 unit. There is no minimal complete
+-- definition, all functions can be dervied with a stand-alone instance. This class exists to
+-- provide an alternative lazy evaluation scheme for the 'RealValueFunction' data type.
+class PeriodicDomain n where
+  -- | A time domain function computing unit sine wave function, where the period of the sineusoid is
+  -- 1, rather than 2π.
+  unitSine :: n -> n
+  -- | A time domain function computing periodic unit sawtooth function.
+  sawtooth :: n -> n
+  -- | A time domain function computing periodic unit triangular function.
+  triangle :: n -> n
+  -- | A time domain function computing periodic unit triangular function.
+  square   :: n -> n
+
+instance PeriodicDomain Float where
+  unitSine = floatUnitSine
+  sawtooth = floatSawtooth
+  triangle = floatTriangle
+  square   = floatSquare
+
+instance PeriodicDomain Double where
+  unitSine = floatUnitSine
+  sawtooth = floatSawtooth
+  triangle = floatTriangle
+  square   = floatSquare
+
+-- | A generalized version of 'unitSine' that works for any 'Floating' 'RealFrac' value.
+floatUnitSine ::  (Floating n, RealFrac n) => n -> n
+floatUnitSine = sin . ((2*pi) *)
+
+-- | A generalized version of 'sawtooth' that works for any 'Floating' 'RealFrac' value.
+floatSawtooth ::  (Floating n, RealFrac n) => n -> n
+floatSawtooth t0 = let t = 2*t0 + 0.5 in 2*(t - realToFrac (floor t :: Integer)) - 1
+
+-- | A generalized version of 'triangle' that works for any 'Floating' 'RealFrac' value.
+floatTriangle ::  (Floating n, RealFrac n) => n -> n
+floatTriangle t0 = let t = 2*t0 + 0.5 in 2*(abs $ floatSawtooth t) - 1
+
+-- | A generalized version of 'square' that works for any 'Floating' 'RealFrac' value.
+floatSquare ::  (Floating n, RealFrac n) => n -> n
+floatSquare t0 = (if t0 - (realToFrac (round t0 :: Int)) < 0.5 then id else negate) 1
+
+----------------------------------------------------------------------------------------------------
+
+-- | Envelope functions for real number approximating data types, i.e. 'Float' and 'Double'. There
+-- is no minimal complete definition, all functions can be dervied with a stand-alone instance. This
+-- class exists to provide an alternative lazy evaluation scheme for the 'RealValueFunction' data
+-- type.
+class (Ord n, Floating n) => EnvelopeDomain n where
+  -- | An 'Envelope' increasing linearly from zero to one starting at a given 'Moment' and
+  -- increasing to one over a period of 'TimeSpan' amount of time. This function can be thought of
+  -- as 'relu'-like function that is parameterized like an 'Envelop' function.
+  --
+  -- A negative 'TimeSpan' indicates the envelope should go from one to zero.
+  slope :: Floating n => GenEnvelope n
+  slope (TimeWindow{timeStart=t0,timeEnd=t1}) t = let tw = t1-t0 in case compare tw 0 of
+    EQ -> if t< t0 then 0 else 1
+    LT -> if t<=t0 then 1 else if t>=t0 then 0 else 1 + (t-t0)/tw
+    GT -> if t<=t0 then 0 else if t>=t1 then 1 else (t-t0)/tw
+
+  -- | An 'Envelope' increasing over gradual a sigmoidal function from zero to one starting at a
+  -- given 'Moment' and increasing to one over a period of 'TimeSpan' amount of time.
+  --
+  -- A negative 'TimeSpan' indicates the envelope should go from one to zero. The sigmoidal function
+  -- is approximated by a polynomial, so it is not the genuine equation for the sigmoid which
+  -- computes an exponent of the natural base value @e@, but the approximation is more than close
+  -- enough and it also ensures the slope of the unit curve at t=0 and t=1 is exactly zero.
+  --
+  -- This function could certainly be in the 'ActivationDomain', but in this form it follows the
+  -- parameterization of an 'Envelope' function.
+  sigmoid :: GenEnvelope n
+  sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
+    let tw = t1 - t0
+        t = slope win t'
+        n = 4 -- n must be even
+    in  if tw==0 then if t'<t0 then 0 else 1 else
+        if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
+
+  -- | An 'Envelope' increasing over the square of the sine of @t@.
+  sineSquared :: GenEnvelope n
+  sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
+    let { tw = t1 - t0; t = slope win t'; } in
+    if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
+
+  -- | A function that constructs a fade-in and fade-out envelope.
+  fadeInOut
+    :: n -- ^ t0
+    -> n -- ^ t1 (fade-in occurs betwen t0 and t1)
+    -> n -- ^ t2 (no fading occurs between t1 and t2)
+    -> n -- ^ t3 (fade-out occurs between t2 and t3)
+    -> n -> n
+  fadeInOut t0 t1 t2 t3 t = sigmoid TimeWindow{ timeStart = t0, timeEnd = t1 } t *
+    (1.0 - sigmoid TimeWindow{ timeStart = t2, timeEnd = t3 } t)
+
+instance EnvelopeDomain Float
+instance EnvelopeDomain Double
+
+----------------------------------------------------------------------------------------------------
+
+-- | A domain of sinusoidal functions that have been multiplied by an envelope function to restrict
+-- their image to a single pulse shape. This function is a type class over real number approximating
+-- data types, i.e. 'Float' and 'Double'. There is no minimal complete definition, all functions can
+-- be dervied with a stand-alone instance. This class exists to provide an alternative lazy
+-- evaluation scheme for the 'RealValueFunction' data type.
+class
+  (Ord n, Floating n, ProbabilityDomain n, EnvelopeDomain n)
+  => PulsedSinusoidalDomain n where
+    -- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
+    -- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which
+    -- is produces a slightly distorted sinusoud with a duration of a single cycle.
+    sinePulse
+      :: n -- ^ Frequency
+      -> n -- ^ PhaseShift
+      -> n -> n
+    sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
+
+    -- | Like a 'sinePulse' but produces three cycles: 1 cycle with a sigmoidal ramp-up envelope, 1
+    -- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that
+    -- the name of this function has to do with the fact that it creates a sine pulse of three cycles,
+    -- not that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
+    sinePulse3
+      :: n -- ^ Frequency of the sine wave, also determines the size of the pulse equal to 3 times
+           -- the inverse of the frequency.
+      -> n -- ^ The start time of the pulse, where the signal ramps-up.
+      -> n -- ^ The phase shift of the sine wave relative to the above pulse start time.
+      -> n -> n
+    sinePulse3 freq t0 phase t = sin (2 * pi * freq * (t0 + phase + t)) *
+      fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
+
+instance PulsedSinusoidalDomain Float
+instance PulsedSinusoidalDomain Double
+
+----------------------------------------------------------------------------------------------------
+
+-- | A class of activation functions (a class of functions used in computing artificial neural
+-- networks, although this function does not include 'atan') for real value approximating data types
+-- i.e. 'Float' and 'Double'. There is no minimal complete definition, all functions can be dervied
+-- with a stand-alone instance. This class exists to provide an alternative lazy evaluation scheme
+-- for the 'RealValueFunction' data type.
 --
--- A negative 'TimeSpan' indicates the envelope should go from one to zero.
-slope :: Envelope
-slope (TimeWindow{timeStart=t0,timeEnd=t1}) t = let tw = t1-t0 in case compare tw 0 of
-  EQ -> if t< t0 then 0 else 1
-  LT -> if t<=t0 then 1 else if t>=t0 then 0 else 1 + (t-t0)/tw
-  GT -> if t<=t0 then 0 else if t>=t1 then 1 else (t-t0)/tw
+-- The 'sigmoid' function could certainly go here, but because it's formulation matches that of an
+-- 'Envelop'ed function, it is not a member of this type class but of the 'EnvelopeDomain' type
+-- class.
+class (Ord n, Floating n) => ActivationDomain n where
+  -- | Given 4 control points, compute the curve value for a single parametric value.
+  bezier3 :: n -> n -> n -> n -> n -> n
+  bezier3 a b c d t = a*(1-t)**3 + b*3*t*(1-t)**2 + c*3*(1-t)*t**2 + d*t**3
 
--- | An 'Envelope' increasing over gradual a sigmoidal function from zero to one starting at a given
--- 'Moment' and increasing to one over a period of 'TimeSpan' amount of time.
---
--- A negative 'TimeSpan' indicates the envelope should go from one to zero. The sigmoidal function
--- is approximated by a polynomial, so it is not the genuine equation for the sigmoid which computes
--- an exponent of the natural base value @e@, but the approximation is more than close enough and it
--- also ensures the slope of the unit curve at t=0 and t=1 is exactly zero.
-sigmoid :: Envelope
-sigmoid win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
-  let tw = t1 - t0
-      t = slope win t'
-      n = 4 -- n must be even
-  in  if tw==0 then if t'<t0 then 0 else 1 else
-      if t<=0.5 then (2*t)**n/2 else 1 - (2*t - 2)**n/2
+  -- | The ReLU function, is an activation function used in neural networks which is defined as
+  -- @(\\t -> if t < 0 then 0 else t)@
+  relu :: n -> n
+  relu t = if t < 0 then 0 else t
 
--- | A function that constructs a fade-in and fade-out envelope.
-fadeInOut
-  :: Moment -- ^ t0
-  -> Moment -- ^ t1 (fade-in occurs betwen t0 and t1)
-  -> Moment -- ^ t2 (no fading occurs between t1 and t2)
-  -> Moment -- ^ t3 (fade-out occurs between t2 and t3)
-  -> Moment -> Sample
-fadeInOut t0 t1 t2 t3 t = sigmoid TimeWindow{ timeStart = t0, timeEnd = t1 } t *
-  (1.0 - sigmoid TimeWindow{ timeStart = t2, timeEnd = t3 } t)
+  -- | Like 'ReLU' but evaluates to a constant @c@ rather than 0 if the input @t@ is less than
+  -- @c@. Usually @c@ is very small, like @0.001@
+  leakyReLU :: n -> n -> n
+  leakyReLU c t = if t < c then c else t
 
--- | An 'Envelope' increasing over the square of the sine of @t@.
-sineSquared :: Envelope
-sineSquared win@(TimeWindow{timeStart=t0,timeEnd=t1}) t' =
-  let { tw = t1 - t0; t = slope win t'; } in
-  if tw==9 then if t'<t0 then 0 else 1 else sin(pi*t/2)**2
-
--- | An function which produces a single cycle of a sinusoidal pulse of the given frequency and a
--- time offset moment. The pulse is a sineusoid enveloped by the Gaussian normal function, which is
--- produces a slightly distorted sinusoud with a duration of a single cycle.
-sinePulse :: Frequency -> PhaseShift -> Moment -> Sample
-sinePulse freq t0 t = normal 1.0 t * sin (2 * pi * freq * t + t0)
-
--- | Like a 'sinePulse' but produces three cycles: 1 cycle with a sigmoidal ramp-up envelope, 1
--- cycle at a constant 1.0 envelope, and 1 cycle with a sigmoidal ramp-down envelope. Note that the
--- name of this function has to do with the fact that it creates a sine pulse of three cycles, not
--- that this is a 3rd kind of 'sinePulse' function (there is no @sinePulse2@ function).
-sinePulse3
-  :: Frequency
-     -- ^ Frequency of the sine wave, also determines the size of the pulse equal to 3 times the
-     -- inverse of the frequency.
-  -> Moment -- ^ The start time of the pulse, where the signal ramps-up.
-  -> PhaseShift -- ^ The phase shift of the sine wave relative to the above pulse start time.
-  -> Moment -> Sample
-sinePulse3 freq t0 phase t = sin (2 * pi * freq * (t0 + phase + t)) *
-  fadeInOut t0 (t0 + 1/freq) (t0 + 2/freq) (t0 + 3/freq) t
+instance ActivationDomain Float
+instance ActivationDomain Double
 
 -- | Sum several 'sinePulse's together. This is pretty inefficient, since each 'Sample' produced
 -- requires O(n) time to compute where @n@ is the length of the number of components. However for
 -- simpler functions with a few components, this function is useful.
-sinePulseSum :: [(Frequency, Moment)] -> Moment -> Sample
+sinePulseSum :: PulsedSinusoidalDomain n => [(n, n)] -> n -> n
 sinePulseSum comps t = case comps of
   [] -> 0
   (freq, t0):comps -> sinePulse freq t0 t + sinePulseSum comps t
 
--- | A normal normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
--- curve fits pretty nicely within the range between -1.0 and 1.0.
-normal :: TimeScale -> Moment -> Sample
-normal var x = exp $ negate $ x * x * exp 2 / var * var
+class Floating n => ProbabilityDomain n where
+  -- | A normal normal curve defined as @\\x -> e^(-(2*x)^2)@, which has a variance of @e@ so the
+  -- curve fits pretty nicely within the range between -1.0 and 1.0.
+  normal
+    :: n -- ^ TimeScale
+    -> n -> n
+  normal var x = exp $ negate $ x * x * exp 2 / var * var
 
--- | Create a Beta distribution curve of rank @n@ where @n is the first paramter passed to this
--- function. The curve is not limited to the range between 'Moment's 0 and 1, however it is mostly
--- on this interval between 0 and 1 where this function is useful. The rank is compareable to the
--- rank of a polynomial, however non-integer values may be passed for exponentiation. The
--- reciporical of the rank defines where the peak value lies, that is for which value of @n@ such
--- that @(beta n (1/n)) == 1.0@.
-beta :: ProcGenFloat -> Moment -> Sample
-beta rank x = let n = rank - 1 in rank**rank * x * (1 - x)**n / n**n
+  -- | Create a Beta distribution curve of rank @n@ where @n is the first paramter passed to this
+  -- function. The curve is not limited to the range between 'Moment's 0 and 1, however it is mostly
+  -- on this interval between 0 and 1 where this function is useful. The rank is compareable to the
+  -- rank of a polynomial, however non-integer values may be passed for exponentiation. The
+  -- reciporical of the rank defines where the peak value lies, that is for which value of @n@ such
+  -- that @(beta n (1/n)) == 1.0@.
+  beta
+    :: n -- ^ polynomial rank
+    -> n -> n
+  beta rank x = let n = rank - 1 in rank**rank * x * (1 - x)**n / n**n
+
+instance ProbabilityDomain Float
+instance ProbabilityDomain Double
 
 -- | Create a continuous time domain function from a discrete unboxed 'Unboxed.Vector' of values by
 -- converting from a real-number value to an integer vector index, with linear smoothing for values
@@ -447,31 +649,43 @@ permute perm len list = if null list then [] else if len<=0 then list else
 ----------------------------------------------------------------------------------------------------
 
 -- | A function with strict stateful minimum and maximum values.
-data MinMax i = MinMax{ minValue :: !i, maxValue :: !i }
+data MinMax n = MinMax{ minValue :: !n, maxValue :: !n }
   deriving (Eq, Show, Read)
 
-instance Ord i => Semigroup (MinMax i) where
-  (MinMax a b) <> (MinMax c d) = MinMax (min a $ min b $ min c d) (max a $ max b $ max c d)
+instance MinMaxDomain n => Semigroup (MinMax n) where
+  (MinMax a b) <> (MinMax c d) = MinMax
+    (min a $ min b $ min c d)
+    (max a $ max b $ max c d)
 
-instance (Ord i, Bounded i) => Monoid (MinMax i) where
+instance (MinMaxDomain n, Bounded n) => Monoid (MinMax n) where
   mempty = MinMax{ minValue = maxBound, maxValue = minBound }
   mappend = (<>)
 
-stepMinMax :: Ord i => MinMax i -> i -> MinMax i
+stepMinMax :: MinMaxDomain n => MinMax n -> n -> MinMax n
 stepMinMax (MinMax lo hi) i = MinMax (min lo i) (max hi i)
 
-minMax :: (Bounded i, Ord i) => [i] -> MinMax i
+minMax :: (Bounded n, MinMaxDomain n) => [n] -> MinMax n
 minMax = foldl stepMinMax mempty
 
 ----------------------------------------------------------------------------------------------------
 
 class (Eq n, Ord n, Num n) => HasTimeWindow a n | a -> n where
-  timeWindow :: a -> TimeWindow n
+  timeWindow :: a -> Maybe (TimeWindow n)
 
 -- | For discrete functions (like vectors), the 'timeEnd' value should be set to the length of the
 -- vector. The 'twContains' function returns false if the index is equal to the 'timeEnd' value.
 data TimeWindow t = TimeWindow{ timeStart :: !t, timeEnd :: !t }
   deriving (Eq, Ord, Show, Read, Functor)
+
+instance HasTimeWindow (TimeWindow Moment) Moment where { timeWindow = Just; }
+instance HasTimeWindow (TimeWindow Int   ) Int    where { timeWindow = Just; }
+instance HasTimeWindow [TimeWindow Moment] Moment where { timeWindow = twMinBoundsAll; }
+instance HasTimeWindow [TimeWindow Int   ] Int    where { timeWindow = twMinBoundsAll; }
+
+-- | Canonicalize the 'TimeWindow' value, which means this function evaluates to 'TimeWindow' value
+-- such that the 'timeStart' value is always less than or equal to the 'timeEnd' value.
+twCanonicalize :: Ord t => TimeWindow t -> TimeWindow t
+twCanonicalize (TimeWindow{timeStart=t0,timeEnd=t1}) = TimeWindow{ timeStart = t1, timeEnd = t0 }
 
 -- | Returns 'Prelude.True' if the given point @t@ is contained within the -- 'TimeWindow'.
 -- 'TimeWindow's are inclusive intervlas, meaning if the point @t@ is equal to either of the
@@ -504,9 +718,21 @@ twIntersect (TimeWindow{ timeStart=a0, timeEnd=a1 }) (TimeWindow{ timeStart=b0, 
       bHi  = max b0 b1
       neg  = if aNeg && not bNeg || not aNeg && bNeg then id else (\ (a,b) -> (b,a))
   in fmap ((\ (t0, t1) -> TimeWindow{ timeStart=t0, timeEnd=t1 }) . neg) $ case compare aLo bLo of
-        EQ -> Just (aLo, min aHi bLo)
+        EQ -> Just (aLo, Prelude.min aHi bLo)
         LT -> if aHi < bLo then Nothing else Just (aHi, bLo)
         GT -> if bHi < aLo then Nothing else Just (bHi, aLo)
+
+-- | Compute the minimum bounding window required to fit both windows given. This is like a union of
+-- two windows except the windows need not overlap.
+twMinBounds :: Ord t => TimeWindow t -> TimeWindow t -> TimeWindow t
+twMinBounds a b =
+  TimeWindow{ timeStart = Prelude.minimum times, timeEnd = Prelude.maximum times } where
+    times = [timeStart a, timeEnd a, timeStart b, timeEnd b]
+
+twMinBoundsAll :: (Eq n, Ord n, Num n) => [TimeWindow n] -> Maybe (TimeWindow n)
+twMinBoundsAll = \ case
+  []   -> Nothing
+  a:ax -> Just $ foldl twMinBounds a ax
 
 -- | Enumerate all time values in the givem 'TimeWindow' but with a given time-step value.
 twParametric :: RealFrac t => t -> TimeWindow t -> [t]
@@ -529,11 +755,12 @@ twMoments = twParametric unitQuanta
 
 -- | Similar to 'twMoments' but maps the results with @('timeIndex')@
 twIterate :: TimeWindow Moment -> [(Int, ProcGenFloat)]
-twIterate = fmap timeIndex . twMoments
+twIterate = fmap modTimeIndex . twMoments
 
 -- | Similar to 'twIterate' but is designed for use with vectors, this function does bounds checking
 -- on the vector once to make sure the 'TimeWindow' given does not exceed the bounds of the
 -- vector. Pass the length of the vector as the first parameter.
 twIndicies :: Int -> TimeWindow Moment -> [Int]
 twIndicies len (TimeWindow{timeStart=t0,timeEnd=end}) =
-  [max 0 $ min (len - 1) $ durationSampleCount t0 .. min (len - 1) $ durationSampleCount end]
+  [Prelude.max 0 $ Prelude.min (len - 1) $ durationSampleCount t0 ..
+   Prelude.min (len - 1) $ durationSampleCount end]

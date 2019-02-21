@@ -19,7 +19,7 @@ import qualified Data.Vector.Unboxed.Mutable as Mutable
 -- | Find the minimum and maximum element in a mutable 'Mutable.MVector', evaluates to an error if
 -- the vector is empty so this function is not total.
 minMaxBuffer
-  :: forall m elem . (Mutable.Unbox elem, Ord elem, PrimMonad m)
+  :: forall m elem . (Mutable.Unbox elem, Ord elem, PrimMonad m, MinMaxDomain elem)
   => Mutable.MVector (PrimState m) elem -> m (MinMax elem)
 minMaxBuffer vec = do
   if Mutable.length vec == 0 then error $ "minMaxVec called on empty vector" else do

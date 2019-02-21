@@ -7,10 +7,11 @@
 module ProcGen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
-    Word256, TFRandSeed, tfGen,
-    TFRandT(..), TFRand,  arbTFRand, seedIOArbTFRand,
+    shuffleTake, randSelect,
+    Word256, TFRandSeed, tfGen, newTFRandSeed,
+    TFRandT(..), TFRand, arbTFRand, seedIOArbTFRand,
     seedEvalTFRand, seedEvalTFRandT, seedIOEvalTFRand, seedIOEvalTFRandT, evalTFRand, evalTFRandT,
-     seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT, runTFRand,  runTFRandT,
+     seedRunTFRand,  seedRunTFRandT,  seedIORunTFRand,  seedIORunTFRandT,  runTFRand,  runTFRandT,
     testDistributionFunction,
     System.Random.TF.Init.initTFGen,
     System.Random.TF.TFGen,
@@ -23,7 +24,7 @@ import           Control.Arrow
 import           Control.Exception (evaluate)
 import           Control.Monad
 import           Control.Monad.ST
-import           Control.Monad.Trans
+import           Control.Monad.State
 import           Control.Monad.Random.Class
 import           Control.Monad.Trans.Random.Lazy
 
@@ -33,6 +34,7 @@ import           Data.Semigroup
 import           Data.Functor.Identity
 import qualified Data.Vector.Unboxed              as Unboxed
 import qualified Data.Vector.Unboxed.Mutable      as Mutable
+import qualified Data.Vector.Generic              as GVec
 import           Data.Word
 
 import           System.Random.TF
@@ -90,6 +92,29 @@ onBeta5RandFloat = onBiasedRandFloat inverseBeta5Table
 -- @1/2@.
 onNormalRandFloat :: MonadRandom m => (ProcGenFloat -> b) -> m b
 onNormalRandFloat = onBiasedRandFloat inverseNormalTable
+
+-- | Take @n@ elements from a list, then shuffle these @n@ elements, and then draw @p@ elements from
+-- the 'Prelude.head' of the shuffled list. The value @n@ must be greater than @p@ or else the
+-- original list is returned.
+shuffleTake
+  :: MonadRandom m
+  => [elem]
+  -> Int -- ^ number of elements to take from the list before shuffling
+  -> Int -- ^ number of elements to take from the list after shuffling
+  -> m [elem]
+shuffleTake elems n p = if n < p then return elems else do
+  let loop p n stack elems = seq p $! seq n $! if p == 0 then return stack else do
+        n <- pure $! n - 1
+        p <- pure $! p - 1
+        i <- getRandomR (0, n)
+        (stack, elems) <- pure $ case splitAt i elems of
+          (_, [])         -> (stack, elems)
+          (keep, e:elems) -> (e:stack, keep ++ elems)
+        loop p n stack elems
+  loop p n [] $ take n elems
+
+randSelect :: (MonadRandom m, GVec.Vector v a) => v a -> m a
+randSelect vec = (vec GVec.!) <$> getRandomR (0, GVec.length vec - 1)
 
 ----------------------------------------------------------------------------------------------------
 
@@ -229,6 +254,12 @@ word64MultWithCarry a b = word64SumWithCarry
 tfGen :: TFRandSeed -> TFGen
 tfGen (Word256 s3 s2 s1 s0) = seedTFGen (s3, s2, s1, s0)
 
+-- | Ask the operating system to create a new random seed from it's store of entropy.
+newTFRandSeed :: IO TFRandSeed
+newTFRandSeed = do
+  (a, b, c, d) <- mkSeedUnix
+  pure $ Word256 a b c d
+
 ----------------------------------------------------------------------------------------------------
 
 -- | A simple default pure random number generator based on the Twofish pseudo-random number
@@ -245,6 +276,9 @@ instance Monad m => MonadRandom (TFRandT m) where
   getRandom   = TFRandT getRandom
   getRandomRs = TFRandT . getRandomRs
   getRandoms  = TFRandT getRandoms
+
+instance Monad m => MonadSplit TFGen (TFRandT m) where
+  getSplit = TFRandT getSplit
 
 instance MonadTrans TFRandT where { lift = TFRandT . lift; }
 
@@ -306,7 +340,7 @@ seedIOArbTFRand = seedIOEvalTFRand arbitrary
 -- | Run a 'TFRand' function with an already-existing Twofish generator. This function is not very
 -- useful unless you choose to use the 'System.Random.split' function to evaluate a nested 'TFRand'
 -- function within another 'TFRand' function. If you simply want to generate a random value, it is
--- better to use 'runTFRandSeed' or 'runTFRandIO'.
+-- better to use 'runTFRandSeed' or 'runTFRandT'.
 evalTFRand :: TFRand a -> TFGen -> a
 evalTFRand (TFRandT f) = evalRand f
 
