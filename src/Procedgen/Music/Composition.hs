@@ -33,7 +33,7 @@
 -- modified to play between lead's beats. It could also be with mimcry, in which a folower's beats
 -- are modified to play simultaneously with the lead's beats. The number of notes that are modified
 -- to follow is a tunable parameter.
-module ProcGen.Music.Composition
+module Procedgen.Music.Composition
   ( CommonChordProg(..),
     -- * Individual Notes
     ScoredNote(..), scoreTone, scoreDrum,
@@ -50,14 +50,14 @@ module ProcGen.Music.Composition
     Composition, CompositionState(..), runCompositionTFGen, emptyComposition,
     nextMeasure, instrument, composeNotes, composedDrums,
     exampleComposition,
-    module ProcGen.Arbitrary,
+    module Procedgen.Arbitrary,
     module Control.Monad.State.Class,
   ) where
 
-import           ProcGen.Types
-import           ProcGen.Arbitrary
-import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.AudioFont
+import           Procedgen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Music.KeyFreq88
+import           Procedgen.Music.AudioFont
 
 import           Control.Arrow
 import           Control.Lens
@@ -143,7 +143,7 @@ instance Show value => Show (PlayedNote value) where
         RestNote -> ""
         _        -> " [tied]"
 
--- | How hard the note is played, it is a fuzzy value that maps to 'ProcGen.Types.Amplitude'.
+-- | How hard the note is played, it is a fuzzy value that maps to 'Procedgen.Types.Amplitude'.
 data Strength = Pianismo | Piano | MezzoPiano | Moderare | MezzoForte | Forte | Fortisimo
   deriving (Eq, Ord, Show, Read, Enum)
 
@@ -179,7 +179,7 @@ scoreNote constr tied tags strength = \ case
     , scoredNoteValue    = NoteID (NoteKey $ constr a ax) (playNoteTagSet tags)
     }
 
--- | Construct a note from a 'Strength' and zero or more 'ProcGen.Music.KeyFreq88.KeyIndex' values
+-- | Construct a note from a 'Strength' and zero or more 'Procedgen.Music.KeyFreq88.KeyIndex' values
 -- which refer to notes on an 88-key piano keyboar.d
 scoreTone :: NoteReference -> [PlayNoteTag] -> Strength -> [KeyIndex] -> ScoredTone
 scoreTone = scoreNote noteValue
@@ -251,12 +251,12 @@ sequenceBar t0 dt0 msur = loop dt0 (t0, msur) [] where
 
 ----------------------------------------------------------------------------------------------------
 
--- | A mapping from 'ProcGen.Types.Moment's in time to @note@s. Essentially this is just a map data
+-- | A mapping from 'Procedgen.Types.Moment's in time to @note@s. Essentially this is just a map data
 -- structure that instantiates 'Data.Semigroup.Semigroup' and 'Data.Monoid.Monoid' such that the
 -- append @('Data.Semigroup.<>')@ function performs the right-biased union of the maps, where
 -- right-bias meaning the @note@ on the right of the @('Data.Semigroup.<>')@ operator overwrites the
 -- @note on the left of the operator if the two operators appear in the exact same
--- 'ProcGen.Types.Moment' in time. Use 'playNoteSequence' to convert a 'Bar' to a 'NoteSequence'.
+-- 'Procedgen.Types.Moment' in time. Use 'playNoteSequence' to convert a 'Bar' to a 'NoteSequence'.
 newtype NoteSequence note = NoteSequence (Map.Map Moment [note])
   deriving (Eq, Functor)
 
@@ -289,9 +289,9 @@ instance Show note => Show (NoteSequence note) where
 listNoteSequence :: NoteSequence note -> [(Moment, [note])]
 listNoteSequence (NoteSequence map) = Map.assocs map
 
--- | A 'Bar' sub-divides the given initial 'ProcGen.Types.Duration' into several sub-intervals
+-- | A 'Bar' sub-divides the given initial 'Procedgen.Types.Duration' into several sub-intervals
 -- associated with the leaf elements. This function converts a 'Measure' into a mapping from the
--- start time to the @('ProcGen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
+-- start time to the @('Procedgen.Types.Duration', leaf)@ pair. When the @leaf@ type is unified with
 -- 'Note', it is helpful to evaluate the resulting 'PlayedRole' with 'setNoteDurations'.
 playNoteSequence :: Moment -> Duration -> Bar ScoredTone -> NoteSequence PlayedTone
 playNoteSequence t0 dt0 = NoteSequence
@@ -333,7 +333,7 @@ tieSequencedNotes = uncurry (flip (++)) . fmap makeTied . foldr f ([], IMap.empt
 
 ----------------------------------------------------------------------------------------------------
 
--- | This is a 'NoteSequence' associated with a 'ProcGen.Music.SoundFont.InstrumentID'.
+-- | This is a 'NoteSequence' associated with a 'Procedgen.Music.SoundFont.InstrumentID'.
 data PlayedRole note
   = PlayedRole
     { thePlayedRoleInstrument :: !InstrumentID
@@ -368,8 +368,8 @@ playedRoleSequence = lens thePlayedRoleSequence $ \ a b -> a{ thePlayedRoleSeque
 -- played. Instead, you evaluate a 'Notation' function to define various musical motifs which you
 -- can then use to compose a larger piece of music in the 'Composition' function type.
 --
--- The type that binds to @value@ should be either 'ProcGen.Music.SoundFont.ToneValue' or
--- 'ProcGen.Music.SoundFont.DrumValue'.
+-- The type that binds to @value@ should be either 'Procedgen.Music.SoundFont.ToneValue' or
+-- 'Procedgen.Music.SoundFont.DrumValue'.
 newtype Notation value a = Notation (StateT (NotationState value) (TFRandT IO) a)
   deriving (Functor, Applicative, Monad, MonadIO)
 
@@ -606,7 +606,7 @@ runCompositionTFGen
 runCompositionTFGen (Composition f) gen st = runTFRandT (runStateT f st) gen
 
 -- | Evaluate a 'Notation' function to construct some playable notes for a given
--- 'ProcGen.Music.SoundFont.InstrumentID'.
+-- 'Procedgen.Music.SoundFont.InstrumentID'.
 composeNotes :: Notation notes a -> Composition a
 composeNotes f = Composition $ lift $ TFRandT $ liftRandT $ liftIO . randGenNotation f
 
@@ -626,8 +626,8 @@ nextMeasure = use compositionMeasure >>= (compositionMoment %=) . (+)
 ----------------------------------------------------------------------------------------------------
 
 -- | This function produces a 'Bar' of a couple of played notes. Choose an
--- 'ProcGen.Music.SoundFont.InstrumentID', and then apply the exampe 'Bar' produced by this function
--- to the 'instrument' function. If you have no 'ProcGen.Music.SoundFont.InstrumentID' the sequencer
+-- 'Procedgen.Music.SoundFont.InstrumentID', and then apply the exampe 'Bar' produced by this function
+-- to the 'instrument' function. If you have no 'Procedgen.Music.SoundFont.InstrumentID' the sequencer
 -- should default to a sine wave generator, so don't worry if you haven't created any instruments
 -- yet, you can still use this example:
 --

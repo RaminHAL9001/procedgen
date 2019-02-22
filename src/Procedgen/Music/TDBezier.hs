@@ -6,7 +6,7 @@
 -- dimension, rather than cubic, and furthermore the sample amplitude control points are restricted
 -- to always be directly above or below the start and end points, in order to prevent curves that
 -- can go both forward and backward in time.
-module ProcGen.Music.TDBezier
+module Procedgen.Music.TDBezier
   ( Ord3Spline, Ord3Part(..), Ord3Segment(..), StartPoint, EndPoint, ControlPoint,
     HasControlPoint1(..), HasControlPoint2(..), HasControlPoint3(..),
     theOrd3Window, ord3Window, ord3Duration, ord3Start, ord3End,
@@ -14,8 +14,8 @@ module ProcGen.Music.TDBezier
   )
   where
 
-import           ProcGen.Arbitrary
-import           ProcGen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Types
 
 import           Control.Lens
 import           Control.Monad
@@ -176,7 +176,7 @@ ord3End (Ord3Spline{ord3Start=p0,ord3Points=vec}) = let len = Unboxed.length vec
 ord3Duration :: Ord3Spline -> Duration
 ord3Duration = twDuration . theOrd3Window
 
--- | This function is identical to the 'ProcGen.Types.sample' function, except it is not polymorphic
+-- | This function is identical to the 'Procedgen.Types.sample' function, except it is not polymorphic
 -- over the function type @f@, the type @f@ is 'Ord3Spline' when this function is used.
 ord3Sample :: Ord3Spline -> Moment -> Sample
 ord3Sample spline t = case filter ((`twContains` t) . ord3Time) $ ord3Segments spline of

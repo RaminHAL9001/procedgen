@@ -1,12 +1,12 @@
 -- | GUI for plotting functions, mostly instructions on how to redraw
 -- and how to trace a mouse cursor along a plot.
-module ProcGen.Plot.GUI
-  ( module ProcGen.Plot.GUI
-  , module ProcGen.Plot
+module Procedgen.Plot.GUI
+  ( module Procedgen.Plot.GUI
+  , module Procedgen.Plot
   ) where
 
-import           ProcGen.Plot
-import           ProcGen.Types
+import           Procedgen.Plot
+import           Procedgen.Types
 
 import           Control.Arrow
 import           Control.Lens

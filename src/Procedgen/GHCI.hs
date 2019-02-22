@@ -4,7 +4,7 @@
 -- You can also create an arbitrary application on the fly using 'Happlets.Happlet.makeHapplet' to
 -- construct a 'Happlets.Happlet.Happlet' value, and provide this value along with an initializing
 -- 'Happlets.GUI.GUI' function to the 'setDisp' function to set an arbitrary model-view-controller.
-module ProcGen.GHCI
+module Procedgen.GHCI
   ( -- * Generating random values
     rand, arb, reseedRand, resetRand,
     currentRandSeed, currentRandState, RandState(..),
@@ -23,16 +23,16 @@ module ProcGen.GHCI
     -- * Functions with polymorphic types.
     liveUpdate, currentHapplet,
     -- * Procedural Generation of Music
-    ProcGen.Music.Sequencer.musicToFile,
+    Procedgen.Music.Sequencer.musicToFile,
     -- * Working with persistent values in the GHCI process.
-    module ProcGen,
+    module Procedgen,
     module Happlets.Lib.Gtk,
   )
   where
 
-import           ProcGen
-import           ProcGen.Music.Sequencer (musicToFile)
-import           ProcGen.Music.TDBezier
+import           Procedgen
+import           Procedgen.Music.Sequencer (musicToFile)
+import           Procedgen.Music.TDBezier
 
 import           Control.Arrow
 import           Control.Concurrent
@@ -52,7 +52,7 @@ import           System.IO.Unsafe
 
 ----------------------------------------------------------------------------------------------------
 
--- | This function lets you evaluate a function of type @'ProcGen.Arbitrary.TFRandT' IO@, but in the
+-- | This function lets you evaluate a function of type @'Procedgen.Arbitrary.TFRandT' IO@, but in the
 -- IO monad. This function uses a stateful pseudo-random number generator which you can seed by
 -- passing a 'TFRandSeed' to the using 'reseedRand' function. 'TFRandSeed' instantiates
 -- 'Prelude.Num' so you can pass a literal number and GHCI will do the right thing and convert it to
@@ -60,7 +60,7 @@ import           System.IO.Unsafe
 --
 -- When the GHCI session first launches, this random number generator is always seeded with the
 -- number zero. You can randomize it using 'scrambleRand', which is shorthand for
--- @'ProcGen.Arbitrary.newTFRandSeed' >>= 'reseedRand'@.
+-- @'Procedgen.Arbitrary.newTFRandSeed' >>= 'reseedRand'@.
 --
 -- The seed value and the current random number generator are stored together in a 'RandState' which
 -- you can bind to a variable using 'currentRandState', and restore the state later using
@@ -70,7 +70,7 @@ rand f = modifyMVar randgenMVar $ \ sg -> do
   (a, tf) <- runTFRandT f $ theRandTFGen sg
   return (sg{ theRandTFGen = tf }, a)
 
--- | Shorthand for @'rand' 'ProcGen.Arbitrary.arbitrary'@, except it takes a 'Data.Proxy.Proxy' type
+-- | Shorthand for @'rand' 'Procedgen.Arbitrary.arbitrary'@, except it takes a 'Data.Proxy.Proxy' type
 -- which is best used when the @TypeApplications@ language flag is used.
 --
 -- @
@@ -81,7 +81,7 @@ arb :: Arbitrary a => Proxy a -> IO a
 arb Proxy = rand arbitrary
 
 -- | This function lets you reset the pseudo-random number generator used by the 'rand' function to
--- a seed value of type 'ProcGen.Arbitrary.TFRandSeed'. The current 'RandState' stored by the 'rand'
+-- a seed value of type 'Procedgen.Arbitrary.TFRandSeed'. The current 'RandState' stored by the 'rand'
 -- function is returned so you can bind it to a variable name should you want to revisit it
 -- later. You can use 'resetRand' to set a 'RandState' to a previous state value.
 --
@@ -89,7 +89,7 @@ arb Proxy = rand arbitrary
 -- procedurally generated values, and you discover an interesting series of random values for seed
 -- number 0, you can use @reseedRand 0@ to recreate that random sequence.
 --
--- 'ProcGen.Arbitrary.TFRandSeed' instantiates the 'Prelude.Num' typeclass, so passing a literal
+-- 'Procedgen.Arbitrary.TFRandSeed' instantiates the 'Prelude.Num' typeclass, so passing a literal
 -- integer as a parameter to this function will work well:
 --
 -- @
@@ -394,8 +394,8 @@ soundStatus = onWindow audioPlaybackState
 
 -- $PlotLists
 --
--- These functions can modify the 'ProcGen.Plot.plotFunctionList' of some plot window, either a
--- 'ProcGen.Plot.Cartesian' or 'ProcGen.Plot.Parametric' plot. These function types are polymorphic
+-- These functions can modify the 'Procedgen.Plot.plotFunctionList' of some plot window, either a
+-- 'Procedgen.Plot.Cartesian' or 'Procedgen.Plot.Parametric' plot. These function types are polymorphic
 -- over the @model@, evaluate these functions using 'cart' or 'param' to bind the @model@ type.
 
 -- | Copy the plot list of the current plot window, filter and return the copy.

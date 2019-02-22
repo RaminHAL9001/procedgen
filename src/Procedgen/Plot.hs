@@ -1,10 +1,10 @@
 -- | Plotting functions. This module only contains the data types and lenses. More useful functions
--- are provided in the "ProcGen.PlotGUI" module which also re-exports this module, so usually you
--- want to import "ProcGen.PlotGUI" instead of this module alone, unless you do not intend to use
+-- are provided in the "Procedgen.PlotGUI" module which also re-exports this module, so usually you
+-- want to import "Procedgen.PlotGUI" instead of this module alone, unless you do not intend to use
 -- the associated GUI functions.
-module ProcGen.Plot where
+module Procedgen.Plot where
 
-import           ProcGen.Types
+import           Procedgen.Types
 
 import           Control.Lens
 
@@ -205,7 +205,7 @@ plotWinOrigin = lens
   )
 
 -- | Convert a window point to a plot point given the window size as a 'Happlets.SampCoord.PixSize'
--- type, and the 'ProcGen.Plot.PlotWindow' information. Convert in the other direction (from plot
+-- type, and the 'Procedgen.Plot.PlotWindow' information. Convert in the other direction (from plot
 -- points to window points) using @('Control.Lens.from' 'winToPointPlot')@.
 --
 -- This function is used as an intermediate computational step, and so is designed to be a lazy as

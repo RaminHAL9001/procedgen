@@ -13,7 +13,7 @@
 # along with this program (see the file called "LICENSE"). If not, see
 # <http://www.gnu.org/licenses/agpl.html>.
 
-name:         procgen
+name:         procedgen
 version:      0.1.0.0
 synopsis:     A library for PROCedural GENeration of digital information.
 license:      AGPL
@@ -71,44 +71,44 @@ ghc-options:
 library:
   source-dirs: src
   exposed-modules:
-  - ProcGen
-  - ProcGen.Arbitrary
-  - ProcGen.Buffer
-  - ProcGen.Collapsible
-  - ProcGen.GHCI
-  - ProcGen.Music.AudioFont
-  - ProcGen.Music.AudioSignal
-  - ProcGen.Music.Composition
-  - ProcGen.Music.KeyFreq88
-  - ProcGen.Music.Sequencer
-  - ProcGen.Music.Synth
-  - ProcGen.Music.TDBezier
-  - ProcGen.Music.WaveFile
-  - ProcGen.Plot
-  - ProcGen.Plot.Examples
-  - ProcGen.Plot.GUI
-  - ProcGen.PrimeNumbers
-  - ProcGen.Properties
-  - ProcGen.ReaderLogic
-  - ProcGen.Script
-  - ProcGen.TinyRelDB
-  - ProcGen.Types
-  - ProcGen.VectorBuilder
+  - Procedgen
+  - Procedgen.Arbitrary
+  - Procedgen.Buffer
+  - Procedgen.Collapsible
+  - Procedgen.GHCI
+  - Procedgen.Music.AudioFont
+  - Procedgen.Music.AudioSignal
+  - Procedgen.Music.Composition
+  - Procedgen.Music.KeyFreq88
+  - Procedgen.Music.Sequencer
+  - Procedgen.Music.Synth
+  - Procedgen.Music.TDBezier
+  - Procedgen.Music.WaveFile
+  - Procedgen.Plot
+  - Procedgen.Plot.Examples
+  - Procedgen.Plot.GUI
+  - Procedgen.PrimeNumbers
+  - Procedgen.Properties
+  - Procedgen.ReaderLogic
+  - Procedgen.Script
+  - Procedgen.TinyRelDB
+  - Procedgen.Types
+  - Procedgen.VectorBuilder
 
 tests:
-  procgen-infra:
-    main:         ProcGen/Live.hs
-    source-dirs:  src
+  procedgen-infra:
+    main:         Infrastructure.hs
+    source-dirs:  tests
     ghc-options:
     -   -threaded
     dependencies:
-    - procgen
+    - procedgen
 
 tests:
-  procgen-live:
-    main:         ProcGen/Infrastructure.hs
-    source-dirs:  src
+  procedgen-live:
+    main:         Live.hs
+    source-dirs:  tests
     ghc-options:
     -   -threaded
     dependencies:
-    - procgen
+    - procedgen

@@ -1,8 +1,8 @@
 -- | Data types for "sound fonts," which are a collection sound effects indexed by tonal value. This
 -- module also defines a 'DrumKit' type which is just an arbitrary, un-indexed collection of sounds.
--- ProcGen does not make use of any standardized or proprietary sound font formats, the sound fonts
--- defined in this module use a formatting unique to the ProcGen project.
-module ProcGen.Music.AudioFont
+-- Procedgen does not make use of any standardized or proprietary sound font formats, the sound fonts
+-- defined in this module use a formatting unique to the Procedgen project.
+module Procedgen.Music.AudioFont
   ( NoteID(..), NoteKeyIndicies(..),
     -- * Defining Drum Sets
     DrumID, DrumIndex(..), DrumValue, DrumKeyIndicies, DrumKit,
@@ -17,9 +17,9 @@ module ProcGen.Music.AudioFont
     SoundSet, HasSoundSet(..), addSound, deleteSound, chooseSound,
   ) where
 
-import           ProcGen.Types
-import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.AudioSignal
+import           Procedgen.Types
+import           Procedgen.Music.KeyFreq88
+import           Procedgen.Music.AudioSignal
 
 import           Control.Lens
 import           Control.Monad.Random
@@ -35,7 +35,7 @@ import           Data.Word
 
 ----------------------------------------------------------------------------------------------------
 
--- | A 'DrumIndex' is analogous to a 'ProcGen.Music.KeyFreq88.KeyIndex' in that it is used to select
+-- | A 'DrumIndex' is analogous to a 'Procedgen.Music.KeyFreq88.KeyIndex' in that it is used to select
 -- a drum from a 'DrumKit'. The difference is, a 'DrumKit' is an unordered set of sound-making
 -- elements, whereas an 88-key keyboard is an ordered set of sound-making elements (ordered in that
 -- lower frequencies have lower index values).
@@ -63,7 +63,7 @@ type DrumID = NoteID DrumValue
 --
 -- This randomizing feature is designed to make an instrument sound more natural. For example, you
 -- may have 3 versions of a violin sound playing the note A4 with
--- 'ProcGen.Music.Composition.MezzoForte' strength, perhaps one which is a slightly squeaky or
+-- 'Procedgen.Music.Composition.MezzoForte' strength, perhaps one which is a slightly squeaky or
 -- scratchy sound. Every time the sound A4 mezzo forte is selected, one of those three are seleted
 -- from a 'Sequencer' using 'chooseSound'. The squeaky/scratchy sound can be weighted such that it
 -- is randomly selected less often.
@@ -115,7 +115,7 @@ minMaxKeyIndex = \ case
 
 ----------------------------------------------------------------------------------------------------
 
--- | A buffer contains meta-information about a 'TDSignal' constructed by a 'ProcGen.Music.Synth'.
+-- | A buffer contains meta-information about a 'TDSignal' constructed by a 'Procedgen.Music.Synth'.
 data Sound
   = Sound
     { soundLoadedFromFile       :: !Strict.Text -- ^ might be null
@@ -135,17 +135,17 @@ soundLikelyChoice = lens theSoundLikelyChoice $ \ a b -> a{ theSoundLikelyChoice
 
 -- | Load a sound from a file without any specific meta-data about how the sound was constructed.
 soundFromFile :: FilePath -> IO Sound
-soundFromFile = error "TODO: ProcGen.Music.AudioFont.soundFromFile"
+soundFromFile = error "TODO: Procedgen.Music.AudioFont.soundFromFile"
 
 -- | Generate a sound from an 'FDSignal' using the functionality provided by the
--- "ProcGen.Music.Synth" module.
+-- "Procedgen.Music.Synth" module.
 soundFromFDSignal :: FDSignal -> IO Sound
-soundFromFDSignal = error "TODO: ProcGen.Music.AudioFont.soundFromFDSignal"
+soundFromFDSignal = error "TODO: Procedgen.Music.AudioFont.soundFromFDSignal"
 
 -- | Load a 'FDSignal' description from a file, then use 'soundFromFDSignal' to generate the
 -- 'Sound'.
 soundFromFDSignalFile :: FilePath -> IO Sound
-soundFromFDSignalFile = error "TODO: ProcGen.Music.AudioFont.soundFromFDSignalFile"
+soundFromFDSignalFile = error "TODO: Procedgen.Music.AudioFont.soundFromFDSignalFile"
 
 ----------------------------------------------------------------------------------------------------
 

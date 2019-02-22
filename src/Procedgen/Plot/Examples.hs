@@ -1,9 +1,9 @@
 -- | Example plot functions which look nice when you run them, and also show you how to use the
--- 'ProcGen.Plot' API if you choose to read the source code.
-module ProcGen.Plot.Examples where
+-- 'Procedgen.Plot' API if you choose to read the source code.
+module Procedgen.Plot.Examples where
 
-import           ProcGen.Plot
-import           ProcGen.Types
+import           Procedgen.Plot
+import           Procedgen.Types
 
 import           Control.Lens
 

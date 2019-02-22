@@ -1,6 +1,6 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
-module ProcGen.Music.Synth
+module Procedgen.Music.Synth
   ( -- * Signal Generating Functions
     SynthSigComponent, SynthSignal(..), SynthNoise(..), synthFDComponent,
     -- * A language for defining musical sounds
@@ -16,10 +16,10 @@ module ProcGen.Music.Synth
 
 import           Happlets.Lib.Gtk
 
-import           ProcGen.Types
-import           ProcGen.Arbitrary
-import           ProcGen.Music.AudioSignal
-import qualified ProcGen.Music.TDBezier      as TDBezier
+import           Procedgen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Music.AudioSignal
+import qualified Procedgen.Music.TDBezier      as TDBezier
 
 import           Data.List         (nub)
 import           Data.Semigroup
@@ -246,7 +246,7 @@ resizeSynthBuffer tw = do
 
 ----------------------------------------------------------------------------------------------------
 
--- | Select the Nth prime number from the 'ProcGen.PrimeNumbers.all16BitPrimes' table.
+-- | Select the Nth prime number from the 'Procedgen.PrimeNumbers.all16BitPrimes' table.
 primeFunc :: Int -> ProcGenFloat
 primeFunc = realToFrac . (all16BitPrimes Unboxed.!)
 
@@ -319,7 +319,7 @@ synthRandomizeLevels a b comps = do
 --  deriving (Eq, Ord, Show, Read, Enum)
 
 ---- | This function maps over each 'FDComponent' and applies the 'fdFrequency' of each component to a
----- 'FDSignalShape' function to produce a new 'ProcGen.Types.ProcGenFloat' value, then applies some
+---- 'FDSignalShape' function to produce a new 'Procedgen.Types.ProcGenFloat' value, then applies some
 ---- noise, then writes or updates this new value into the field of 'FDComponent' according to which
 ---- 'ApplyToShape' is given.
 --synthApplyShape
@@ -383,7 +383,7 @@ synthRandomizeLevels a b comps = do
 --      -- ^ The lowest audible frequency of the shape
 --    , theFDShapeLoEnvelope :: Envelope
 --      -- ^ The envelope that defines the shape of the 'FDSignal' to be produced by this
---      -- structure. The 'ProcGen.Types.Envelope' function is expected to be defined only on the
+--      -- structure. The 'Procedgen.Types.Envelope' function is expected to be defined only on the
 --      -- range between and including 0.0 and 1.0, and will be transformed to fit in the region of
 --      -- frequencies between 'theFDShapeLowerLimit' and 'theFDShapeBase'.
 --    , theFDShapeUpperLimit :: Frequency

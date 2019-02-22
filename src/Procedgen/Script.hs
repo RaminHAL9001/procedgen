@@ -1,14 +1,14 @@
--- | A scripting language used within the ProcGen application. In the same way you can implement a
+-- | A scripting language used within the Procedgen application. In the same way you can implement a
 -- Lisp interpreter with a few lines of Lisp, you can implement a Haskell interpreter with a few
 -- (hundred) lines of Haskell.
 --
 -- The scripting language defined in this module is essentially for declaring mathematical equations
 -- that can be easily serialized, optimized, and interpreted. The scripting language can also be
 -- procedurally generated.
-module ProcGen.Script where
+module Procedgen.Script where
 
-import           ProcGen.Arbitrary
-import           ProcGen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Types
 
 import           Control.Applicative
 

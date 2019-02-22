@@ -3,9 +3,9 @@
 -- must also have a method for being reconstructed from a 'UVec.Vector'. This allows lazy functional
 -- data structures to be explicitly stored as a contiguous block of 'UVec.Unbox'ed 'UVec.Vector'
 -- elements in memory, which takes a heavy load off of the garbage collector.
-module ProcGen.Collapsible where
+module Procedgen.Collapsible where
 
-import           ProcGen.VectorBuilder
+import           Procedgen.VectorBuilder
 
 import           Control.Monad.ST
 

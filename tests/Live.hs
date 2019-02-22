@@ -2,8 +2,8 @@
 -- version of the program doesn't seem to be working correctly.
 module Main where
 
-import           ProcGen
-import           ProcGen.Plot.Examples
+import           Procedgen
+import           Procedgen.Plot.Examples
 
 main :: IO ()
 main = do
