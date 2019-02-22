@@ -1,0 +1,114 @@
+# Copyright (C) 2018-2019  Ramin Honary.
+#
+# "procgen" is free software: you can redistribute it and/or modify
+# it under the terms of the GNU Affero General Public License (AGPL)
+# as published by the Free Software Foundation.
+#
+# "procgen" is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU Affero General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program (see the file called "LICENSE"). If not, see
+# <http://www.gnu.org/licenses/agpl.html>.
+
+name:         procgen
+version:      0.1.0.0
+synopsis:     A library for PROCedural GENeration of digital information.
+license:      AGPL
+copyright:    "2017-2019 Ramin Honary"
+author:       "Ramin Honary"
+maintainer:   "ramin.honary@gmail.com"
+github:       "RaminHAL9001/happlets-lib-gtk"
+
+extra-source-files:
+- README.md
+
+dependencies:
+- binary
+- bytestring
+- cairo
+- containers
+- utf8-string
+- happlets
+- happlets-lib-gtk
+- lens
+- linear
+- MonadRandom
+- mtl
+- primitive
+- tf-random
+- semigroups
+- time
+- text
+- vector
+- base
+
+default-extensions:
+- DeriveDataTypeable
+- DeriveFunctor
+- ExistentialQuantification
+- FlexibleContexts
+- FlexibleInstances
+- FunctionalDependencies
+- GADTs
+- GeneralizedNewtypeDeriving
+- ImplicitParams
+- LambdaCase
+- MultiParamTypeClasses
+- NoMonomorphismRestriction
+- OverloadedStrings
+- RankNTypes
+- ScopedTypeVariables
+- StandaloneDeriving
+
+ghc-options:
+-   -Wall
+-   -fno-warn-name-shadowing
+-   -fno-warn-unused-do-bind
+
+library:
+  source-dirs: src
+  exposed-modules:
+  - ProcGen
+  - ProcGen.Arbitrary
+  - ProcGen.Buffer
+  - ProcGen.Collapsible
+  - ProcGen.GHCI
+  - ProcGen.Music.AudioFont
+  - ProcGen.Music.AudioSignal
+  - ProcGen.Music.Composition
+  - ProcGen.Music.KeyFreq88
+  - ProcGen.Music.Sequencer
+  - ProcGen.Music.Synth
+  - ProcGen.Music.TDBezier
+  - ProcGen.Music.WaveFile
+  - ProcGen.Plot
+  - ProcGen.Plot.Examples
+  - ProcGen.Plot.GUI
+  - ProcGen.PrimeNumbers
+  - ProcGen.Properties
+  - ProcGen.ReaderLogic
+  - ProcGen.Script
+  - ProcGen.TinyRelDB
+  - ProcGen.Types
+  - ProcGen.VectorBuilder
+
+tests:
+  procgen-infra:
+    main:         ProcGen/Live.hs
+    source-dirs:  src
+    ghc-options:
+    -   -threaded
+    dependencies:
+    - procgen
+
+tests:
+  procgen-live:
+    main:         ProcGen/Infrastructure.hs
+    source-dirs:  src
+    ghc-options:
+    -   -threaded
+    dependencies:
+    - procgen
