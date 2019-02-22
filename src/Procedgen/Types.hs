@@ -1,6 +1,6 @@
-module ProcGen.Types
-  ( module ProcGen.Types,
-    module ProcGen.PrimeNumbers,
+module Procedgen.Types
+  ( module Procedgen.Types,
+    module Procedgen.PrimeNumbers,
     Happlets.Audio.BufferSizeRequest,
     Happlets.Audio.AudioRealApprox,
     Happlets.Audio.Frequency,
@@ -29,7 +29,7 @@ module ProcGen.Types
     Happlets.Audio.mapTimeToMono,
   ) where
 
-import           ProcGen.PrimeNumbers
+import           Procedgen.PrimeNumbers
 
 import           Control.Arrow                    ((&&&))
 import           Control.Monad

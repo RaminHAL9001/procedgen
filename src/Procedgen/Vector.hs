@@ -18,4 +18,4 @@
 -- 'Data.Vector.Vector' returned is actually a pure value and does not need to be wrapped in a
 -- monadic 'Control.Monad.ST.ST' data type (unlike @IO@ types which can never be unwrapped). It is
 -- as if the mutable 'Data.Vector.Vector' was created atomically
-module ProcGen.Vector where
+module Procedgen.Vector where

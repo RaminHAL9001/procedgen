@@ -1,7 +1,7 @@
 -- | This module provide 'Data.Binary.Binary' methods for generating a @RIFF` formatted @.WAV@ file.
 --
 -- Currently only supports 44.1K/sec rate, 16-bit signed little-endian formatted samples.
-module ProcGen.Music.WaveFile
+module Procedgen.Music.WaveFile
   ( sizeOfRiffHeader,
     putRiffWaveFormat, putRiffWaveFormatIO,
     getRiffWaveFormat, getRiffWaveFormatIO, loadRiffWaveToBufferIO,
@@ -9,7 +9,7 @@ module ProcGen.Music.WaveFile
   )
   where
 
-import           ProcGen.Types
+import           Procedgen.Types
 
 import           Control.Exception           (evaluate, bracket)
 import           Control.Monad
@@ -161,7 +161,7 @@ loadRiffWaveToBufferIO
   -> SampleIndex Int
       -- ^ The index within the buffer at which to begin writing samples from the file.
   -> IO (Int, Mutable.IOVector Sample)
-loadRiffWaveToBufferIO = error "TODO: ProcGen.Music.WaveFile.loadRiffWaveToBufferIO"
+loadRiffWaveToBufferIO = error "TODO: Procedgen.Music.WaveFile.loadRiffWaveToBufferIO"
 
 -- | Read an entire RIFF/WAVE file from an already-opened file 'System.IO.Handle'. The
 -- 'System.IO.Handle' is not closed when completed.
@@ -174,12 +174,12 @@ hWriteWave :: Handle -> Unboxed.Vector Sample -> IO ()
 hWriteWave h = Bytes.hPut h . Binary.runPut . putRiffWaveFormat
 
 -- | Open a given 'System.IO.FilePath' and read the entire contents as RIFF/WAVE formatted binary
--- data, returning a 'Unboxed.Vector' of 'ProcGen.Types.Sample' data contained within.
+-- data, returning a 'Unboxed.Vector' of 'Procedgen.Types.Sample' data contained within.
 readWave :: FilePath -> IO (Unboxed.Vector Sample)
 readWave filepath = bracket (openFile filepath ReadMode) hClose (hReadWave >=> evaluate)
 
 -- | Open a given 'System.IO.FilePath' and write an entire 'Unboxed.Vector' of
--- 'ProcGen.Types.Samples's into it as RIFF/WAVE formatted binary data.
+-- 'Procedgen.Types.Samples's into it as RIFF/WAVE formatted binary data.
 writeWave :: FilePath -> Unboxed.Vector Sample -> IO ()
 writeWave filepath vec =
   bracket (openFile filepath WriteMode) hClose (flip hWriteWave vec >=> evaluate)

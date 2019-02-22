@@ -2,7 +2,7 @@
 -- | A typeclass providing a consistent interface to various objects which can be marshalled to an
 -- immutable unboxed Vector representation. Objects of this type should be stored in memory as
 -- vectors and should be observed by being converted to lazy data types.
-module ProcGen.VectorBuilder where
+module Procedgen.VectorBuilder where
 
 import           Control.Lens
 import           Control.Monad.Reader
@@ -106,15 +106,15 @@ resizeVector f = do
      then GMVec.unsafeGrow <$> use builderVector <*> pure newsize >>= lift >>= (builderVector .=)
      else GMVec.take newsize <$> use builderVector >>= (builderVector .=)
 
--- | Useful when defining a 'ProcGen.Collapsible.collapse' function, this function takes a record
+-- | Useful when defining a 'Procedgen.Collapsible.collapse' function, this function takes a record
 -- field for a @data@ type and the data value itself, and accesses the element from the data value
 -- using the record and passes the record value to 'buildStep'. This allows you to define
--- 'ProcGen.Collapsible.collapse' functions like so:
+-- 'Procedgen.Collapsible.collapse' functions like so:
 --
 -- @
 -- data Point2D = Point2D{ x :: !'Prelude.Double', y :: !'Prelude.Double' }
--- instance 'ProcGen.Collapsible.Collapsible' 'Prelude.Double' Point2D where
---     'ProcGen.Collapsible.collapse' = 'buildRecord' x 'Data.Semigroup.<>' 'buildRecord' y
+-- instance 'Procedgen.Collapsible.Collapsible' 'Prelude.Double' Point2D where
+--     'Procedgen.Collapsible.collapse' = 'buildRecord' x 'Data.Semigroup.<>' 'buildRecord' y
 -- @
 buildRecord
   :: (PrimMonad m, GMVec.MVector vec elem)

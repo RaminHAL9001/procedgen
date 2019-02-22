@@ -4,7 +4,7 @@
 -- 'Control.Monad.Random.Class.getRandomRs', and 'Control.Monad.Random.Class.getRandoms' functions
 -- which you can use to define instances of the 'arbitrary' function for your procedurally generated
 -- data types.
-module ProcGen.Arbitrary
+module Procedgen.Arbitrary
   ( Arbitrary(..), onArbitrary,
     onRandFloat, onBiasedRandFloat, onBeta5RandFloat, onNormalRandFloat, floatToIntRange,
     shuffleTake, randSelect,
@@ -18,7 +18,7 @@ module ProcGen.Arbitrary
     module Control.Monad.Random.Class,
   ) where
 
-import           ProcGen.Types
+import           Procedgen.Types
 
 import           Control.Arrow
 import           Control.Exception (evaluate)

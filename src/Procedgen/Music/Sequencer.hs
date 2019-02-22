@@ -1,15 +1,15 @@
 -- | The sequencer is the component which translates a musical
--- 'ProcGen.Music.Composition.Composition' into an audio file. This module ties together the
--- functionality of "ProcGen.Music.Synth" and "ProcGen.Music.Composition". The sequencer input
+-- 'Procedgen.Music.Composition.Composition' into an audio file. This module ties together the
+-- functionality of "Procedgen.Music.Synth" and "Procedgen.Music.Composition". The sequencer input
 -- language has a format somewhat similar to MIDI. There are features to maintain different versions
 -- of the same note repetition produces slightly different sounds for each note played, sounding
 -- slightly more natural.
 --
--- A sequencer's job is to take instructions which call the "ProcGen.Music.Synth" synthesizer to
--- generate time-domain ('ProcGen.Music.Synth.TDSignal') buffers, and then mix these buffers to a
+-- A sequencer's job is to take instructions which call the "Procedgen.Music.Synth" synthesizer to
+-- generate time-domain ('Procedgen.Music.Synth.TDSignal') buffers, and then mix these buffers to a
 -- larger buffer, perhaps also applying post-processing effects (in future versions of this
 -- program).
-module ProcGen.Music.Sequencer
+module Procedgen.Music.Sequencer
   ( -- * Shaping Signals
     test,
     ShapedSignal(..), basicShapedSignal, squareShapedSignal,
@@ -26,15 +26,15 @@ module ProcGen.Music.Sequencer
     addDrum, getDrum, addInstrument, addTone, getTone,
   ) where
 
-import           ProcGen.Types
-import           ProcGen.Arbitrary
-import           ProcGen.Buffer
-import           ProcGen.Music.AudioFont
-import           ProcGen.Music.AudioSignal
-import           ProcGen.Music.Composition
-import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.Synth
-import           ProcGen.Music.WaveFile
+import           Procedgen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Buffer
+import           Procedgen.Music.AudioFont
+import           Procedgen.Music.AudioSignal
+import           Procedgen.Music.Composition
+import           Procedgen.Music.KeyFreq88
+import           Procedgen.Music.Synth
+import           Procedgen.Music.WaveFile
 
 import           Control.Lens
 import           Control.Monad.Random        (MonadRandom(..), MonadSplit(..), split)
@@ -142,8 +142,8 @@ squareShapedSignal sig dt = ShapedSignal
   , theShapeDecayEnvelope  = const . const 1.0
   }
 
--- | Construct a 'squareShapedSignal' from a 'ProcGen.Music.Synth.TDSignal' that encompases the
--- entire 'ProcGen.Music.Synth.TDSignal'.
+-- | Construct a 'squareShapedSignal' from a 'Procedgen.Music.Synth.TDSignal' that encompases the
+-- entire 'Procedgen.Music.Synth.TDSignal'.
 shapedTDSignal :: TDSignal -> ShapedSignal TDSignal
 shapedTDSignal sig = squareShapedSignal sig $ indexToTime $ Unboxed.length (tdSampleVector sig) - 1
 
@@ -348,7 +348,7 @@ newSequencer = do
     , theSequencerInstruments = Map.empty
     }
 
--- | Evaluate a function of type 'ProcGen.Music.Synth.Synth' within a function of type
+-- | Evaluate a function of type 'Procedgen.Music.Synth.Synth' within a function of type
 -- 'SequencerState'.
 liftSynth :: Synth a -> Sequencer a
 liftSynth f = do
@@ -356,7 +356,7 @@ liftSynth f = do
   sequencerSynth .= synth
   return a
 
--- | Evaluate a pure 'ProcGen.Arbitrary.TFRand' function within a 'ProcGen.Music.Synth.Synth'
+-- | Evaluate a pure 'Procedgen.Arbitrary.TFRand' function within a 'Procedgen.Music.Synth.Synth'
 -- function.
 liftTFRand :: TFRand a -> Sequencer a
 liftTFRand f = do

@@ -1,12 +1,12 @@
 -- | A module for working with mutable buffers of unboxed types, most typically buffers of
--- 'ProcGen.Types.Sample's.a
-module ProcGen.Buffer
-  ( module ProcGen.Buffer
+-- 'Procedgen.Types.Sample's.a
+module Procedgen.Buffer
+  ( module Procedgen.Buffer
   , module Control.Monad.Primitive
   , module Control.Monad.State
   ) where
 
-import           ProcGen.Types
+import           Procedgen.Types
 
 import           Control.Monad
 import           Control.Monad.Primitive
@@ -27,7 +27,7 @@ minMaxBuffer vec = do
     foldBuffer vec (TimeWindow 0 $ Mutable.length vec) (MinMax init init) $
       const $ modify . flip stepMinMax
 
--- | Not to be confused with the Gaussian 'ProcGen.Types.normal' function. Given a minimum and
+-- | Not to be confused with the Gaussian 'Procedgen.Types.normal' function. Given a minimum and
 -- maximum value, this function performs a simple linear transformation that normalizes all elements
 -- in the given mutable 'Mutable.MVector' buffer.
 normalizeBuffer
@@ -42,7 +42,7 @@ normalizeBuffer vec (MinMax lo hi) = do
 ----------------------------------------------------------------------------------------------------
 
 -- | Apply a function to all elements in the buffer along the indicies given by the
--- 'ProcGen.Types.TimeWindow' with a function over each index. The elements or only read, no
+-- 'Procedgen.Types.TimeWindow' with a function over each index. The elements or only read, no
 -- elements are written to the buffer.
 foldBuffer
   :: (Mutable.Unbox elem, PrimMonad m)
@@ -55,7 +55,7 @@ foldBuffer buf win fold f = flip execStateT fold $ forM_ (twEnum win) $ \ i ->
   lift (Mutable.read buf i) >>= f i
 
 -- | Update a sequence of elements in a buffer along the indicies given by the
--- 'ProcGen.Types.TimeWindow' with a function over each index and element.
+-- 'Procedgen.Types.TimeWindow' with a function over each index and element.
 mapBuffer
   :: (Mutable.Unbox elem, PrimMonad m)
   => Mutable.MVector (PrimState m) elem
@@ -65,7 +65,7 @@ mapBuffer
 mapBuffer buf win f = foldMapBuffer buf win () $ \ i -> lift . f i
 
 -- | Like 'mapBuffer' but never reads elements from the buffer before applying the function. The
--- function is applied to all indicies given by the 'ProcGen.Types.TimeWindow' and each result is
+-- function is applied to all indicies given by the 'Procedgen.Types.TimeWindow' and each result is
 -- written to the element in the buffer at each index.
 writeBuffer
   :: (Mutable.Unbox elem, PrimMonad m)
@@ -76,7 +76,7 @@ writeBuffer
 writeBuffer buf win f = foldWriteBuffer buf win () (lift . f)
 
 -- | Apply a function to all elements in the buffer along indicies given by the
--- 'ProcGen.Types.TimeWindow' with a function over each index. The elements are not read, only
+-- 'Procedgen.Types.TimeWindow' with a function over each index. The elements are not read, only
 -- written.
 foldWriteBuffer
   :: (Mutable.Unbox elem, PrimMonad m)
@@ -89,7 +89,7 @@ foldWriteBuffer buf win fold f = flip execStateT fold $ forM_ (twEnum win) $ \ i
   f i >>= lift . Mutable.write buf i
 
 -- | Apply a function to all elements in the buffer along indicies given by the
--- 'ProcGen.Types.TimeWindow' with a function over each index-element association. A state monad
+-- 'Procedgen.Types.TimeWindow' with a function over each index-element association. A state monad
 -- transformer function is used as the function to read and apply elements, that way you can perform
 -- some stateful tracking statistics on the elements applied.
 foldMapBuffer

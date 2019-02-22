@@ -2,7 +2,7 @@
 -- that define lenses. For example, when multiple data types provide animation control, there is an
 -- 'Animated' property which provides the lenses 'animationControl' which is a lens that extracts or
 -- updates a 'AnimationControl' data type from any data structure which contains one.
-module ProcGen.Properties where
+module Procedgen.Properties where
 
 import           Control.Lens
 

@@ -3,9 +3,9 @@ module Main where
 
 import           Prelude                     hiding (fail, length)
 
-import           ProcGen.Arbitrary
-import           ProcGen.TinyRelDB
-import           ProcGen.PrimeNumbers
+import           Procedgen.Arbitrary
+import           Procedgen.TinyRelDB
+import           Procedgen.PrimeNumbers
 
 import           Control.Arrow
 import           Control.Applicative

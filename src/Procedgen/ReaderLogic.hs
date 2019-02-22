@@ -1,6 +1,6 @@
 -- | A module providing handy infix operators for constructing query functions in the Reader monad,
 -- especially using lenses.
-module ProcGen.ReaderLogic
+module Procedgen.ReaderLogic
   ( -- * Predicates
     PredicateOn, QueryLens(..),
     (?==), (?==?), (?/=), (?/=?), (?->), (?->>), (.&&.), (.||.),
@@ -41,7 +41,7 @@ class Functor m => QueryLens r m | m -> r where
 instance Monad m => QueryLens r (ReaderT r m) where { queryLens = view; }
 instance Monad m => QueryLens st (StateT st m) where { queryLens = use; }
 
--- | For example: @'ProcGen.Plot.plotLabel' '?==' "sinusoid"@ will select all plots that are labeled
+-- | For example: @'Procedgen.Plot.plotLabel' '?==' "sinusoid"@ will select all plots that are labeled
 -- with the exact string "sinusoid".
 (?==) :: (Eq a, Applicative m, QueryLens r m) => Getter r a -> a -> m Bool
 (?==) a b = (==) <$> queryLens a <*> pure b
@@ -52,7 +52,7 @@ infix 4 ?==
 (?==?) a b = (==) <$> queryLens a <*> queryLens b
 infix 4 ?==?
 
--- | For example: @'ProcGen.Plot.lineStyle' . 'ProcGen.Plot.lineColor' ?/= black@ will select all
+-- | For example: @'Procedgen.Plot.lineStyle' . 'Procedgen.Plot.lineColor' ?/= black@ will select all
 -- plots that are not drawn with a black color.
 (?/=) :: (Eq a, Applicative m, QueryLens r m) => Getter r a -> a -> m Bool
 (?/=) a b = (/=) <$> queryLens a <*> pure b
@@ -63,7 +63,7 @@ infix 4 ?/=
 (?/=?) a b = (/=) <$> queryLens a <*> queryLens b
 infix 4 ?/=?
 
--- | For example: @'ProcGen.Plot.plotLabel' '?->' 'Strict.isInfixOf' ".diff"@ will select all plots
+-- | For example: @'Procedgen.Plot.plotLabel' '?->' 'Strict.isInfixOf' ".diff"@ will select all plots
 -- that 
 (?->) :: (Eq a, Functor m, QueryLens r m) => Getter r a -> (a -> Bool) -> m Bool
 (?->) lens f = f <$> queryLens lens

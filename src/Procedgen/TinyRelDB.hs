@@ -1,9 +1,9 @@
--- | A small relational database engine built-in to ProcGen so there is no need for a dependency on
+-- | A small relational database engine built-in to Procedgen so there is no need for a dependency on
 -- Sqlite or any Haskell relational database mappers. The database is not entirely relational, and
 -- really only provides functionality similar to a simplified spreadsheet program that operates on
 -- binary CSV files, or on no files at all, everything can be done in memory only. This turns out to
 -- be a useful abstraction for pretty printers and text editors.
-module ProcGen.TinyRelDB
+module Procedgen.TinyRelDB
   ( -- * Database Data Types
     PlainRow, TaggedRow, Table, taggedRowBytes, tableToSequence, hexDumpTaggedRow,
     -- * Mapping Haskell Data Types
@@ -464,7 +464,7 @@ instance Monoid (PackedVector elem) where
 
 (!) :: (IsNumericPrimitive elem, Bin.Binary elem) => PackedVector elem -> Int -> elem
 (!) vec i = maybe (error msg) id $ vec !? i where
-  msg = "PackedVector of length "++show (ProcGen.TinyRelDB.length vec)++" indexed with "++show i
+  msg = "PackedVector of length "++show (Procedgen.TinyRelDB.length vec)++" indexed with "++show i
 
 length :: forall elem . IsNumericPrimitive elem => PackedVector elem -> Int
 length (PackedVector bytes) = BStrict.length bytes `div` numericPrimitiveSize (Proxy :: Proxy elem)
@@ -564,7 +564,7 @@ instance IsNumericPrimitive elem => IsPrimitive (PackedVector elem) where
     putByteString bytes
     let len = BStrict.length bytes `div` numericPrimitiveSize (Proxy :: Proxy elem)
     let report len max =
-          "'ProcGen.TinyRelDB.putPrimitive' cannot put array with "++len++
+          "'Procedgen.TinyRelDB.putPrimitive' cannot put array with "++len++
           " elements, maximum number of elements is "++max
     return $! HomoArray
       (numericPrimitiveType (Proxy :: Proxy elem))
@@ -582,7 +582,7 @@ instance IsPrimitive BLazy.ByteString where
     let (VarWord40 max) = maxBound
     if len <= max
      then return $ BinaryBlob $ VarWord40 len
-     else error $ "'ProcGen.TinyRelDB.putPrimitive' cannot put binary blob with "++show len++
+     else error $ "'Procedgen.TinyRelDB.putPrimitive' cannot put binary blob with "++show len++
                   " elements, maximum number of elements is "++show max
   getPrimitive = \ case
     BinaryBlob (VarWord40 len) -> getLazyByteString len

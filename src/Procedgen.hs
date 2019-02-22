@@ -1,10 +1,10 @@
-module ProcGen
-  ( module ProcGen.Arbitrary
-  , module ProcGen.Music.AudioSignal
-  , module ProcGen.Plot
-  , module ProcGen.Plot.GUI
-  , module ProcGen.ReaderLogic
-  , module ProcGen.Types
+module Procedgen
+  ( module Procedgen.Arbitrary
+  , module Procedgen.Music.AudioSignal
+  , module Procedgen.Plot
+  , module Procedgen.Plot.GUI
+  , module Procedgen.ReaderLogic
+  , module Procedgen.Types
 
   , module Control.Lens
 
@@ -13,12 +13,12 @@ module ProcGen
   , module Happlets.Lib.Gtk
   ) where
 
-import ProcGen.Arbitrary
-import ProcGen.Music.AudioSignal
-import ProcGen.Plot
-import ProcGen.Plot.GUI
-import ProcGen.ReaderLogic
-import ProcGen.Types
+import Procedgen.Arbitrary
+import Procedgen.Music.AudioSignal
+import Procedgen.Plot
+import Procedgen.Plot.GUI
+import Procedgen.ReaderLogic
+import Procedgen.Types
 
 import Control.Lens
 

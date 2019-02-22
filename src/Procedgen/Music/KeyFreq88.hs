@@ -5,10 +5,10 @@
 -- 'ToneValue' using the 'chordToNotes' function. Once you have a 'ToneValue', you can provide
 -- additional transformations on it using 'mapNoteValue'. Convert a 'ToneValue' to a list of
 -- 'KeyIndex' values (which index individual keys on the 88-key keyboard) using the
--- 'noteKeyIndicies' function, and then map these key values to 'ProcGen.Types.Frequency' values
+-- 'noteKeyIndicies' function, and then map these key values to 'Procedgen.Types.Frequency' values
 -- using the 'keyboard88' function. Or, you can convert a 'ToneValue' directly to a list of
--- 'ProcGen.Types.Frequency' values using 'noteKeyFrequencies'.
-module ProcGen.Music.KeyFreq88
+-- 'Procedgen.Types.Frequency' values using 'noteKeyFrequencies'.
+module Procedgen.Music.KeyFreq88
   ( -- * Playable Notes
     ToNoteValue(..), ToneValue(..),
     noteValue, noteWeight, noteKeyIndicies, mapNoteValue, sliceNotes, noteKeyFrequencies,
@@ -26,8 +26,8 @@ module ProcGen.Music.KeyFreq88
   )
   where
 
-import           ProcGen.Arbitrary
-import           ProcGen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Types
 
 import           Control.Arrow
                 
@@ -236,7 +236,7 @@ keyIndex = KeyIndex . fromIntegral . flip mod 88
 the88Keys :: Unboxed.Vector Frequency
 the88Keys = Unboxed.fromList $ keyFreq <$> [0..87]
 
--- | Lookup a 'ProcGen.Types.Frequency' for the given 'KeyIndex'.
+-- | Lookup a 'Procedgen.Types.Frequency' for the given 'KeyIndex'.
 keyboard88 :: KeyIndex -> Frequency
 keyboard88 (KeyIndex i) = the88Keys Unboxed.! fromIntegral i
 

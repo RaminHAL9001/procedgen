@@ -1,5 +1,5 @@
 -- | Sometimes a list of prime numbers can come in handy, even if it isn't a very big list.
-module ProcGen.PrimeNumbers where
+module Procedgen.PrimeNumbers where
 
 import qualified Data.Vector.Unboxed as Unboxed
 import           Data.Word

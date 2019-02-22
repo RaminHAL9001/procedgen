@@ -1,6 +1,6 @@
 -- | This module defines the data types and functions for creating sound effects that can be used as
 -- musical instruments.
-module ProcGen.Music.AudioSignal
+module Procedgen.Music.AudioSignal
   ( -- * Buffering
     BufferIDCT(..), newSampleBuffer,
     -- * Elements of frequency domain functions
@@ -31,15 +31,15 @@ module ProcGen.Music.AudioSignal
 
 import           Happlets.Lib.Gtk
 
-import           ProcGen.Types
-import           ProcGen.Arbitrary
-import           ProcGen.Buffer
---import           ProcGen.Collapsible
-import           ProcGen.Music.KeyFreq88
-import           ProcGen.Music.TDBezier
-import           ProcGen.Music.WaveFile
-import           ProcGen.Properties
---import           ProcGen.VectorBuilder
+import           Procedgen.Types
+import           Procedgen.Arbitrary
+import           Procedgen.Buffer
+--import           Procedgen.Collapsible
+import           Procedgen.Music.KeyFreq88
+import           Procedgen.Music.TDBezier
+import           Procedgen.Music.WaveFile
+import           Procedgen.Properties
+--import           Procedgen.VectorBuilder
 
 import           Control.Arrow
 import           Control.Monad.ST
@@ -57,7 +57,7 @@ import           Text.Printf
 
 -- | This is the class of functions that can perform an __I__nverse __D__iscrete __C__osine
 -- __T__ransform on some functional data type like 'FDSignal' or 'FDComponent', rendering the
--- results to some mutable buffer with unboxed 'ProcGen.Types.Sample' elements.
+-- results to some mutable buffer with unboxed 'Procedgen.Types.Sample' elements.
 --
 -- Note that the instances of this class are not expected to perform any normalization on the
 -- signals rendered into the buffer. Normalization should happen as the final step of creating a
@@ -67,8 +67,8 @@ class BufferIDCT fdsig where
     :: PrimMonad m
     => Mutable.MVector (PrimState m) Sample -> TimeWindow Moment -> fdsig -> TFRandT m ()
 
--- | Create a new buffer large enough to store 'ProcGen.Types.Duration' seconds worth of
--- 'ProcGen.Types.Sample's. Note that the return type of this function is polymorphic and can be
+-- | Create a new buffer large enough to store 'Procedgen.Types.Duration' seconds worth of
+-- 'Procedgen.Types.Sample's. Note that the return type of this function is polymorphic and can be
 -- unified with either a type of 'Mutable.STVector' or an 'Mutable.IOVector'.
 newSampleBuffer :: PrimMonad m => Duration -> m (Mutable.MVector (PrimState m) Sample)
 newSampleBuffer = Mutable.new . (+ 1) . durationSampleCount
@@ -212,7 +212,7 @@ emptyFDComponent = FDComponent
 nullFDComponent :: FDComponent -> Bool
 nullFDComponent fd = unwrapFreqCoef (fd ^. fdFreqCoef) == 0 || fd ^. fdAmplitude == 0
 
--- | Computes the exact 'ProcGen.Types.Sample' value at a given time produced by this
+-- | Computes the exact 'Procedgen.Types.Sample' value at a given time produced by this
 -- component. This function cannot make use of the 'fdNoiseLevel' value of the 'FDComponent',
 -- because this is a pure function that has no access to a random number generator.
 fdComponentSampleAt :: NormFrequency -> FDComponent -> Moment -> Sample
@@ -321,7 +321,7 @@ fdComponentInsert c list = FDComponentList
 
 ----------------------------------------------------------------------------------------------------
 
--- | Frequency domain signal. This is a list of @('ProcGen.Frequency', 'ProcGen.Amplitude')@ pairs
+-- | Frequency domain signal. This is a list of @('Procedgen.Frequency', 'Procedgen.Amplitude')@ pairs
 -- used to define a signal in terms of a frequency domain graph.
 data FDSignal
   = FDSignal
@@ -543,14 +543,14 @@ tdSample (TDSignal vec) = (vec Unboxed.!?)
 allTDSamples :: TDSignal -> (Int, [Sample])
 allTDSamples (TDSignal vec) = (Unboxed.length vec, Unboxed.toList vec)
 
--- | Produce the time 'ProcGen.Types.Duration' value for the given 'TDSignal'.
+-- | Produce the time 'Procedgen.Types.Duration' value for the given 'TDSignal'.
 tdTimeWindow :: TDSignal -> TimeWindow (SampleIndex Int)
 tdTimeWindow (TDSignal vec) = TimeWindow{ timeStart = 0, timeEnd = Unboxed.length vec }
 
 tdDuration :: TDSignal -> Duration
 tdDuration = maybe 0 (twDuration . fmap indexToTime) . timeWindow
 
--- | Produce a lazy linked-list of all 'ProcGen.Types.Sample's stored in the 'TDSignal'. 
+-- | Produce a lazy linked-list of all 'Procedgen.Types.Sample's stored in the 'TDSignal'. 
 listTDSamples :: TDSignal -> TimeWindow Moment -> [Sample]
 listTDSamples td@(TDSignal vec) =
   maybe [] (fmap (vec Unboxed.!) . twEnum) .
@@ -563,7 +563,7 @@ minMaxTDSignal :: TDSignal -> (Sample, Sample)
 minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 
 ---- | Construct a random 'TDSignal' from a random 'FDSignal' constructed around a given base
----- 'ProcGen.Types.Frequency' by the 'randFDSignal' function.
+---- 'Procedgen.Types.Frequency' by the 'randFDSignal' function.
 --randTDSignalIO :: Duration -> Frequency -> IO (FDSignal, TDSignal)
 --randTDSignalIO dt freq = do
 --  gen <- initTFGen
@@ -571,8 +571,8 @@ minMaxTDSignal td = minimum &&& maximum $ snd $ allTDSamples td
 --  return (fd, pureIDCT gen dt fd)
 
 -- | Create a RIFF-formatted WAV file at the given 'System.IO.FilePath' containing the 'TDSignal',
--- with 'ProcGen.Types.Sample' values rounded-off to 16-bit signed integer values
--- (little-endian). See "ProcGen.Music.WaveFile" for more information.
+-- with 'Procedgen.Types.Sample' values rounded-off to 16-bit signed integer values
+-- (little-endian). See "Procedgen.Music.WaveFile" for more information.
 writeTDSignalFile :: FilePath -> TDSignal -> IO ()
 writeTDSignalFile path = writeWave path . tdSampleVector
 
@@ -678,7 +678,7 @@ instance Animated TDView where
   animationControl = lens theTDViewAnimator $ \ a b -> a{ theTDViewAnimator = b }
 
 -- | Constructs a new controller containing a 'TDView' from a 'TDSignal' and it's base
--- 'ProcGen.Types.Frequency'.
+-- 'Procedgen.Types.Frequency'.
 tdView :: TDSignal -> Frequency -> TDView
 tdView td f = TDView
   { theTDViewAnimator    = makeAnimationControl
@@ -692,8 +692,8 @@ tdView td f = TDView
 --tdViewFrameCount = lens theTDViewFrameCount $ \ a b -> a{ theTDViewFrameCount = b }
 
 ---- | Shift the 'animationCurrentFrame' so that the time is at least at the given
----- 'ProcGen.Types.Moment', and also shift forward a bit to make sure the 'animationCurrentFrame' is
----- on an integer number multiple of the 'tdViewBaseFreq'. Returns whether the 'ProcGen.Types.Moment'
+---- 'Procedgen.Types.Moment', and also shift forward a bit to make sure the 'animationCurrentFrame' is
+---- on an integer number multiple of the 'tdViewBaseFreq'. Returns whether the 'Procedgen.Types.Moment'
 ---- given is beyond the end of the 'TDSignal'.
 --tdViewAtTime :: Moment -> GtkGUI TDView ()
 --tdViewAtTime t = do
