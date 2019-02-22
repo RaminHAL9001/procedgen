@@ -97,8 +97,8 @@ library:
 
 tests:
   procedgen-infra:
-    main:         Procedgen/Live.hs
-    source-dirs:  src
+    main:         Infrastructure.hs
+    source-dirs:  tests
     ghc-options:
     -   -threaded
     dependencies:
@@ -106,8 +106,8 @@ tests:
 
 tests:
   procedgen-live:
-    main:         Procedgen/Infrastructure.hs
-    source-dirs:  src
+    main:         Live.hs
+    source-dirs:  tests
     ghc-options:
     -   -threaded
     dependencies:
